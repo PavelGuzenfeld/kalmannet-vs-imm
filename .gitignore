@@ -1,0 +1,5 @@
+data/splits/
+results/
+*.pt
+__pycache__/
+.pytest_cache/
