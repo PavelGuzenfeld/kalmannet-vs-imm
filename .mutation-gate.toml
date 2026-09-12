@@ -1,0 +1,9 @@
+language = "python"
+test_paths = ["tests"]
+
+# Every dep lives in the bench image, so both commands run there. The repo is
+# mounted at its own host path rather than /work: the gate matches coverage data
+# back by absolute path, and /work-rooted paths never match.
+test_command = "docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONPATH=$PWD -v $PWD:$PWD -w $PWD kalmannet-bench:cpu pytest -q -p no:cacheprovider {tests}"
+# --cov takes packages, not file paths: `--cov=filters/imm.py` collects nothing.
+coverage_command = "docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONPATH=$PWD -v $PWD:$PWD -w $PWD kalmannet-bench:cpu pytest -q -p no:cacheprovider --cov=filters --cov=data --cov-context=test --cov-report= {tests}"

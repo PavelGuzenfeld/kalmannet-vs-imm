@@ -14,4 +14,7 @@ GIT_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 
 docker build --network=host -q -f "$REPO_ROOT/docker/Dockerfile" -t "$IMAGE" "$REPO_ROOT" >/dev/null
 
-exec docker run --rm -e GIT_COMMIT="$GIT_COMMIT" -v "$REPO_ROOT:/work" "$IMAGE" "$@"
+# --user keeps generated results, caches and .coverage owned by the caller
+# instead of root; MPLCONFIGDIR because that uid has no home inside the image.
+exec docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e MPLCONFIGDIR=/tmp/mpl \
+    -e GIT_COMMIT="$GIT_COMMIT" -v "$REPO_ROOT:/work" "$IMAGE" "$@"

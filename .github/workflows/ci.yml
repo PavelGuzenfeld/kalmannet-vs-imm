@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/ruff-action@v3
+        with:
+          version: 0.8.4
+
+  # Tests and smoke share one image build; splitting them would pay the torch
+  # pull twice for a suite that finishes in seconds.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build bench image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          tags: kalmannet-bench:cpu
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Unit tests
+        run: ./docker_run.sh pytest -q
+
+      # The unit tests import the packages directly and so never execute an
+      # entrypoint. This runs the documented pipeline at toy sizes, on its
+      # default output paths, which is what caught `python data/make_dataset.py`
+      # failing on sys.path while all 38 tests were green.
+      - name: Smoke the documented pipeline
+        run: |
+          ./docker_run.sh python data/make_dataset.py \
+            --n-train 4 --n-val 4 --n-test 4 --n-sweep 2 \
+            --mc-test 2 --n-highmc 2 --mc-highmc 3
+          ./docker_run.sh python tune_imm.py --n-search 2
+          ./docker_run.sh python eval.py
+          ./docker_run.sh python bench_latency.py --n-warmup 5 --n-measure 50
+          test -s results/results_table.csv
+          test -s results/anees_highmc.json

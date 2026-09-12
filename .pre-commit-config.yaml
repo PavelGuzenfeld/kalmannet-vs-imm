@@ -1,0 +1,35 @@
+# Install locally: pip install pre-commit && pre-commit install
+# The gate itself is the fleet pack (spec: PavelGuzenfeld/dotfiles#9), on PATH
+# as `mutation-gate`; it is diff-scoped and blocks on any surviving mutant not
+# waived in .mutation-gate-waivers.toml.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        # The motion+HUD gif is 3 MB and is the one binary the repo carries.
+        args: [--maxkb=4096]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+
+  - repo: local
+    hooks:
+      - id: bench-image
+        name: build kalmannet-bench image
+        entry: docker build --quiet -f docker/Dockerfile -t kalmannet-bench:cpu .
+        language: system
+        files: ^(docker/Dockerfile|requirements\.txt)$
+        pass_filenames: false
+
+      - id: mutation-gate
+        name: mutation gate (diff-scoped)
+        entry: mutation-gate --staged
+        language: system
+        files: ^(filters|data)/.*\.py$
+        pass_filenames: false

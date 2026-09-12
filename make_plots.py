@@ -233,8 +233,8 @@ def plot_latency_vs_parameters(out_dir, latency_json_path):
 
     fig, ax = plt.subplots(figsize=(7, 5))
     ax.scatter(params, latency, s=80)
-    for n, p, l in zip(names, params, latency):
-        ax.annotate(n, (p, l), textcoords="offset points", xytext=(6, 4))
+    for n, p, lat in zip(names, params, latency):
+        ax.annotate(n, (p, lat), textcoords="offset points", xytext=(6, 4))
     ax.axhline(2.0, color="red", ls="--", alpha=0.6, label="2 ms target")
     ax.set_xlabel("parameter count (0 for classical filters)")
     ax.set_ylabel("median per-step latency (ms)")

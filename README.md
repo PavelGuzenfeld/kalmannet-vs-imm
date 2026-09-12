@@ -18,8 +18,8 @@ Recursive KalmanNet's one genuine win: it produces a usable, better-calibrated c
 vanilla KalmanNet produces none (state dim 9 > measurement dim 3).
 
 Full write-up, methodology, deployment analysis and the conditions that would flip the verdict:
-[`REPORT.md`](REPORT.md). Literature extraction the implementations are grounded in:
-[`NOTES.md`](NOTES.md).
+[`REPORT.md`](docs/REPORT.md). Literature extraction the implementations are grounded in:
+[`NOTES.md`](docs/NOTES.md).
 
 ![Five filters tracking one maneuvering target](docs/assets/kalmannet_motion_hud.gif)
 
@@ -29,7 +29,7 @@ Everything runs in a CPU-only Docker image; `docker_run.sh` builds it and mounts
 `/work`.
 
 ```
-./docker_run.sh pytest -q          # 38 tests
+./docker_run.sh pytest -q          # 42 tests
 ./docker_run.sh python data/make_dataset.py
 ./docker_run.sh python tune_imm.py
 ./docker_run.sh python eval.py     # classical filters -> results/
@@ -40,5 +40,32 @@ Everything runs in a CPU-only Docker image; `docker_run.sh` builds it and mounts
 ./docker_run.sh python make_animation.py
 ```
 
+Run them in that order — each step reads the previous step's output from its default path.
 Generated datasets, checkpoints and results are gitignored; regenerate them with the commands
 above. Every results artifact records the host `GIT_COMMIT` it was produced at.
+
+## Layout
+
+```
+*.py                  entrypoints, one per pipeline stage; run from the repo root
+filters/              the library: EKF, UKF, IMM, motion/measurement models, metrics
+filters/knet/         KalmanNet and Recursive KalmanNet (torch)
+data/                 the trajectory generator and regime definitions
+data/splits/          its generated output (gitignored)
+results/              every artifact the pipeline writes, plots included (gitignored)
+tests/                unit tests -- `./docker_run.sh pytest -q`
+docs/                 the report, the literature notes, the animation plan
+docker/               the CPU-only image both CI and docker_run.sh use
+```
+
+## Checks
+
+CI (`.github/workflows/ci.yml`) lints with ruff, runs the unit tests in the bench image, and
+smokes the pipeline above at toy sizes on its default paths — the unit tests import the packages
+directly and so never execute an entrypoint.
+
+Pre-commit adds the diff-scoped mutation gate over `filters/` and `data/`:
+
+```
+pip install pre-commit && pre-commit install
+```

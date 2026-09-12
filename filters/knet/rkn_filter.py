@@ -47,8 +47,8 @@ class RKNFilter:
 
         x_upd = x_prior + torch.bmm(K, y.unsqueeze(-1)).squeeze(-1)
 
-        I = torch.eye(STATE_DIM, dtype=x_prior.dtype, device=x_prior.device).unsqueeze(0)
-        IKH = I - K @ H_t
+        eye = torch.eye(STATE_DIM, dtype=x_prior.dtype, device=x_prior.device).unsqueeze(0)
+        IKH = eye - K @ H_t
         F = self.f.F.unsqueeze(0)
         A = IKH @ F @ self.P @ F.transpose(1, 2) @ IKH.transpose(1, 2)
         P_upd = A + B
