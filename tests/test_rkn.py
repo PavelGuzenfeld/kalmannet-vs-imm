@@ -73,9 +73,10 @@ def test_gradient_flows_through_both_networks():
 
 
 def test_rkn_survives_azimuth_wrap_boundary():
-    """Mirrors the equivalent vanilla-KalmanNet test -- the reference this
-    was ported from never wraps angles, so this is where a regression could
-    silently reappear on RKN's own feature computation (z_diff)."""
+    """Smoke test: a real (untrained) network stays numerically sane across the
+    boundary. The wrap requirement itself is pinned exactly by
+    test_innovation_wraps_across_the_azimuth_boundary and its z_diff twin --
+    a magnitude bound under a random gain cannot separate wrapped from not."""
     torch.manual_seed(2)
     net = RKNGainCovNetwork().double()
     flt = RKNFilter(net, dt=0.02)
@@ -115,6 +116,29 @@ class _FixedGain:
 
     def __call__(self, features, hidden):
         return self.K, self.B, hidden
+
+
+class _CaptureFeatures(_FixedGain):
+    """Zero gain, so the state stays pinned at the prior across steps and the
+    feature vector is the only thing that varies. Records one row per step."""
+
+    def __init__(self):
+        super().__init__(
+            torch.zeros(1, STATE_DIM, 3, dtype=torch.float64),
+            torch.zeros(1, STATE_DIM, STATE_DIM, dtype=torch.float64),
+        )
+        self.seen = []
+
+    def __call__(self, features, hidden):
+        self.seen.append(features)
+        return super().__call__(features, hidden)
+
+
+def _state_at_azimuth(az, r=800.0):
+    x = torch.zeros(1, STATE_DIM, dtype=torch.float64)
+    x[0, 0] = r * torch.cos(torch.tensor(az, dtype=torch.float64))
+    x[0, 1] = r * torch.sin(torch.tensor(az, dtype=torch.float64))
+    return x
 
 
 def test_optimal_gain_joseph_update_shrinks_covariance_to_simple_form():
@@ -243,19 +267,93 @@ def test_feature_vector_is_the_specified_squared_quadruple():
         x0 - f(x0),
     ], dim=-1) ** 2
 
-    seen = {}
+    net = _CaptureFeatures()
+    flt = RKNFilter(net, dt=dt)
+    flt.init_sequence(x0, _p0(1))
+    flt.step(z)
+    seen = {"features": net.seen[0]}
 
-    class _Capture(_FixedGain):
-        def __call__(self, features, hidden):
-            seen["features"] = features
-            return super().__call__(features, hidden)
+    assert torch.allclose(seen["features"], expected, rtol=0, atol=1e-12)
 
-    net = _Capture(
-        torch.zeros(1, STATE_DIM, 3, dtype=torch.float64),
-        torch.zeros(1, STATE_DIM, STATE_DIM, dtype=torch.float64),
-    )
+
+def test_innovation_wraps_across_the_azimuth_boundary():
+    """A target at az = pi - e measured at az = -pi + e is 2e away, not 2pi - 2e.
+    The reference port never wraps, so without the wrap the innovation feature
+    is (2pi - 2e)^2 ~ 39 instead of (2e)^2 ~ 4e-4 -- five orders out, yet still
+    finite and symmetric, which is all the older tests check.
+    """
+    eps = 0.01
+    dt = 0.02
+    x0 = _state_at_azimuth(torch.pi - eps)
+    z = h_torch(_state_at_azimuth(-torch.pi + eps))
+
+    net = _CaptureFeatures()
     flt = RKNFilter(net, dt=dt)
     flt.init_sequence(x0, _p0(1))
     flt.step(z)
 
-    assert torch.allclose(seen["features"], expected, rtol=0, atol=1e-12)
+    innovation_az = net.seen[0][0, 0]
+    assert torch.allclose(innovation_az, torch.tensor((2 * eps) ** 2, dtype=torch.float64),
+                          rtol=0, atol=1e-9)
+
+
+def test_z_diff_feature_wraps_independently_of_the_innovation():
+    """z_diff = z_t - z_{t-1} carries azimuth too and needs its own wrap. Here
+    step 2's innovation is exactly zero -- the measurement matches the prior --
+    so only z_diff crosses the boundary, and an implementation that wraps the
+    innovation but not z_diff is separated from a correct one.
+    """
+    eps = 0.01
+    dt = 0.02
+    x0 = _state_at_azimuth(torch.pi - eps)
+    z_far = h_torch(_state_at_azimuth(-torch.pi + eps))
+    z_here = h_torch(x0)
+
+    net = _CaptureFeatures()
+    flt = RKNFilter(net, dt=dt)
+    flt.init_sequence(x0, _p0(1))
+    flt.step(z_far)
+    flt.step(z_here)
+
+    innovation_az, z_diff_az = net.seen[1][0, 0], net.seen[1][0, 3]
+    assert torch.allclose(innovation_az, torch.zeros((), dtype=torch.float64),
+                          rtol=0, atol=1e-18)
+    assert torch.allclose(z_diff_az, torch.tensor((2 * eps) ** 2, dtype=torch.float64),
+                          rtol=0, atol=1e-9)
+
+
+def test_hidden_state_is_threaded_between_steps():
+    """"Recursive" is the requirement: step t must receive the hidden state step
+    t-1 returned, not a freshly initialized one. Re-initializing every step
+    leaves every other assertion in this file satisfied.
+    """
+    class _Recurrent(_FixedGain):
+        def __init__(self):
+            super().__init__(
+                torch.zeros(1, STATE_DIM, 3, dtype=torch.float64),
+                torch.zeros(1, STATE_DIM, STATE_DIM, dtype=torch.float64),
+            )
+            self.received, self.returned, self.inits = [], [], 0
+
+        def init_hidden(self, batch, device):
+            self.inits += 1
+            return (torch.zeros(1, dtype=torch.float64),)
+
+        def __call__(self, features, hidden):
+            self.received.append(hidden)
+            nxt = (hidden[0] + 1.0,)
+            self.returned.append(nxt)
+            return self.K, self.B, nxt
+
+    dt = 0.02
+    x0 = _state_at_azimuth(0.4)
+    net = _Recurrent()
+    flt = RKNFilter(net, dt=dt)
+    flt.init_sequence(x0, _p0(1))
+    for _ in range(3):
+        flt.step(h_torch(x0))
+
+    assert net.inits == 1
+    assert net.received[0][0].item() == 0.0
+    for t in range(1, 3):
+        assert net.received[t][0] is net.returned[t - 1][0]

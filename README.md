@@ -29,7 +29,7 @@ Everything runs in a CPU-only Docker image; `docker_run.sh` builds it and mounts
 `/work`.
 
 ```
-./docker_run.sh pytest -q          # 42 tests
+./docker_run.sh pytest -q          # 45 tests
 ./docker_run.sh python data/make_dataset.py
 ./docker_run.sh python tune_imm.py
 ./docker_run.sh python eval.py     # classical filters -> results/
