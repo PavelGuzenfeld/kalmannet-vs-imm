@@ -46,7 +46,7 @@ def run_imm(states, measurements, dt, R, **imm_kwargs):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-dir", default="data/splits")
+    ap.add_argument("--data-dir", default="datasets")
     ap.add_argument("--out", default="results/imm_tuning.json")
     ap.add_argument("--n-search", type=int, default=30, help="val trajectories used during grid search")
     args = ap.parse_args()

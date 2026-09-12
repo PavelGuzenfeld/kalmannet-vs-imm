@@ -48,7 +48,7 @@ extraction this implementation is grounded in.
   200-trajectory/5-MC test set is too thin for that specific statistic on its own, though it is
   still used for the fraction-inside-bounds check across many (trajectory, step) pairs.
 - Every generation parameter (seeds, regime configs, split sizes, git commit) is recorded in
-  `data/splits/manifest.json`. Train/val/test use independent `numpy.random.SeedSequence`-spawned
+  `datasets/manifest.json`. Train/val/test use independent `numpy.random.SeedSequence`-spawned
   seeds — genuinely independent streams, not just different-looking ones.
 
 ### 1.3 Fairness / information asymmetries (stated explicitly, per the brief)
@@ -73,7 +73,7 @@ extraction this implementation is grounded in.
   1.6) -- so unlike vanilla KalmanNet, RKN *can* be judged on NEES/NIS/coverage on the same footing
   as EKF/UKF/IMM. That comparison is the point of building it.
 
-### 1.4 IMM tuning (`tune_imm.py`)
+### 1.4 IMM tuning (`scripts/tune_imm.py`)
 
 Grid search over `p_stay in {0.90, 0.95, 0.97, 0.99}`, nominal `|omega_CT| in {10,15,20,25} deg/s`,
 `sigma_a^CA in {2,4,6} m/s^2`, `tau^CA in {2,4} s` (96 combinations), scored by mean position RMSE
@@ -83,7 +83,7 @@ Full search log: `results/imm_tuning.json`.
 **Chosen**: `p_stay=0.99`, `omega_CT=25 deg/s`, `sigma_a^CA=2 m/s^2`, `tau^CA=2 s` — full-val-set
 position RMSE **1.20 m**.
 
-### 1.5 KalmanNet architecture and training (`filters/knet/`, `train_knet.py`)
+### 1.5 KalmanNet architecture and training (`filters/knet/`, `scripts/train_knet.py`)
 
 Architecture #2 from the reference implementation (`KNet/KalmanNet_nn.py`, three GRUs — Q/Sigma/S
 — plus FC pre/post layers and the backward-flow Sigma-hidden-state overwrite), ported with two
@@ -111,7 +111,7 @@ shortcut. Final training run: `results/knet_vanilla/training_log.json` (protocol
 truncation length 25 steps, Adam, per-step squared-error loss time-averaged per trajectory, L2
 weight decay, validation-based early stopping; batch size 32, up to 30 epochs, patience 6).
 
-### 1.6 Recursive KalmanNet architecture and training (`filters/knet/rkn_*.py`, `train_rkn.py`)
+### 1.6 Recursive KalmanNet architecture and training (`filters/knet/rkn_*.py`, `scripts/train_rkn.py`)
 
 Adapted directly from the official reference (`github.com/ixblue/RecursiveKalmanNet`,
 `Algo/RecursiveKalmanNet.py` + `Algo/KalmanFilter.py`), per NOTES.md sec. 2 and the "from-repo
@@ -164,14 +164,14 @@ source (not just the paper) before porting, same as vanilla KalmanNet.
 
 ## 2. Results
 
-All numbers below: full `data/splits/test.npz` (200 trajectories x 5 Monte Carlo noise
+All numbers below: full `datasets/test.npz` (200 trajectories x 5 Monte Carlo noise
 realizations each) for RMSE and the fraction-inside-95%-bounds check; `test_highmc.npz` (5
 trajectories x 100 realizations) for the headline ANEES/ANIS/coverage numbers, which need many
 realizations per time step to be discriminating. First 20 steps (0.4 s) excluded from every
 statistic to let the initial-condition perturbation settle. Full CSV: `results/results_table.csv`
 (classical filters) + `results/knet_test_rmse.csv` / `results/rkn_test_rmse.csv` (learned filters);
 full high-MC JSON: `results/anees_highmc.json` (classical) + `results/rkn_eval.json` (RKN); plots
-(`make_plots.py`) in `results/plots/`: `trajectory_overlay.png` (a maneuvering test trajectory —
+(`scripts/make_plots.py`) in `results/plots/`: `trajectory_overlay.png` (a maneuvering test trajectory —
 IMM tracks the turn the CV-only floor cuts the corner on), `rmse_vs_time.png` (EKF/UKF diverge
 steadily from ~1 m to ~250 m over 15 s as maneuvers accumulate; IMM stays flat near 1 m
 throughout), `nees_vs_time.png` (EKF's ANEES reaches ~10^7 against an expected value of 9; IMM's

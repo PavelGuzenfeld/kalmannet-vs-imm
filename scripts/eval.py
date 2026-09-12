@@ -123,7 +123,7 @@ def summarize_consistency(result, dim=STATE_DIM, meas_dim=3):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-dir", default="data/splits")
+    ap.add_argument("--data-dir", default="datasets")
     ap.add_argument("--imm-tuning", default="results/imm_tuning.json")
     ap.add_argument("--out", default="results")
     args = ap.parse_args()

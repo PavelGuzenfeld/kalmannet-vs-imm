@@ -1,11 +1,11 @@
 [[waiver]]
-file = "make_plots.py"
+file = "scripts/make_plots.py"
 uncovered = true
-reason = """make_plots.py only arranges matplotlib figures from results/*.json and
-*.csv. Its output is a PNG judged by eye, so a mutant like an annotation offset
-6 => 7 has no assertable consequence; asserting on pixels would pin the current
+reason = """It only arranges matplotlib figures from results/*.json and *.csv.
+Its output is a PNG judged by eye, so a mutant like an annotation offset 6 => 7
+has no assertable consequence; asserting on pixels would pin the current
 rendering, not a requirement. The numbers it draws are produced and checked in
-eval.py and filters/metrics.py, which are gated."""
+scripts/eval.py and filters/metrics.py, which are gated."""
 
 [[waiver]]
 file = "filters/knet/rkn_filter.py"

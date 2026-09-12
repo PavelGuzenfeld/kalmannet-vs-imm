@@ -77,7 +77,7 @@ def summarize(result, burn_in=_BURN_IN):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-dir", default="data/splits")
+    ap.add_argument("--data-dir", default="datasets")
     ap.add_argument("--checkpoint", default="results/rkn/best.pt")
     ap.add_argument("--fc1-mult", type=int, default=3)
     ap.add_argument("--hidden-mult", type=int, default=3)

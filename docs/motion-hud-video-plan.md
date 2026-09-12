@@ -76,17 +76,17 @@ the maneuver starts).
 15. mp4 output requires **ffmpeg**, which is added to
     `docker/Dockerfile` (one `apt-get install -y ffmpeg` line) and
     the image rebuilt. GIF uses the pillow writer (already present).
-16. The new script is **`make_animation.py`**, self-contained
+16. The new script is **`scripts/make_animation.py`**, self-contained
     (its own per-frame runner recording position + NEES + IMM mode probabilities
     per step), following the same convention as the separate `eval_*.py` scripts
-    rather than coupling to `make_plots.py`'s helpers.
+    rather than coupling to `scripts/make_plots.py`'s helpers.
 17. Artifacts are written to **`results/video/motion_hud.mp4`** and
     **`results/video/motion_hud.gif`** (gitignored `results/`, so artifacts, not
     committed).
-18. The script consumes existing on-disk dependencies: `data/splits/` (regenerate
+18. The script consumes existing on-disk dependencies: `datasets/` (regenerate
     if absent), `results/imm_tuning.json`, `results/knet_vanilla/best.pt`,
     `results/rkn/best.pt`. It is invoked the same containerized way as everything
-    else (`docker run … kalmannet-bench:cpu python make_animation.py`).
+    else (`docker run … kalmannet-bench:cpu python scripts/make_animation.py`).
 
 ## Open questions
 
@@ -110,10 +110,10 @@ the maneuver starts).
 1. Add `ffmpeg` to `docker/Dockerfile` and rebuild the
    `kalmannet-bench:cpu` image; verify `matplotlib.animation.writers.list()`
    now includes `ffmpeg`.
-2. Confirm on-disk dependencies exist (`data/splits/`, `imm_tuning.json`, both
-   `best.pt` checkpoints); regenerate `data/splits/` via `make_dataset.py` if
+2. Confirm on-disk dependencies exist (`datasets/`, `imm_tuning.json`, both
+   `best.pt` checkpoints); regenerate `datasets/` via `scripts/make_dataset.py` if
    absent.
-3. Write `make_animation.py`:
+3. Write `scripts/make_animation.py`:
    a. Load the high_maneuver test set; deterministically select the trajectory
       with the most mode switches from its label sequence.
    b. Per-frame runner: step EKF, UKF, IMM (with mode probs), vanilla KalmanNet

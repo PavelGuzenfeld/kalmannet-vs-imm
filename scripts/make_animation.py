@@ -273,7 +273,7 @@ def build_animation(states, est, err, nees, mus, labels, dt, args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-dir", default="data/splits")
+    ap.add_argument("--data-dir", default="datasets")
     ap.add_argument("--regime", default="high_maneuver")
     ap.add_argument("--knet-ckpt", default="results/knet_vanilla/best.pt")
     ap.add_argument("--rkn-ckpt", default="results/rkn/best.pt")

@@ -62,7 +62,7 @@ def save_split(path, trajectories):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="data/splits")
+    ap.add_argument("--out", default="datasets")
     ap.add_argument("--n-train", type=int, default=1000)
     ap.add_argument("--n-val", type=int, default=200)
     ap.add_argument("--n-test", type=int, default=200)

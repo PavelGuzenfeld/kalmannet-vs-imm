@@ -42,7 +42,7 @@ def bench(step_fn, n_warmup=200, n_measure=10000):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-dir", default="data/splits")
+    ap.add_argument("--data-dir", default="datasets")
     ap.add_argument("--imm-tuning", default="results/imm_tuning.json")
     ap.add_argument("--knet-checkpoint", default=None)
     ap.add_argument("--rkn-checkpoint", default=None)

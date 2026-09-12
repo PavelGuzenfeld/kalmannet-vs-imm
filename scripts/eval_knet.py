@@ -60,7 +60,7 @@ def position_velocity_rmse(net, dt, R, states, measurements):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-dir", default="data/splits")
+    ap.add_argument("--data-dir", default="datasets")
     ap.add_argument("--checkpoint", default="results/knet_vanilla/best.pt")
     ap.add_argument("--out", default="results/knet_test_rmse.csv")
     args = ap.parse_args()

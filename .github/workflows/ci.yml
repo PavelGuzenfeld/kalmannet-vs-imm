@@ -43,15 +43,15 @@ jobs:
 
       # The unit tests import the packages directly and so never execute an
       # entrypoint. This runs the documented pipeline at toy sizes, on its
-      # default output paths, which is what caught `python data/make_dataset.py`
+      # default output paths, which is what caught `python scripts/make_dataset.py`
       # failing on sys.path while all 38 tests were green.
       - name: Smoke the documented pipeline
         run: |
-          ./docker_run.sh python data/make_dataset.py \
+          ./docker_run.sh python scripts/make_dataset.py \
             --n-train 4 --n-val 4 --n-test 4 --n-sweep 2 \
             --mc-test 2 --n-highmc 2 --mc-highmc 3
-          ./docker_run.sh python tune_imm.py --n-search 2
-          ./docker_run.sh python eval.py
-          ./docker_run.sh python bench_latency.py --n-warmup 5 --n-measure 50
+          ./docker_run.sh python scripts/tune_imm.py --n-search 2
+          ./docker_run.sh python scripts/eval.py
+          ./docker_run.sh python scripts/bench_latency.py --n-warmup 5 --n-measure 50
           test -s results/results_table.csv
           test -s results/anees_highmc.json

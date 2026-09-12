@@ -29,15 +29,15 @@ Everything runs in a CPU-only Docker image; `docker_run.sh` builds it and mounts
 `/work`.
 
 ```
-./docker_run.sh pytest -q          # 45 tests
-./docker_run.sh python data/make_dataset.py
-./docker_run.sh python tune_imm.py
-./docker_run.sh python eval.py     # classical filters -> results/
-./docker_run.sh python train_knet.py && ./docker_run.sh python eval_knet.py
-./docker_run.sh python train_rkn.py  && ./docker_run.sh python eval_rkn.py
-./docker_run.sh python bench_latency.py
-./docker_run.sh python make_plots.py
-./docker_run.sh python make_animation.py
+./docker_run.sh pytest -q                        # 45 tests
+./docker_run.sh python scripts/make_dataset.py   # -> datasets/
+./docker_run.sh python scripts/tune_imm.py
+./docker_run.sh python scripts/eval.py           # classical filters -> results/
+./docker_run.sh python scripts/train_knet.py && ./docker_run.sh python scripts/eval_knet.py
+./docker_run.sh python scripts/train_rkn.py  && ./docker_run.sh python scripts/eval_rkn.py
+./docker_run.sh python scripts/bench_latency.py
+./docker_run.sh python scripts/make_plots.py
+./docker_run.sh python scripts/make_animation.py
 ```
 
 Run them in that order — each step reads the previous step's output from its default path.
@@ -47,15 +47,16 @@ above. Every results artifact records the host `GIT_COMMIT` it was produced at.
 ## Layout
 
 ```
-*.py                  entrypoints, one per pipeline stage; run from the repo root
+scripts/              entrypoints, one per pipeline stage; run from the repo root
 filters/              the library: EKF, UKF, IMM, motion/measurement models, metrics
 filters/knet/         KalmanNet and Recursive KalmanNet (torch)
 data/                 the trajectory generator and regime definitions
-data/splits/          its generated output (gitignored)
-results/              every artifact the pipeline writes, plots included (gitignored)
 tests/                unit tests -- `./docker_run.sh pytest -q`
 docs/                 the report, the literature notes, the animation plan
 docker/               the CPU-only image both CI and docker_run.sh use
+
+datasets/             generated trajectories (gitignored)
+results/              every artifact the pipeline writes, plots included (gitignored)
 ```
 
 ## Checks

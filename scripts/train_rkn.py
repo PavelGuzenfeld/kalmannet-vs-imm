@@ -96,7 +96,7 @@ def run_epoch(net, dt, states, measurements, batch_size, trunc_len, rng, optimiz
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-dir", default="data/splits")
+    ap.add_argument("--data-dir", default="datasets")
     ap.add_argument("--out", default="results/rkn")
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--patience", type=int, default=6)
