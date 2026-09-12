@@ -23,15 +23,14 @@ from data.trajectory_gen import generate_ground_truth, measure
 
 
 def _git_commit():
-    """GIT_COMMIT (set by docker_run.sh from the host, where .git is
-    visible) takes precedence -- the container only mounts
-    the repo root, so a local `git rev-parse` here would silently
-    resolve to nothing and every manifest would say "unknown"."""
+    """GIT_COMMIT (set by docker_run.sh on the host) takes precedence: the slim
+    image ships no git binary, so the fallback below only resolves when running
+    outside the container."""
     env_commit = os.environ.get("GIT_COMMIT")
     if env_commit:
         return env_commit
     try:
-        root = Path(__file__).resolve().parents[3]
+        root = Path(__file__).resolve().parents[1]
         return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root).decode().strip()
     except Exception:
         return "unknown"

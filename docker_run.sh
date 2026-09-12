@@ -8,9 +8,8 @@ set -eu
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE="kalmannet-bench:cpu"
-# The container mounts the work tree without .git, so the commit has to be
-# resolved here on the host and handed in -- every results artifact logs it,
-# per the brief's reproducibility requirement.
+# The slim image ships no git binary, so the commit is resolved on the host and
+# handed in -- every results artifact logs it, per the reproducibility brief.
 GIT_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 
 docker build --network=host -q -f "$REPO_ROOT/docker/Dockerfile" -t "$IMAGE" "$REPO_ROOT" >/dev/null
