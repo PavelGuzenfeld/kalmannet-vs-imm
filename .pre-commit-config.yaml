@@ -30,6 +30,7 @@ repos:
       - id: mutation-gate
         name: mutation gate (diff-scoped)
         entry: mutation-gate --staged
+        verbose: true
         language: system
-        files: ^(filters|data)/.*\.py$
+        files: ^((filters|data|tests)/.*\.py|docs/model-spec\.md|\.mutation-gate\.toml)$
         pass_filenames: false

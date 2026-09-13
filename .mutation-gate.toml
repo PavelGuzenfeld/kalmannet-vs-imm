@@ -7,3 +7,36 @@ test_paths = ["tests"]
 test_command = "docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONPATH=$PWD -v $PWD:$PWD -w $PWD kalmannet-bench:cpu pytest -q -p no:cacheprovider {tests}"
 # --cov takes packages, not file paths: `--cov=filters/imm.py` collects nothing.
 coverage_command = "docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONPATH=$PWD -v $PWD:$PWD -w $PWD kalmannet-bench:cpu pytest -q -p no:cacheprovider --cov=filters --cov=data --cov-context=test --cov-report= {tests}"
+
+# Model-V&V scope (dotfiles#56). Declared, not inferred: a diff here needs
+# docs/model-spec.md and a diff-touched test importing one of these must cite
+# an MS-n. filters/metrics.py and filters/plot_data.py are deliberately out.
+model_paths = [
+    "filters/state.py",
+    "filters/discretize.py",
+    "filters/motion_models.py",
+    "filters/measurement_model.py",
+    "filters/ekf.py",
+    "filters/ukf.py",
+    "filters/imm.py",
+    "filters/torch_ops.py",
+    "filters/knet/",
+]
+
+# Probe hits that are not the filter's model. Each reason is the classification
+# record; a wrong one is a spec gap, not a config nit.
+[[model_exclude]]
+path = "data/"
+reason = "truth generator and regime table, not the filter; today it reuses filters.motion_models, which Layer 5 forbids — open flag MS-27 in docs/model-spec.md"
+
+[[model_exclude]]
+path = "scripts/"
+reason = "drivers: train/eval/tune/bench/plot; the noise parameters tune_imm.py picks are recorded as spec lines (MS-12), the scripts hold no model"
+
+[[model_exclude]]
+path = "filters/metrics.py"
+reason = "Layer 5 harness (NEES/NIS/RMSE), evaluates the model and is not it"
+
+[[model_exclude]]
+path = "filters/plot_data.py"
+reason = "arranges results for plotting; `sigma` here is a column label"

@@ -86,10 +86,8 @@ def ct_model(dt, omega, sigma_a=0.3, tau=5.0):
     h_idx = [PX, VX, PY, VY]
     F[np.ix_(h_idx, h_idx)] = F_h
 
-    # Process noise on horizontal velocity covers the mismatch between the
-    # filter's nominal omega and the true (randomized, per-segment) turn
-    # rate -- the CT mode never learns the exact rate, only that a turn is
-    # underway.
+    # Budgets sigma_a of unmodelled lateral acceleration, |d_omega| <= sigma_a / v;
+    # the nominal-vs-true turn-rate mismatch is absorbed by IMM mode switching (MS-13).
     q_h = (sigma_a * dt) ** 2
     Q[VX, VX] += q_h
     Q[VY, VY] += q_h
