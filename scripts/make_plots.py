@@ -20,9 +20,9 @@ import numpy as np
 
 from filters.ekf import EKF
 from filters.imm import IMM
-from filters.metrics import anees_with_bounds
-from filters.plot_data import coverage_series, rmse_series_by_regime
-from filters.state import STATE_DIM
+from filters.metrics import anees_with_bounds, per_step_rmse
+from filters.plot_data import coverage_series, imm_kwargs_from_tuning, latency_series, rmse_series_by_regime
+from filters.state import POS, STATE_DIM
 from filters.ukf import UKF
 
 _INIT_OFFSET = np.array([2.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
@@ -62,15 +62,15 @@ def _run_imm(imm, x_true, z):
     return xs, nees
 
 
-def plot_trajectory_overlay(out_dir, dt, R, states, measurements):
+def plot_trajectory_overlay(out_dir, dt, R, states, measurements,
+                             imm_tuning_json_path="results/imm_tuning.json"):
     x_true = states[0]
     z = measurements[0, 0]
 
     ekf_xs, _ = _run_ekf_like(EKF(dt, R), x_true, z)
     ukf_xs, _ = _run_ekf_like(UKF(dt, R), x_true, z)
-    imm_best = json.loads(Path("results/imm_tuning.json").read_text())["best"]
-    imm = IMM(dt, R, omega_ct=np.deg2rad(imm_best["omega_ct_deg"]), p_stay=imm_best["p_stay"],
-              ca_sigma_a=imm_best["ca_sigma_a"], ca_tau=imm_best["ca_tau"])
+    imm_best = json.loads(Path(imm_tuning_json_path).read_text())["best"]
+    imm = IMM(dt, R, **imm_kwargs_from_tuning(imm_best))
     imm_xs, _ = _run_imm(imm, x_true, z)
 
     fig, ax = plt.subplots(figsize=(7, 6))
@@ -88,28 +88,27 @@ def plot_trajectory_overlay(out_dir, dt, R, states, measurements):
     plt.close(fig)
 
 
-def plot_rmse_vs_time(out_dir, dt, R, states, measurements, n_traj=30):
+def plot_rmse_vs_time(out_dir, dt, R, states, measurements, n_traj=30,
+                       imm_tuning_json_path="results/imm_tuning.json"):
     T = states.shape[1]
     filters = {
         "EKF": (lambda: EKF(dt, R), _run_ekf_like),
         "UKF": (lambda: UKF(dt, R), _run_ekf_like),
     }
-    imm_best = json.loads(Path("results/imm_tuning.json").read_text())["best"]
+    imm_best = json.loads(Path(imm_tuning_json_path).read_text())["best"]
     filters["IMM"] = (
-        lambda: IMM(dt, R, omega_ct=np.deg2rad(imm_best["omega_ct_deg"]), p_stay=imm_best["p_stay"],
-                    ca_sigma_a=imm_best["ca_sigma_a"], ca_tau=imm_best["ca_tau"]),
+        lambda: IMM(dt, R, **imm_kwargs_from_tuning(imm_best)),
         _run_imm,
     )
 
     fig, ax = plt.subplots(figsize=(9, 5))
     t_axis = np.arange(T) * dt
     for name, (factory, run_fn) in filters.items():
-        sq_err = np.zeros(T)
+        xs_all = np.zeros((n_traj, T, STATE_DIM))
         for i in range(n_traj):
             flt = factory()
-            xs, _ = run_fn(flt, states[i], measurements[i, 0])
-            sq_err += np.sum((xs[:, :3] - states[i, :, :3]) ** 2, axis=-1)
-        rmse_t = np.sqrt(sq_err / n_traj)
+            xs_all[i], _ = run_fn(flt, states[i], measurements[i, 0])
+        rmse_t = per_step_rmse(states[:n_traj], xs_all, POS)
         ax.plot(t_axis, rmse_t, label=name)
     ax.set_xlabel("time (s)")
     ax.set_ylabel("position RMSE (m)")
@@ -208,9 +207,7 @@ def plot_accuracy_vs_maneuver_intensity(out_dir, results_csv_path, knet_csv_path
 
 def plot_latency_vs_parameters(out_dir, latency_json_path):
     data = json.loads(Path(latency_json_path).read_text())["results_ms"]
-    names = list(data.keys())
-    params = [data[n].get("param_count", 0) for n in names]
-    latency = [data[n]["median_ms"] for n in names]
+    names, params, latency = latency_series(data)
 
     fig, ax = plt.subplots(figsize=(7, 5))
     ax.scatter(params, latency, s=80)

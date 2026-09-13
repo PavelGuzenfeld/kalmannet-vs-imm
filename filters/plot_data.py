@@ -3,6 +3,29 @@ split out so the CSV-column and filter-to-series selection logic is gated and
 tested like the rest of filters/, leaving make_plots.py itself as pixel-only
 rendering (see the waiver in .mutation-gate-waivers.toml)."""
 
+import numpy as np
+
+
+def imm_kwargs_from_tuning(imm_best):
+    """IMM constructor kwargs from an imm_tuning.json "best" dict -- the only
+    place that converts its degrees turn-rate to radians."""
+    return {
+        "omega_ct": np.deg2rad(imm_best["omega_ct_deg"]),
+        "p_stay": imm_best["p_stay"],
+        "ca_sigma_a": imm_best["ca_sigma_a"],
+        "ca_tau": imm_best["ca_tau"],
+    }
+
+
+def latency_series(data):
+    """(names, param_counts, median_ms) columns from a latency.json
+    "results_ms" dict, one entry per filter name; param_count defaults to 0
+    for the classical filters, which carry none."""
+    names = list(data.keys())
+    params = [data[n].get("param_count", 0) for n in names]
+    latency = [data[n]["median_ms"] for n in names]
+    return names, params, latency
+
 
 def rmse_series_by_regime(rows, regime_order, filter_name=None, value_col="pos_rmse"):
     """One value per entry in regime_order, pulled from the row matching that
