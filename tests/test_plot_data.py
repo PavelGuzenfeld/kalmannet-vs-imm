@@ -459,6 +459,62 @@ def test_plot_trajectory_overlay_draws_the_imm_built_from_the_tuned_kwargs(tmp_p
     assert (tmp_path / "trajectory_overlay.png").exists()
 
 
+def test_plot_trajectory_overlay_draws_ground_truth_ekf_and_ukf_for_the_first_trajectory_only(tmp_path):
+    from filters.ekf import EKF
+    from filters.imm import IMM
+    from filters.ukf import UKF
+    from scripts import make_plots
+
+    dt, T = 0.1, 4
+    R = np.diag([0.001**2, 0.001**2, 2.0**2])
+    x0 = np.array([3000.0, 500.0, 200.0, 50.0, -20.0, 5.0, 0.0, 0.0, 0.0])
+    # A second, distinguishable trajectory alongside the first, so a line
+    # drawn from the wrong trajectory (or from both) is caught rather than
+    # passing by coincidence of a single-trajectory fixture.
+    x1 = np.array([100.0, 100.0, 0.0, -30.0, 40.0, -5.0, 0.0, 0.0, 0.0])
+    states = np.stack([_straight_line_trajectory(x0, T, dt), _straight_line_trajectory(x1, T, dt)])
+    measurements = np.stack([_measure_exactly(s) for s in states])[:, None, :, :]
+
+    imm_best = {"omega_ct_deg": 12.0, "p_stay": 0.9, "ca_sigma_a": 2.0, "ca_tau": 3.0}
+    imm_tuning = tmp_path / "imm_tuning.json"
+    imm_tuning.write_text(json.dumps({"best": imm_best}))
+
+    expected_ekf_xs, _ = make_plots._run_ekf_like(EKF(dt, R), states[0], measurements[0, 0])
+    expected_ukf_xs, _ = make_plots._run_ekf_like(UKF(dt, R), states[0], measurements[0, 0])
+    expected_imm = IMM(dt, R, **imm_kwargs_from_tuning(imm_best))
+    expected_imm_xs, _ = make_plots._run_imm(expected_imm, states[0], measurements[0, 0])
+
+    real_subplots = make_plots.plt.subplots
+    captured = {}
+
+    def _capture_subplots(*a, **kw):
+        fig, ax = real_subplots(*a, **kw)
+        captured["ax"] = ax
+        return fig, ax
+
+    with patch.object(make_plots.plt, "subplots", side_effect=_capture_subplots):
+        make_plots.plot_trajectory_overlay(tmp_path, dt, R, states, measurements,
+                                            imm_tuning_json_path=str(imm_tuning))
+
+    lines = {line.get_label(): line for line in captured["ax"].lines}
+
+    truth_line = lines["ground truth"]
+    assert np.array_equal(truth_line.get_xdata(), states[0][:, 0])
+    assert np.array_equal(truth_line.get_ydata(), states[0][:, 1])
+
+    ekf_line = lines["EKF (CV-only)"]
+    assert np.array_equal(ekf_line.get_xdata(), expected_ekf_xs[:, 0])
+    assert np.array_equal(ekf_line.get_ydata(), expected_ekf_xs[:, 1])
+
+    ukf_line = lines["UKF (CV-only)"]
+    assert np.array_equal(ukf_line.get_xdata(), expected_ukf_xs[:, 0])
+    assert np.array_equal(ukf_line.get_ydata(), expected_ukf_xs[:, 1])
+
+    imm_line = lines["IMM (tuned)"]
+    assert np.array_equal(imm_line.get_xdata(), expected_imm_xs[:, 0])
+    assert np.array_equal(imm_line.get_ydata(), expected_imm_xs[:, 1])
+
+
 def test_plot_rmse_vs_time_uses_the_shared_imm_kwargs_builder_and_draws_per_step_rmse(tmp_path):
     from scripts import make_plots
 
