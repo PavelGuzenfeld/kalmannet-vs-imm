@@ -119,14 +119,15 @@ class _FixedGain:
 
 
 class _CaptureFeatures(_FixedGain):
-    """Zero gain, so the state stays pinned at the prior across steps and the
-    feature vector is the only thing that varies. Records one row per step."""
+    """Records one feature row per step. Zero gain by default, so the state
+    stays pinned at the prior across steps; pass K to also exercise a
+    genuinely moving state (needed once "recursive" must be told apart from
+    "state never changes")."""
 
-    def __init__(self):
-        super().__init__(
-            torch.zeros(1, STATE_DIM, 3, dtype=torch.float64),
-            torch.zeros(1, STATE_DIM, STATE_DIM, dtype=torch.float64),
-        )
+    def __init__(self, K=None):
+        if K is None:
+            K = torch.zeros(1, STATE_DIM, 3, dtype=torch.float64)
+        super().__init__(K, torch.zeros(1, STATE_DIM, STATE_DIM, dtype=torch.float64))
         self.seen = []
 
     def __call__(self, features, hidden):
@@ -303,6 +304,52 @@ def test_feature_vector_is_the_specified_squared_quadruple():
     seen = {"features": net.seen[0]}
 
     assert torch.allclose(seen["features"], expected, rtol=0, atol=1e-12)
+
+
+def test_feature_correction_is_recursive_at_the_second_step():
+    """correction = self.x - self.x_prior_previous must carry the prior saved
+    from the *previous* step, not the prior just recomputed this step. At
+    t=1 those coincide (x_prior_previous is seeded from x0 at init), so an
+    implementation that stores this step's own state instead of its prior
+    only diverges from step 2 onward.
+    """
+    dt = 0.02
+    x0 = torch.zeros(1, STATE_DIM, dtype=torch.float64)
+    x0[0, :3] = torch.tensor([700.0, -120.0, 60.0], dtype=torch.float64)
+    x0[0, 3:6] = torch.tensor([25.0, -40.0, 8.0], dtype=torch.float64)
+
+    f = CVMotionModel(dt)
+    torch.manual_seed(23)
+    K = torch.randn(1, STATE_DIM, 3, dtype=torch.float64) * 3.0
+
+    x_prior1 = f(x0)
+    z1 = h_torch(x_prior1) + torch.tensor([0.004, -0.003, 15.0], dtype=torch.float64)
+    y1 = z1 - h_torch(x_prior1)
+    x_upd1 = x_prior1 + torch.bmm(K, y1.unsqueeze(-1)).squeeze(-1)
+
+    z2 = z1 + torch.tensor([0.002, -0.001, 5.0], dtype=torch.float64)
+    x_prior2 = f(x_upd1)
+    y2 = z2 - h_torch(x_prior2)
+    z_diff2 = z2 - z1
+    correction2 = x_upd1 - x_prior1
+    expected2 = torch.cat(
+        [y2, z_diff2, H_jacobian_torch(x_prior2).reshape(1, -1), correction2], dim=-1
+    ) ** 2
+
+    net = _CaptureFeatures(K=K)
+    flt = RKNFilter(net, dt=dt)
+    flt.init_sequence(x0, _p0(1))
+    flt.step(z1)
+    flt.step(z2)
+
+    assert torch.allclose(net.seen[1], expected2, rtol=0, atol=1e-9)
+    # Without this, correcting against this step's own prior (x_prior2)
+    # instead of the one saved from step 1 would also pass.
+    wrong_correction2 = x_upd1 - x_prior2
+    wrong_expected2 = torch.cat(
+        [y2, z_diff2, H_jacobian_torch(x_prior2).reshape(1, -1), wrong_correction2], dim=-1
+    ) ** 2
+    assert not torch.allclose(net.seen[1], wrong_expected2, rtol=0, atol=1.0)
 
 
 def test_innovation_wraps_across_the_azimuth_boundary():
