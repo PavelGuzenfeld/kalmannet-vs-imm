@@ -35,8 +35,11 @@ def test_rkn_forward_pass_is_finite_and_p_stays_valid():
         assert torch.all(torch.isfinite(P_upd))
         for b in range(batch):
             P_b = P_upd[b].detach().numpy()
-            assert np.allclose(P_b, P_b.T, atol=1e-6)
-            assert np.all(np.linalg.eigvalsh(P_b) > -1e-6)
+            # P is IKH.P-.IKH^T + L.L^T -- symmetric PSD by construction, not
+            # merely approximately so. Measured residual is 6e-15 on entries
+            # of order 1e2; 1e-12 is two decades of headroom, no more.
+            assert np.allclose(P_b, P_b.T, rtol=0, atol=1e-12)
+            assert np.linalg.eigvalsh(P_b).min() > 0.0
 
 
 def test_gradient_flows_through_both_networks():
