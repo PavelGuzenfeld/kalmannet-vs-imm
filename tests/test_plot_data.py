@@ -59,6 +59,7 @@ def test_rmse_series_by_regime_is_nan_when_the_regime_has_no_row_for_that_filter
     # back to it and silently plot the wrong filter's number.
     rows = [{"filter": "UKF", "regime": "nominal", "pos_rmse": "4.0"}]
     ys = rmse_series_by_regime(rows, ["nominal"], filter_name="EKF")
+    assert len(ys) == 1
     assert math.isnan(ys[0])
 
 
@@ -119,7 +120,13 @@ def test_plot_accuracy_vs_maneuver_intensity_actually_calls_rmse_series_by_regim
     # A reimplementation that never calls the shared function -- private
     # copy, or inline filtering -- would leave this unexercised.
     assert spy.call_count == 3
-    assert {c.kwargs["filter_name"] for c in spy.call_args_list} == {"EKF", "UKF", "IMM"}
+    # Order matters: it's the plotted legend order, not just the call set.
+    assert [c.kwargs["filter_name"] for c in spy.call_args_list] == ["EKF", "UKF", "IMM"]
+    # And it must be fed the row actually read from results_csv, not some
+    # other source.
+    first_call_rows = spy.call_args_list[0].args[0]
+    assert first_call_rows == [{"filter": "EKF", "regime": "nominal", "pos_rmse": "3.0"}]
+    assert (tmp_path / "accuracy_vs_intensity.png").exists()
 
 
 def test_plot_coverage_actually_calls_coverage_series(tmp_path):
@@ -134,3 +141,18 @@ def test_plot_coverage_actually_calls_coverage_series(tmp_path):
     spy.assert_called_once()
     assert spy.call_args.args[0] == [{"filter": "EKF", "coverage_68": 0.6, "coverage_95": 0.9}]
     assert spy.call_args.args[1] is None
+    assert (tmp_path / "coverage.png").exists()
+
+
+def test_plot_coverage_forwards_the_rkn_result_when_present(tmp_path):
+    from scripts import make_plots
+
+    highmc = tmp_path / "anees_highmc.json"
+    highmc.write_text(json.dumps({"results": [{"filter": "EKF", "coverage_68": 0.6, "coverage_95": 0.9}]}))
+    rkn_eval = tmp_path / "rkn_eval.json"
+    rkn_eval.write_text(json.dumps({"highmc": {"coverage_68": 0.71, "coverage_95": 0.94}}))
+
+    with patch.object(make_plots, "coverage_series", wraps=make_plots.coverage_series) as spy:
+        make_plots.plot_coverage(tmp_path, str(highmc), rkn_eval_json_path=str(rkn_eval))
+
+    assert spy.call_args.args[1] == {"coverage_68": 0.71, "coverage_95": 0.94}
