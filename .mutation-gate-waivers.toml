@@ -5,7 +5,8 @@ reason = """It only arranges matplotlib figures from results/*.json and *.csv.
 Its output is a PNG judged by eye, so a mutant like an annotation offset 6 => 7
 has no assertable consequence; asserting on pixels would pin the current
 rendering, not a requirement. The numbers it draws are produced and checked in
-scripts/eval.py and filters/metrics.py, which are gated."""
+scripts/eval.py and filters/metrics.py, and the CSV/filter selection logic it
+used to inline is now filters/plot_data.py, all of which are gated."""
 
 [[waiver]]
 file = "filters/knet/rkn_filter.py"

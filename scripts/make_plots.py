@@ -17,10 +17,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.stats import chi2
 
 from filters.ekf import EKF
 from filters.imm import IMM
+from filters.metrics import anees_with_bounds
+from filters.plot_data import coverage_series, rmse_series_by_regime
 from filters.state import STATE_DIM
 from filters.ukf import UKF
 
@@ -142,12 +143,9 @@ def plot_nees_with_bounds(out_dir, dt, R, states, measurements, n_traj=None):
                 flt = factory()
                 _, nees = run_fn(flt, states[i], measurements[i, m])
                 nees_all[i, m] = nees
-        anees_t = nees_all.mean(axis=(0, 1))
+        anees_t, (low, high) = anees_with_bounds(nees_all.reshape(n_traj * mc, T), dim=dim, mc_axis=0)
         ax.plot(t_axis, anees_t, label=f"{name} ANEES(t)")
 
-    N = n_traj * mc
-    low = chi2.ppf(0.025, df=N * dim) / N
-    high = chi2.ppf(0.975, df=N * dim) / N
     ax.axhline(low, color="gray", ls=":", label="95% chi-square bound")
     ax.axhline(high, color="gray", ls=":")
     ax.axhline(dim, color="black", ls="--", alpha=0.5, label=f"expected (dim={dim})")
@@ -163,15 +161,10 @@ def plot_nees_with_bounds(out_dir, dt, R, states, measurements, n_traj=None):
 
 def plot_coverage(out_dir, highmc_json_path, rkn_eval_json_path=None):
     data = json.loads(Path(highmc_json_path).read_text())["results"]
-    filters = [r["filter"] for r in data]
-    cov68 = [r["coverage_68"] for r in data]
-    cov95 = [r["coverage_95"] for r in data]
-
+    rkn_highmc = None
     if rkn_eval_json_path and Path(rkn_eval_json_path).exists():
         rkn_highmc = json.loads(Path(rkn_eval_json_path).read_text())["highmc"]
-        filters.append("RKN")
-        cov68.append(rkn_highmc["coverage_68"])
-        cov95.append(rkn_highmc["coverage_95"])
+    filters, cov68, cov95 = coverage_series(data, rkn_highmc)
 
     x = np.arange(len(filters))
     fig, ax = plt.subplots(figsize=(7, 5))
@@ -198,23 +191,11 @@ def plot_accuracy_vs_maneuver_intensity(out_dir, results_csv_path, knet_csv_path
     regime_order = ["low_noise", "nominal", "high_noise", "heavy_tailed", "high_maneuver"]
     fig, ax = plt.subplots(figsize=(8, 5))
     for name in ["EKF", "UKF", "IMM"]:
-        ys = []
-        for regime in regime_order:
-            match = [r for r in rows if r["filter"] == name and r["regime"] == regime]
-            ys.append(float(match[0]["pos_rmse"]) if match else np.nan)
-        ax.plot(regime_order, ys, "o-", label=name)
+        ax.plot(regime_order, rmse_series_by_regime(rows, regime_order, filter_name=name), "o-", label=name)
     if knet_rows:
-        ys = []
-        for regime in regime_order:
-            match = [r for r in knet_rows if r["regime"] == regime]
-            ys.append(float(match[0]["pos_rmse"]) if match else np.nan)
-        ax.plot(regime_order, ys, "o-", label="KalmanNet-vanilla")
+        ax.plot(regime_order, rmse_series_by_regime(knet_rows, regime_order), "o-", label="KalmanNet-vanilla")
     if rkn_rows:
-        ys = []
-        for regime in regime_order:
-            match = [r for r in rkn_rows if r["regime"] == regime]
-            ys.append(float(match[0]["pos_rmse"]) if match else np.nan)
-        ax.plot(regime_order, ys, "o-", label="RKN")
+        ax.plot(regime_order, rmse_series_by_regime(rkn_rows, regime_order), "o-", label="RKN")
     ax.set_ylabel("position RMSE (m)")
     ax.set_yscale("log")
     ax.set_xlabel("regime (roughly increasing maneuver/noise intensity ->)")
