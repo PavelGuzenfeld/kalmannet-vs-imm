@@ -213,6 +213,35 @@ def test_joseph_form_holds_for_a_suboptimal_gain():
     assert torch.linalg.eigvalsh(P_upd[0]).min() > 0.0
 
 
+def test_additive_covariance_term_B_is_added_not_transposed():
+    """P+ = A + B, not A + B.T or the symmetrized (B + B.T)/2. The trained
+    network always emits a symmetric B = L L^T, but RKNFilter itself treats B
+    as opaque, so only a manifestly asymmetric B separates the three here.
+    """
+    dt = 0.02
+    x0 = torch.zeros(1, STATE_DIM, dtype=torch.float64)
+    x0[0, :3] = torch.tensor([300.0, -600.0, 40.0], dtype=torch.float64)
+    x0[0, 3:6] = torch.tensor([5.0, 15.0, -3.0], dtype=torch.float64)
+    P0 = _p0(1)
+
+    f = CVMotionModel(dt)
+    F = f.F.unsqueeze(0)
+    A_expected = F @ P0 @ F.transpose(1, 2)
+
+    K = torch.zeros(1, STATE_DIM, 3, dtype=torch.float64)
+    idx = torch.arange(STATE_DIM, dtype=torch.float64)
+    B = (idx.unsqueeze(1) * STATE_DIM + idx.unsqueeze(0)).unsqueeze(0)
+
+    flt = RKNFilter(_FixedGain(K, B), dt=dt)
+    flt.init_sequence(x0, P0)
+    _, P_upd = flt.step(torch.tensor(h(x0[0].numpy()), dtype=torch.float64).unsqueeze(0))
+
+    assert torch.allclose(P_upd, A_expected + B, rtol=0, atol=1e-12)
+    # Without these, a transposed or symmetrized B would pass too.
+    assert not torch.allclose(P_upd, A_expected + B.transpose(1, 2), rtol=0, atol=1.0)
+    assert not torch.allclose(P_upd, A_expected + (B + B.transpose(1, 2)) / 2, rtol=0, atol=1.0)
+
+
 def test_state_update_adds_the_gain_weighted_innovation():
     """x+ = x- + K(z - h(x-)). Both signs are load-bearing: flipping the
     innovation or the correction still yields a finite, plausible state, so
