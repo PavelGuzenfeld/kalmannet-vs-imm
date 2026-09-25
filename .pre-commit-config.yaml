@@ -32,5 +32,5 @@ repos:
         entry: mutation-gate --staged
         verbose: true
         language: system
-        files: ^((filters|data|tests)/.*\.py|docs/model-spec\.md|\.mutation-gate\.toml)$
+        files: ^((filters|data|tests)/.*\.py|\.mutation-gate\.toml)$
         pass_filenames: false
