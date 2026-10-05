@@ -192,6 +192,34 @@ def test_climb_loses_speed_that_the_mirrored_descent_gains():
     np.testing.assert_allclose(along_climb - along_descent, -G, rtol=1e-12)
 
 
+def test_wings_level_constant_pull_loops_through_vertical_up_and_down_back_to_east():
+    """Pitch must rise monotonically through 90 and 270 deg; one step turns the path at most (n + 1) g dt / stall speed."""
+    load_factor = 8.0
+    benchmark = PRESETS[DEFAULT_PRESET]
+    controls = held_controls(2500, load_factor=load_factor, throttle=1.0)
+    states = fly(benchmark, ORIGIN, 200.0 * EAST, 0.0, controls, DT)
+    pitch_rad = np.unwrap(np.arctan2(states[:, 5], states[:, 3]))
+    looped = np.flatnonzero(pitch_rad >= 2.0 * np.pi)
+
+    assert np.all(np.isfinite(states))
+    assert np.all(states[:, 4] == 0.0)
+    assert looped.size > 0
+    assert np.all(np.diff(pitch_rad[: looped[0] + 1]) > 0.0)
+    assert pitch_rad[looped[0]] - 2.0 * np.pi < (load_factor + 1.0) * G * DT / benchmark.min_speed_m_s
+
+
+def test_start_pointing_straight_up_flies_finite_states():
+    controls = held_controls(50, roll_rate_rad_s=1.0, load_factor=2.0, throttle=0.5)
+    states = fly(TEST_ENVELOPE, ORIGIN, np.array([0.0, 0.0, 100.0]), 0.0, controls, DT)
+    assert np.all(np.isfinite(states))
+
+
+def test_pull_from_straight_up_pitches_toward_north():
+    states = fly(TEST_ENVELOPE, ORIGIN, np.array([0.0, 0.0, 100.0]), 0.0, held_controls(1, load_factor=2.0), DT)
+    assert states[0, 6] == 0.0
+    assert_step_acceleration(states[0, 7], 2.0 * G)
+
+
 def test_default_preset_spans_the_benchmark_speed_envelope():
     default = PRESETS[DEFAULT_PRESET]
     assert (default.min_speed_m_s, default.max_speed_m_s) == NOMINAL.speed0

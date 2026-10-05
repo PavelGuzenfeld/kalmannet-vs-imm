@@ -12,6 +12,7 @@ from data.config import NOMINAL
 STANDARD_GRAVITY_M_S2 = 9.80665
 MAX_LIFT_TO_DRAG = 10.0
 UP = np.array([0.0, 0.0, 1.0])
+NORTH = np.array([0.0, 1.0, 0.0])
 
 ROLL_RATE, LOAD_FACTOR, THROTTLE = 0, 1, 2
 
@@ -45,9 +46,18 @@ def _drag_m_s2(envelope: Envelope, speed_m_s: float, load_factor: float) -> floa
     return STANDARD_GRAVITY_M_S2 / (2.0 * MAX_LIFT_TO_DRAG) * (speed_ratio**2 + (load_factor / speed_ratio) ** 2)
 
 
-def _lift_direction(unit_velocity: np.ndarray, bank_rad: float) -> np.ndarray:
-    wings_level_up = UP - unit_velocity[2] * unit_velocity
-    wings_level_up /= np.linalg.norm(wings_level_up)
+def _perpendicular_unit(reference: np.ndarray, unit_velocity: np.ndarray) -> np.ndarray:
+    perpendicular = reference - (reference @ unit_velocity) * unit_velocity
+    return perpendicular / np.linalg.norm(perpendicular)
+
+
+def _initial_wings_level_up(unit_velocity: np.ndarray) -> np.ndarray:
+    """Straight up or down has no horizon, so wings level there means lift toward north."""
+    reference = UP if np.linalg.norm(np.cross(UP, unit_velocity)) > 0.0 else NORTH
+    return _perpendicular_unit(reference, unit_velocity)
+
+
+def _lift_direction(unit_velocity: np.ndarray, wings_level_up: np.ndarray, bank_rad: float) -> np.ndarray:
     right_wing = np.cross(unit_velocity, wings_level_up)
     return np.cos(bank_rad) * wings_level_up + np.sin(bank_rad) * right_wing
 
@@ -60,25 +70,26 @@ def fly(
     controls: np.ndarray,
     dt_s: float,
 ) -> np.ndarray:
-    """controls[T, 3]: roll rate rad/s, load factor g, throttle in [0, 1]. Flight path must stay off vertical.
-
-    Returns states[T, 9] = px py pz vx vy vz ax ay az; row t's acceleration carries it to row t + 1.
-    """
+    """controls[T, 3]: roll rate rad/s, load factor g, throttle in [0, 1].
+    bank_rad is from wings level at the start; wings level then turns with the flight path, not the horizon.
+    Returns states[T, 9] = px py pz vx vy vz ax ay az; row t's acceleration carries it to row t + 1."""
     max_thrust_m_s2 = _drag_m_s2(envelope, envelope.max_speed_m_s, 1.0)
     position = np.asarray(position_m, dtype=np.float64)
     velocity = np.asarray(velocity_m_s, dtype=np.float64)
+    wings_level_up = _initial_wings_level_up(velocity / np.linalg.norm(velocity))
     states = np.zeros((len(controls), 9))
     for t, (roll_rate, load_factor_command, throttle) in enumerate(controls):
         max_roll_rate = envelope.max_roll_rate_rad_s
         bank_rad = bank_rad + np.clip(roll_rate, -max_roll_rate, max_roll_rate) * dt_s
         speed = np.linalg.norm(velocity)
         unit_velocity = velocity / speed
+        wings_level_up = _perpendicular_unit(wings_level_up, unit_velocity)
         available_load_factor = min(envelope.max_load_factor, (speed / envelope.min_speed_m_s) ** 2)
         load_factor = np.clip(load_factor_command, -available_load_factor, available_load_factor)
         tangential = np.clip(throttle, 0.0, 1.0) * max_thrust_m_s2 - _drag_m_s2(envelope, speed, load_factor)
         acceleration = (
             tangential * unit_velocity
-            + load_factor * STANDARD_GRAVITY_M_S2 * _lift_direction(unit_velocity, bank_rad)
+            + load_factor * STANDARD_GRAVITY_M_S2 * _lift_direction(unit_velocity, wings_level_up, bank_rad)
             - STANDARD_GRAVITY_M_S2 * UP
         )
         next_velocity = velocity + acceleration * dt_s
