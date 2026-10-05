@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Truncated-BPTT training for vanilla KalmanNet (architecture #2), with
-validation-based early stopping -- per NOTES.md sec. 1(b): per-step squared
+validation-based early stopping -- per issue #14 sec. 1(b): per-step squared
 error, time-averaged per trajectory (via the truncated-chunk mean), batch-
 averaged, with L2 weight decay via Adam's `weight_decay` (not the reference
 repo's optional, non-default composition loss). Train/val use only the

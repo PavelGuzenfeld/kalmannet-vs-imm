@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Animated 3D + HUD visualization of every filter's behavior on one
-maneuvering trajectory (see motion-hud-video-plan.md). Left panel: an orbiting
+maneuvering trajectory (see issue #16). Left panel: an orbiting
 3D view of the ground-truth target and all five filters' estimates, each drawn
 as an alpha-fading trailing tail with a head marker. Right panel (HUD): live
 per-filter position-error bars (log), per-filter NEES bars (log, with the
