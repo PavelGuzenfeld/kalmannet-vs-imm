@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Truncated-BPTT training for Recursive KalmanNet, with the tuning-free
 Gaussian NLL loss (issue #14 sec. 2, eq. 9; ported from the reference's
-`GaussianLikelihoodLoss`, using `slogdet` instead of `log(det(...))` for
-numerical stability): L_t = e_t^T P_t^{-1} e_t + logdet(P_t), batch+time-
+`GaussianLikelihoodLoss`, using a Cholesky factor instead of `log(det(...))`
+for numerical stability): L_t = e_t^T P_t^{-1} e_t + logdet(P_t), batch+time-
 averaged. Same protocol conventions as train_knet.py for a fair, direct
 comparison: truncated BPTT, a finite-loss/finite-gradient skip-guard (never
 a ground-truth state injection), validation-based early stopping.
@@ -30,11 +30,14 @@ def _load_split(path):
 
 
 def _gaussian_nll(e, P):
-    """e: [batch, m], P: [batch, m, m]. Batch-averaged NLL."""
-    e_col = e.unsqueeze(-1)
-    quad = torch.bmm(e_col.transpose(1, 2), torch.linalg.solve(P, e_col)).squeeze(-1).squeeze(-1)
-    _, logdet = torch.linalg.slogdet(P)
-    return torch.mean(quad + logdet)
+    """e: [batch, m], P: [batch, m, m]. Batch-averaged NLL; +inf, still on the graph, when any P is not
+    numerically positive definite (a diverged filter's P spans more decades than float64 holds, #28),
+    so the skip-guard drops the chunk."""
+    L, info = torch.linalg.cholesky_ex(P)
+    quad = torch.linalg.solve_triangular(L, e.unsqueeze(-1), upper=False).square().sum(dim=(1, 2))
+    logdet = 2.0 * torch.log(torch.diagonal(L, dim1=-2, dim2=-1)).sum(dim=-1)
+    nll = torch.mean(quad + logdet)
+    return torch.where(torch.all(info == 0), nll, torch.full_like(nll, float("inf")))
 
 
 def run_epoch(net, dt, states, measurements, batch_size, trunc_len, rng, optimizer=None):
