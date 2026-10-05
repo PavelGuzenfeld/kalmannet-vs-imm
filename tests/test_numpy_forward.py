@@ -16,10 +16,10 @@ from filters.knet.rkn_filter import RKNFilter
 from filters.knet.rkn_network import RKNGainCovNetwork
 from filters.motion_models import cv_model
 from filters.state import STATE_DIM
+from scripts.eval import error_and_nees
 from scripts.eval_knet import _INIT_OFFSET, _priors
 from scripts.replay import (
     RKN_LAYER_MULTS,
-    error_and_nees,
     knet_errors,
     knet_errors_numpy,
     numpy_weights,

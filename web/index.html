@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tracking Test Ground</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 16px; color: #1d1d1f; background: #fafafa; }
+  fieldset { display: inline-block; vertical-align: top; margin: 0 8px 8px 0; border: 1px solid #ccc; }
+  label { display: block; margin: 2px 0; }
+  input[type=number] { width: 7em; }
+  table { border-collapse: collapse; margin: 8px 0; }
+  td, th { border: 1px solid #ccc; padding: 2px 6px; text-align: right; }
+  canvas { border: 1px solid #ccc; background: #fff; max-width: 100%; }
+  #status { font-family: monospace; }
+</style>
+</head>
+<body>
+<h1>Tracking test ground</h1>
+<p id="status">loading Pyodide and the repo's filters/ and data/ code</p>
+
+<fieldset>
+  <legend>Envelope</legend>
+  <label>preset <select id="preset"></select></label>
+  <label>min speed (m/s) <input id="min_speed_m_s" type="range" min="5" max="150" step="1"> <output></output></label>
+  <label>level top speed (m/s) <input id="max_speed_m_s" type="range" min="20" max="400" step="1"> <output></output></label>
+  <label>max load factor (g) <input id="max_load_factor" type="range" min="1" max="12" step="0.1"> <output></output></label>
+  <label>max roll rate (°/s) <input id="max_roll_rate_deg_s" type="range" min="10" max="360" step="1"> <output></output></label>
+</fieldset>
+
+<fieldset>
+  <legend>Flight</legend>
+  <label>noise regime <select id="noise_regime"></select></label>
+  <label>seed <input id="seed" type="number" min="0" step="1"></label>
+  <button id="new_flight">new flight</button>
+  <button id="export">export scenario JSON</button>
+</fieldset>
+
+<fieldset>
+  <legend>Flag thresholds</legend>
+  <label>innovation gate, NIS (99%) <input id="innovation_gate_nis" type="number" step="any"></label>
+  <label>NEES upper (97.5%) <input id="nees_upper" type="number" step="any"></label>
+  <label>NEES run length (steps) <input id="overconfident_steps" type="number" min="1" step="1"></label>
+  <label>raw error (m) <input id="raw_error_m" type="number" step="any"></label>
+</fieldset>
+
+<fieldset>
+  <legend>Time</legend>
+  <button data-speed="0">pause</button>
+  <button data-speed="0.25">0.25×</button>
+  <button data-speed="0.5">0.5×</button>
+  <button data-speed="1">1×</button>
+  <button id="single_step">step</button>
+  <p id="clock"></p>
+</fieldset>
+
+<p>Keyboard: ←/→ roll, ↓ pull, ↑ push, W/S throttle. Gamepad (standard mapping): left stick roll and pitch, triggers throttle.</p>
+<p id="controls"></p>
+
+<h2>Flags (preview; scripts/replay.py is authoritative)</h2>
+<table>
+  <thead><tr><th>filter</th><th>error (m)</th><th>NEES</th><th>NIS</th><th>track loss</th><th>overconfidence</th><th>raw error</th></tr></thead>
+  <tbody id="readouts"></tbody>
+</table>
+
+<canvas id="plan" width="640" height="640"></canvas>
+
+<script type="module" src="page.js"></script>
+</body>
+</html>
