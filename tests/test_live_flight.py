@@ -42,10 +42,10 @@ def learned(tmp_path):
     return tmp_path / "site", checkpoints
 
 
-def page_flight(weights_root, noise_regime="nominal", thresholds=DEFAULT_THRESHOLDS):
+def page_flight(weights_root, noise_regime="nominal", thresholds=DEFAULT_THRESHOLDS, preset=DEFAULT_PRESET):
     setup = {
         "seed": SEED_SCENARIO_SEED,
-        "envelope": asdict(PRESETS[DEFAULT_PRESET]),
+        "envelope": asdict(PRESETS[preset]),
         "noise_regime": noise_regime,
         "thresholds": thresholds,
     }
@@ -86,17 +86,25 @@ def test_exported_break_turn_replays_to_the_page_preview_flags(learned, tmp_path
     assert flight.trips()["EKF"] == committed["tripped"]["EKF"]
 
 
-@pytest.mark.parametrize("noise_regime", page_options()["noise_regimes"])
-def test_exported_regime_and_thresholds_replay_to_the_page_preview_flags(noise_regime, learned, tmp_path):
-    """MS-11: the scenario's regime draws the noise, the filters still assume nominal R; replay reads its thresholds."""
+@pytest.mark.parametrize("noise_regime, preset", zip(page_options()["noise_regimes"], reversed(PRESETS)))
+def test_exported_regime_envelope_and_thresholds_replay_to_the_page_preview_flags(
+    noise_regime, preset, learned, tmp_path
+):
+    """MS-11: the scenario's regime draws the noise, the filters still assume nominal R; replay reads the recorded
+    envelope and thresholds."""
     weights_root, checkpoints = learned
-    flight = page_flight(weights_root, noise_regime, {**DEFAULT_THRESHOLDS, "raw_error_m": LOOSE_RAW_ERROR_M})
+    thresholds = {**DEFAULT_THRESHOLDS, "raw_error_m": LOOSE_RAW_ERROR_M}
+    flight = page_flight(weights_root, noise_regime, thresholds, preset)
     exported = tmp_path / "flight.json"
     exported.write_text(flight.scenario_json())
 
     lines = replay_lines(exported, checkpoints)
 
     assert lines == preview_lines(flight)
+    recorded = json.loads(exported.read_text())
+    assert (recorded["noise_regime"], recorded["envelope"], recorded["thresholds"]) == (
+        noise_regime, asdict(PRESETS[preset]), thresholds
+    )
 
 
 def test_picker_offers_the_four_noise_regimes_and_not_the_manoeuvre_regime():
