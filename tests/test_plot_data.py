@@ -100,14 +100,17 @@ def test_coverage_series_does_not_mutate_its_results_argument():
 
 
 def test_imm_kwargs_from_tuning_converts_the_turn_rate_to_radians():
+    """MS-12: all six tuned values reach the IMM constructor."""
     kwargs = imm_kwargs_from_tuning(
-        {"omega_ct_deg": 15.0, "p_stay": 0.97, "ca_sigma_a": 3.0, "ca_tau": 4.0}
+        {"omega_ct_deg": 15.0, "p_stay": 0.97, "ca_sigma_a": 3.0, "ca_tau": 4.0, "cv_sigma_a": 0.1, "ct_sigma_a": 0.5}
     )
     assert kwargs == {
         "omega_ct": math.radians(15.0),
         "p_stay": 0.97,
         "ca_sigma_a": 3.0,
         "ca_tau": 4.0,
+        "cv_sigma_a": 0.1,
+        "ct_sigma_a": 0.5,
     }
 
 
@@ -418,6 +421,7 @@ def _measure_exactly(states):
 
 
 def test_plot_trajectory_overlay_draws_the_imm_built_from_the_tuned_kwargs(tmp_path):
+    """MS-12."""
     from filters.imm import IMM
     from scripts import make_plots
 
@@ -427,7 +431,9 @@ def test_plot_trajectory_overlay_draws_the_imm_built_from_the_tuned_kwargs(tmp_p
     states = _straight_line_trajectory(x0, T, dt)[None, :, :]
     measurements = _measure_exactly(states[0])[None, None, :, :]
 
-    imm_best = {"omega_ct_deg": 12.0, "p_stay": 0.9, "ca_sigma_a": 2.0, "ca_tau": 3.0}
+    imm_best = {
+        "omega_ct_deg": 12.0, "p_stay": 0.9, "ca_sigma_a": 2.0, "ca_tau": 3.0, "cv_sigma_a": 0.1, "ct_sigma_a": 0.5,
+    }
     imm_tuning = tmp_path / "imm_tuning.json"
     imm_tuning.write_text(json.dumps({"best": imm_best}))
 
@@ -460,6 +466,7 @@ def test_plot_trajectory_overlay_draws_the_imm_built_from_the_tuned_kwargs(tmp_p
 
 
 def test_plot_trajectory_overlay_draws_ground_truth_ekf_and_ukf_for_the_first_trajectory_only(tmp_path):
+    """MS-9, MS-12."""
     from filters.ekf import EKF
     from filters.imm import IMM
     from filters.ukf import UKF
@@ -475,7 +482,9 @@ def test_plot_trajectory_overlay_draws_ground_truth_ekf_and_ukf_for_the_first_tr
     states = np.stack([_straight_line_trajectory(x0, T, dt), _straight_line_trajectory(x1, T, dt)])
     measurements = np.stack([_measure_exactly(s) for s in states])[:, None, :, :]
 
-    imm_best = {"omega_ct_deg": 12.0, "p_stay": 0.9, "ca_sigma_a": 2.0, "ca_tau": 3.0}
+    imm_best = {
+        "omega_ct_deg": 12.0, "p_stay": 0.9, "ca_sigma_a": 2.0, "ca_tau": 3.0, "cv_sigma_a": 0.1, "ct_sigma_a": 0.5,
+    }
     imm_tuning = tmp_path / "imm_tuning.json"
     imm_tuning.write_text(json.dumps({"best": imm_best}))
 
@@ -516,6 +525,7 @@ def test_plot_trajectory_overlay_draws_ground_truth_ekf_and_ukf_for_the_first_tr
 
 
 def test_plot_rmse_vs_time_uses_the_shared_imm_kwargs_builder_and_draws_per_step_rmse(tmp_path):
+    """MS-12."""
     from scripts import make_plots
 
     dt, T, n_traj = 0.1, 4, 2
@@ -527,7 +537,9 @@ def test_plot_rmse_vs_time_uses_the_shared_imm_kwargs_builder_and_draws_per_step
     states = np.stack([_straight_line_trajectory(x0, T, dt) for _ in range(n_available)])
     measurements = np.stack([_measure_exactly(s) for s in states])[:, None, :, :]
 
-    imm_best = {"omega_ct_deg": 12.0, "p_stay": 0.9, "ca_sigma_a": 2.0, "ca_tau": 3.0}
+    imm_best = {
+        "omega_ct_deg": 12.0, "p_stay": 0.9, "ca_sigma_a": 2.0, "ca_tau": 3.0, "cv_sigma_a": 0.1, "ct_sigma_a": 0.5,
+    }
     imm_tuning = tmp_path / "imm_tuning.json"
     imm_tuning.write_text(json.dumps({"best": imm_best}))
 
@@ -584,3 +596,25 @@ def test_plot_rmse_vs_time_uses_the_shared_imm_kwargs_builder_and_draws_per_step
         assert np.array_equal(lines_by_label[name].get_ydata(), expected)
         assert np.array_equal(lines_by_label[name].get_xdata(), t_axis)
     assert (tmp_path / "rmse_vs_time.png").exists()
+
+
+def test_latency_bench_builds_its_imm_from_all_six_tuned_values(monkeypatch, tmp_path):
+    """MS-12: the latency figure is for the IMM the benchmark runs."""
+    from filters.imm import IMM
+    from scripts import bench_latency
+
+    nominal = {"dt": 0.02, "sigma_az_rad": 0.001, "sigma_el_rad": 0.001, "sigma_range_m": 2.0}
+    (tmp_path / "manifest.json").write_text(json.dumps({"regimes": {"nominal": nominal}}))
+    tuned = {"omega_ct_deg": 20.0, "p_stay": 0.98, "ca_sigma_a": 1.5, "ca_tau": 3.0, "cv_sigma_a": 0.01, "ct_sigma_a": 0.7}
+    tuning = tmp_path / "imm_tuning.json"
+    tuning.write_text(json.dumps({"best": tuned}))
+    built = []
+    monkeypatch.setattr(bench_latency, "IMM", lambda dt, R, **kwargs: built.append(kwargs) or IMM(dt, R, **kwargs))
+    argv = ["bench_latency.py", "--data-dir", str(tmp_path), "--imm-tuning", str(tuning),
+            "--n-warmup", "1", "--n-measure", "1", "--out", str(tmp_path / "latency.json")]
+    monkeypatch.setattr("sys.argv", argv)
+    bench_latency.main()
+    assert built == [{
+        "omega_ct": math.radians(20.0), "p_stay": 0.98, "ca_sigma_a": 1.5, "ca_tau": 3.0,
+        "cv_sigma_a": 0.01, "ct_sigma_a": 0.7,
+    }]

@@ -34,6 +34,7 @@ from filters.knet.knet_filter import KalmanNetFilter
 from filters.knet.rkn_filter import RKNFilter
 from filters.knet.rkn_network import RKNGainCovNetwork
 from filters.motion_models import LABEL_NAMES, cv_model
+from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import STATE_DIM
 from filters.ukf import UKF
 
@@ -110,8 +111,7 @@ def run_all_filters(states, z, dt, R, knet_ckpt, rkn_ckpt, rkn_mults):
 
     # --- IMM (tuned) ---
     imm_best = json.loads(Path("results/imm_tuning.json").read_text())["best"]
-    imm = IMM(dt, R, omega_ct=np.deg2rad(imm_best["omega_ct_deg"]), p_stay=imm_best["p_stay"],
-              ca_sigma_a=imm_best["ca_sigma_a"], ca_tau=imm_best["ca_tau"])
+    imm = IMM(dt, R, **imm_kwargs_from_tuning(imm_best))
     state = imm.init_state(states[0] + _INIT_OFFSET, _P0_CLASSICAL.copy())
     for t in range(T):
         x, P, state, _, _ = imm.step(state, z[t])

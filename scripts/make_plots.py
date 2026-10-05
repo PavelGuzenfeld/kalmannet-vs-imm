@@ -133,8 +133,7 @@ def plot_nees_with_bounds(out_dir, dt, R, states, measurements, n_traj=None):
 
     for name, factory, run_fn in [
         ("EKF", lambda: EKF(dt, R), _run_ekf_like),
-        ("IMM", lambda: IMM(dt, R, omega_ct=np.deg2rad(imm_best["omega_ct_deg"]), p_stay=imm_best["p_stay"],
-                             ca_sigma_a=imm_best["ca_sigma_a"], ca_tau=imm_best["ca_tau"]), _run_imm),
+        ("IMM", lambda: IMM(dt, R, **imm_kwargs_from_tuning(imm_best)), _run_imm),
     ]:
         nees_all = np.zeros((n_traj, mc, T))
         for i in range(n_traj):

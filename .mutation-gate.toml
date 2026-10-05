@@ -45,3 +45,7 @@ reason = "arranges results for plotting; `sigma` here is a column label"
 [[model_exclude]]
 path = "filters/flags.py"
 reason = "Layer 5 harness: scenario flag thresholds over NIS, NEES and position error; evaluates the model and is not it"
+
+[[model_exclude]]
+path = "filters/imm_tuning.py"
+reason = "search driver over IMM constructor kwargs for scripts/tune_imm.py; the values it selects are recorded as spec lines (MS-12), it holds no model"
