@@ -13,14 +13,21 @@ from scipy.stats import chi2
 from data.config import NOMINAL
 from data.trajectory_gen import fly_scenario
 from filters.ekf import EKF
+from filters.imm import IMM
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.rkn_network import RKNGainCovNetwork
 from filters.motion_models import cv_model
+from filters.plot_data import imm_kwargs_from_tuning
 from scripts import eval as bench_eval
 from scripts.replay import main as replay_main
 
 REPO = Path(__file__).resolve().parents[1]
-SEED_SCENARIO = REPO / "data" / "scenarios" / "break_turn_9g.json"
+SCENARIO_DIR = REPO / "data" / "scenarios"
+SEED_SCENARIO = SCENARIO_DIR / "break_turn_9g.json"
+OVERHEAD_SCENARIO = SCENARIO_DIR / "overhead_pass.json"
+OVERHEAD_CROSSING_ERROR_BOUND_M = 3.0
+OVERHEAD_ERROR_WINDOW_STEPS = 25
+OVERCONFIDENT_STEPS = 25
 IMM_CONSTRUCTOR_DEFAULTS = {
     "omega_ct_deg": 15.0, "p_stay": 0.97, "ca_sigma_a": 3.0, "ca_tau": 4.0, "cv_sigma_a": 0.05, "ct_sigma_a": 0.3,
 }
@@ -81,6 +88,19 @@ def test_record_rewrites_the_committed_seed_scenario_and_the_flags_it_tripped(tm
     assert recorded.read_text().endswith("}\n")
     committed = json.loads(SEED_SCENARIO.read_text())
     assert set(committed) == {"controls", "seed", "envelope", "noise_regime", "thresholds", "git_tag", "tripped"}
+    assert json.loads(recorded.read_text()) == {**committed, "git_tag": "recorded-sha"}
+
+
+def test_record_overhead_rewrites_the_committed_overhead_scenario(tmp_path, monkeypatch):
+    """MS-35: --record --overhead regenerates the committed pass; only the git tag is the recording run's."""
+    recorded, missing = tmp_path / "overhead.json", tmp_path / "missing"
+    argv = ["replay.py", str(recorded), "--record", "--overhead", "--imm-tuning", str(missing)]
+    monkeypatch.setattr(sys, "argv", [*argv, "--knet-checkpoint", str(missing), "--rkn-checkpoint", str(missing)])
+    monkeypatch.setenv("GIT_COMMIT", "recorded-sha")
+
+    replay_main()
+
+    committed = json.loads(OVERHEAD_SCENARIO.read_text())
     assert json.loads(recorded.read_text()) == {**committed, "git_tag": "recorded-sha"}
 
 
@@ -168,11 +188,14 @@ def test_eval_reports_the_committed_scenarios_as_their_own_regime(imm_tuning, tm
     subprocess.run(
         [sys.executable, "scripts/make_dataset.py", "--out", data_dir, *toy_sizes, *toy_mc], cwd=REPO, check=True
     )
-    states, z = fly_scenario(json.loads(SEED_SCENARIO.read_text()))
-    err, nees, nis = bench_eval.run_ekf_like(EKF(NOMINAL.dt, NOMINAL.R()), states, z)
-    ekf_pos_rmse = np.sqrt(np.mean(np.sum(err[BURN_IN:, :3] ** 2, axis=-1)))
+    runs = [
+        bench_eval.run_ekf_like(EKF(NOMINAL.dt, NOMINAL.R()), *fly_scenario(json.loads(path.read_text())))
+        for path in sorted(SCENARIO_DIR.glob("*.json"))
+    ]
+    err, nees, nis = (np.concatenate([run[i][BURN_IN:] for run in runs]) for i in range(3))
+    ekf_pos_rmse = np.sqrt(np.mean(np.sum(err[:, :3] ** 2, axis=-1)))
     single_flight_nis_low, single_flight_nis_high = chi2.ppf(0.025, df=3), chi2.ppf(0.975, df=3)
-    ekf_nis_inside = np.mean((nis[BURN_IN:] >= single_flight_nis_low) & (nis[BURN_IN:] <= single_flight_nis_high))
+    ekf_nis_inside = np.mean((nis >= single_flight_nis_low) & (nis <= single_flight_nis_high))
     eval_argv = ["eval.py", "--data-dir", str(data_dir), "--imm-tuning", str(imm_tuning), "--out", str(out)]
     monkeypatch.setattr(sys, "argv", eval_argv)
     monkeypatch.chdir(REPO)
@@ -181,7 +204,50 @@ def test_eval_reports_the_committed_scenarios_as_their_own_regime(imm_tuning, tm
 
     with open(out / "results_table.csv") as f:
         rows = {row["filter"]: row for row in csv.DictReader(f) if row["regime"] == "scenarios"}
+    assert OVERHEAD_SCENARIO in SCENARIO_DIR.glob("*.json")
     assert list(rows) == ["EKF", "UKF", "IMM"]
     assert float(rows["EKF"]["pos_rmse"]) == ekf_pos_rmse
-    assert float(rows["EKF"]["anees_mean"]) == np.mean(nees[BURN_IN:])
+    assert float(rows["EKF"]["anees_mean"]) == np.mean(nees)
     assert float(rows["EKF"]["anis_fraction_inside_95"]) == ekf_nis_inside
+
+
+def overhead_crossing_step(scenario):
+    start_x, speed = scenario["start"]["position"][0], scenario["start"]["velocity"][0]
+    return round(-start_x / (speed * NOMINAL.dt))
+
+
+def test_overhead_truth_crosses_the_sensor_exactly_at_the_geometric_crossing_step():
+    """MS-35: straight pass at y = 0, so the truth is exactly overhead (rho = 0) at the step the geometry gives."""
+    scenario = json.loads(OVERHEAD_SCENARIO.read_text())
+    states, _ = fly_scenario(scenario)
+    assert np.hypot(states[:, 0], states[:, 1]).argmin() == overhead_crossing_step(scenario)
+    assert np.hypot(states[overhead_crossing_step(scenario), 0], states[overhead_crossing_step(scenario), 1]) == 0.0
+
+
+def test_ekf_and_imm_trip_overconfidence_when_nees_leaves_its_band_at_the_overhead_crossing(imm_tuning, tmp_path):
+    """MS-35: P collapses at rho = 0, so NEES is outside from the crossing step and the flag trips 25 steps in."""
+    scenario = json.loads(OVERHEAD_SCENARIO.read_text())
+    crossing, missing = overhead_crossing_step(scenario), tmp_path / "missing"
+    expected = crossing + OVERCONFIDENT_STEPS - 1
+
+    lines = replay(
+        OVERHEAD_SCENARIO, "--imm-tuning", imm_tuning, "--knet-checkpoint", missing, "--rkn-checkpoint", missing
+    )
+
+    for name in ("EKF", "IMM"):
+        assert f"overconfidence={expected} " in lines[name], lines[name]
+
+
+def test_ekf_and_imm_position_error_in_the_25_steps_from_the_overhead_crossing_exceeds_3_m():
+    """MS-35: the recorded approach error peaks at 1.25 m (EKF) and 1.16 m; 3 m is >2x that and below the IMM's 3.74 m."""
+    scenario = json.loads(OVERHEAD_SCENARIO.read_text())
+    crossing = overhead_crossing_step(scenario)
+    states, z = fly_scenario(scenario)
+    imm = IMM(NOMINAL.dt, NOMINAL.R(), **imm_kwargs_from_tuning(IMM_CONSTRUCTOR_DEFAULTS))
+    runs = (
+        bench_eval.run_ekf_like(EKF(NOMINAL.dt, NOMINAL.R()), states, z),
+        bench_eval.run_imm(imm, states, z),
+    )
+    for err, _, _ in runs:
+        position_error_m = np.linalg.norm(err[:, :3], axis=1)
+        assert position_error_m[crossing : crossing + OVERHEAD_ERROR_WINDOW_STEPS].max() > OVERHEAD_CROSSING_ERROR_BOUND_M

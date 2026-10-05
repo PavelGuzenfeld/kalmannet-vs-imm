@@ -38,6 +38,9 @@ RKN_LAYER_MULTS = {"fc1_mult": 3, "hidden_mult": 3, "fc2_mult": 4}
 SEED_SCENARIO_SEED = 8
 SEED_BREAK_TURN_BANK_STEPS = 23
 SEED_BREAK_TURN_PULL_STEPS = 150
+OVERHEAD_SCENARIO_SEED = 4
+OVERHEAD_START_M = [-500.0, 0.0, 300.0]
+OVERHEAD_PASS_STEPS = 200
 RKN_P0_VARIANCE = 100.0
 DIVERGED_ERROR = 1e5
 SINGULAR_P_NEES = 1e10
@@ -60,6 +63,17 @@ def seed_scenario():
         "thresholds": DEFAULT_THRESHOLDS,
         "git_tag": os.environ.get("GIT_COMMIT", "unknown"),
         "controls": break_turn_controls(),
+    }
+
+
+def overhead_scenario():
+    """MS-35: unaccelerated full-throttle pass at max speed; truth reaches rho = 0 exactly at step 100."""
+    envelope = PRESETS[DEFAULT_PRESET]
+    return {
+        **seed_scenario(),
+        "seed": OVERHEAD_SCENARIO_SEED,
+        "start": {"position": OVERHEAD_START_M, "velocity": [envelope.max_speed_m_s, 0.0, 0.0]},
+        "controls": [[0.0, 1.0, 1.0]] * OVERHEAD_PASS_STEPS,
     }
 
 
@@ -160,9 +174,13 @@ def main():
     ap.add_argument("--rkn-checkpoint", type=Path, default=Path("results/rkn/best.pt"))
     ap.add_argument("--learned-backend", choices=LEARNED_BACKENDS, default="torch")
     ap.add_argument("--record", action="store_true", help="write the scripted seed scenario to SCENARIO first")
+    ap.add_argument("--overhead", action="store_true", help="with --record, write the overhead pass instead")
     args = ap.parse_args()
 
-    scenario = seed_scenario() if args.record else json.loads(args.scenario.read_text())
+    if args.record:
+        scenario = overhead_scenario() if args.overhead else seed_scenario()
+    else:
+        scenario = json.loads(args.scenario.read_text())
     results = replay(scenario, args.imm_tuning, args.knet_checkpoint, args.rkn_checkpoint, args.learned_backend)
     for name, trips in results.items():
         if isinstance(trips, str):
