@@ -6,6 +6,7 @@ different model than the one the classical filters are evaluated with,
 breaking the fairness the brief demands.
 """
 
+import numpy as np
 import torch
 
 from filters.measurement_model import AZIMUTH_ROW_FLOOR_M
@@ -72,6 +73,11 @@ def H_jacobian_torch(x):
     H[:, 2, 1] = py / r
     H[:, 2, 2] = pz / r
     return H
+
+
+def export_npz(state_dict, destination):
+    """The torch-free weight format filters/knet/numpy_forward.py reads, keyed by the state_dict names."""
+    np.savez(destination, **{name: tensor.detach().cpu().numpy() for name, tensor in state_dict.items()})
 
 
 class CVMotionModel:

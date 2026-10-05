@@ -5,6 +5,7 @@
 """
 
 import argparse
+import io
 import json
 import os
 from dataclasses import asdict
@@ -19,11 +20,13 @@ from data.trajectory_gen import fly_scenario
 from filters.ekf import EKF
 from filters.flags import DEFAULT_THRESHOLDS, first_trips
 from filters.imm import IMM
+from filters.knet import numpy_forward
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.knet_filter import KalmanNetFilter
 from filters.knet.rkn_network import RKNGainCovNetwork
 from filters.plot_data import imm_kwargs_from_tuning
-from filters.state import POS
+from filters.state import POS, STATE_DIM
+from filters.torch_ops import export_npz
 from filters.ukf import UKF
 from scripts.eval import run_ekf_like, run_imm
 from scripts.eval_knet import _INIT_OFFSET, _priors
@@ -35,6 +38,9 @@ RKN_LAYER_MULTS = {"fc1_mult": 3, "hidden_mult": 3, "fc2_mult": 4}
 SEED_SCENARIO_SEED = 8
 SEED_BREAK_TURN_BANK_STEPS = 23
 SEED_BREAK_TURN_PULL_STEPS = 150
+RKN_P0_VARIANCE = 100.0
+DIVERGED_ERROR = 1e5
+SINGULAR_P_NEES = 1e10
 
 
 def break_turn_controls():
@@ -76,11 +82,45 @@ def rkn_run(checkpoint, states, z):
     return result["err"][0, 0], result["nees"][0, 0]
 
 
-def replay(scenario, imm_tuning, knet_checkpoint, rkn_checkpoint):
+def numpy_weights(checkpoint):
+    """Through the .npz the page loads, so the numpy backend never reads a tensor."""
+    npz = io.BytesIO()
+    export_npz(torch.load(checkpoint, map_location="cpu", weights_only=True), npz)
+    npz.seek(0)
+    return numpy_forward.load_weights(npz)
+
+
+def knet_errors_numpy(checkpoint, states, z, R):
+    flt = numpy_forward.KalmanNetFilter(numpy_forward.KalmanGainGRU(numpy_weights(checkpoint)), NOMINAL.dt)
+    flt.init_sequence(states[0] + _INIT_OFFSET.numpy(), *(prior.numpy() for prior in _priors(NOMINAL.dt, R)))
+    return np.array([flt.step(z_t) for z_t in z]) - states
+
+
+def error_and_nees(x, P, truth):
+    """Same divergence and singular-P stand-ins as scripts/eval_rkn.evaluate_dataset."""
+    e = np.nan_to_num(x - truth, nan=DIVERGED_ERROR, posinf=DIVERGED_ERROR, neginf=-DIVERGED_ERROR)
+    try:
+        return e, e @ np.linalg.solve(P, e)
+    except np.linalg.LinAlgError:
+        return e, SINGULAR_P_NEES
+
+
+def rkn_run_numpy(checkpoint, states, z):
+    flt = numpy_forward.RKNFilter(numpy_forward.RKNGainCovNetwork(numpy_weights(checkpoint)), NOMINAL.dt)
+    flt.init_sequence(states[0] + _INIT_OFFSET.numpy(), np.eye(STATE_DIM) * RKN_P0_VARIANCE)
+    err, nees = zip(*(error_and_nees(*flt.step(z_t), truth) for z_t, truth in zip(z, states)))
+    return np.array(err), np.array(nees)
+
+
+LEARNED_BACKENDS = {"torch": (knet_errors, rkn_run), "numpy": (knet_errors_numpy, rkn_run_numpy)}
+
+
+def replay(scenario, imm_tuning, knet_checkpoint, rkn_checkpoint, learned_backend="torch"):
     """Filters assume nominal R whatever the scenario's noise regime. Returns {filter: trips dict or skip reason}."""
     states, z = fly_scenario(scenario)
     R, dt = NOMINAL.R(), NOMINAL.dt
     thresholds = scenario["thresholds"]
+    knet_run, rkn_backend_run = LEARNED_BACKENDS[learned_backend]
 
     def trips(err, nees=None, nis=None):
         return first_trips(np.linalg.norm(err[:, POS], axis=1), nees, nis, thresholds)
@@ -95,11 +135,11 @@ def replay(scenario, imm_tuning, knet_checkpoint, rkn_checkpoint):
     else:
         out["IMM"] = f"skipped, no tuning at {imm_tuning}"
     if knet_checkpoint.exists():
-        out["KalmanNet"] = trips(knet_errors(knet_checkpoint, states, z, R))
+        out["KalmanNet"] = trips(knet_run(knet_checkpoint, states, z, R))
     else:
         out["KalmanNet"] = f"skipped, no checkpoint at {knet_checkpoint}"
     if rkn_checkpoint.exists():
-        out["RKN"] = trips(*rkn_run(rkn_checkpoint, states, z))
+        out["RKN"] = trips(*rkn_backend_run(rkn_checkpoint, states, z))
     else:
         out["RKN"] = f"skipped, no checkpoint at {rkn_checkpoint}"
     return out
@@ -118,11 +158,12 @@ def main():
     ap.add_argument("--imm-tuning", type=Path, default=Path("results/imm_tuning.json"))
     ap.add_argument("--knet-checkpoint", type=Path, default=Path("results/knet_vanilla/best.pt"))
     ap.add_argument("--rkn-checkpoint", type=Path, default=Path("results/rkn/best.pt"))
+    ap.add_argument("--learned-backend", choices=LEARNED_BACKENDS, default="torch")
     ap.add_argument("--record", action="store_true", help="write the scripted seed scenario to SCENARIO first")
     args = ap.parse_args()
 
     scenario = seed_scenario() if args.record else json.loads(args.scenario.read_text())
-    results = replay(scenario, args.imm_tuning, args.knet_checkpoint, args.rkn_checkpoint)
+    results = replay(scenario, args.imm_tuning, args.knet_checkpoint, args.rkn_checkpoint, args.learned_backend)
     for name, trips in results.items():
         if isinstance(trips, str):
             print(f"{name}: {trips}")
