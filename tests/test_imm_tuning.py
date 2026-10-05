@@ -164,7 +164,14 @@ def test_a_coupled_axis_is_revisited_after_a_later_axis_moves():
     best, _, _ = coordinate_search(
         {"a": [0.5, 1.0, 2.0, 4.0, 8.0], "b": [0.5, 1.0, 2.0, 4.0, 8.0]},
         {"a": 1.0, "b": 1.0},
-        lambda c: (c["a"] - c["b"]) ** 2 + (c["b"] - 4.0) ** 2,
+        lambda c: (c["a"] - c["b"]) ** 2 + 2.0 * (c["b"] - 2.0) ** 2,
         MAX_EXTENSIONS,
     )
     assert best == {"a": 2.0, "b": 2.0}
+
+
+def test_every_axis_left_on_an_edge_is_named_not_only_the_first():
+    assert edge_axes({"ca_tau": [1.0, 2.0, 4.0], "p_stay": [0.95, 0.97, 0.99]}, {"ca_tau": 1.0, "p_stay": 0.99}) == [
+        "ca_tau",
+        "p_stay",
+    ]
