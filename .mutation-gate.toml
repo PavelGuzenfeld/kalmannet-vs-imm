@@ -9,9 +9,9 @@ test_command = "docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONP
 coverage_command = "docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONPATH=$PWD -v $PWD:$PWD -w $PWD kalmannet-bench:cpu pytest -q -p no:cacheprovider --cov=filters --cov=data --cov-context=test --cov-report= {tests}"
 
 # Model-V&V scope (dotfiles#56). Declared, not inferred: a diff here needs
-# issue #19 (pinned) and a diff-touched test importing one of these must cite
+# issue #1 (pinned) and a diff-touched test importing one of these must cite
 # an MS-n. filters/metrics.py and filters/plot_data.py are deliberately out.
-model_spec = "issue:19"
+model_spec = "issue:1"
 model_paths = [
     "filters/state.py",
     "filters/discretize.py",
@@ -28,7 +28,7 @@ model_paths = [
 # record; a wrong one is a spec gap, not a config nit.
 [[model_exclude]]
 path = "data/"
-reason = "truth generator and regime table, not the filter; today it reuses filters.motion_models, which Layer 5 forbids — open flag MS-27 in issue #19"
+reason = "truth generator and regime table, not the filter; today it reuses filters.motion_models, which Layer 5 forbids — open flag MS-27 in issue #1"
 
 [[model_exclude]]
 path = "scripts/"
