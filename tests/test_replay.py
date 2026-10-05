@@ -1,5 +1,4 @@
 import csv
-import hashlib
 import json
 import re
 import subprocess
@@ -27,7 +26,19 @@ FLAGS = ("track_loss", "overconfidence", "raw_error")
 KNET_INIT_OFFSET = np.array([2.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 BURN_IN = 20
 BREAK_TURN_START_STEP, BREAK_TURN_END_STEP = 50, 50 + 23 + 150
-RECORDED_TRUTH_SHA256 = "d0adbff6c23bf7f12f544d3de769e6a2c5595ee4f3f455b3a37ec469a2ad01ab"
+RECORDED_TRUTH_POS_VEL = {
+    0: [-1919.9007538401656, 153.80840024481452, 420.2908837135784,
+        -137.6496699659416, 146.7731455011416, -7.653813872034979],
+    74: [-2123.4321561971665, 371.63728900450354, 408.7458885693238,
+         -135.01626655351177, 150.6628470648977, -9.16082734020019],
+    148: [-2239.9650071107158, 639.6929546211076, 397.60718338081045,
+          -17.316570397382403, 198.78973536723495, -5.376613470370975],
+    222: [-2172.294855496557, 919.4780366442897, 393.88355298776327,
+          105.09710146925633, 165.81085028027567, 0.5082357318531592],
+    295: [-2013.5083892179464, 1159.473662862239, 393.09277288587424,
+          108.89319763088594, 164.39841185829255, -0.6585178415275652],
+}
+CROSS_PLATFORM_ATOL = 1e-6
 
 
 @pytest.fixture
@@ -72,9 +83,11 @@ def test_record_rewrites_the_committed_seed_scenario_and_the_flags_it_tripped(tm
 
 
 def test_model_change_silently_shifts_a_recorded_scenario():
-    """MS-27: a scenario's fixed-wing flight is the Layer 5 truth; flags pin only trip steps. Re-record, re-pin."""
+    """MS-27: the fixed-wing flight is the Layer 5 truth; a model change moves it by metres. atol 1e-6 m
+    (m/s) absorbs CPU-dependent libm/BLAS rounding over 296 steps, which a byte hash did not. Re-record, re-pin."""
     states, _ = fly_scenario(json.loads(SEED_SCENARIO.read_text()))
-    assert hashlib.sha256(states.tobytes()).hexdigest() == RECORDED_TRUTH_SHA256
+    for step, pos_vel in RECORDED_TRUTH_POS_VEL.items():
+        np.testing.assert_allclose(states[step, :6], pos_vel, rtol=0.0, atol=CROSS_PLATFORM_ATOL)
 
 
 def test_replay_trips_on_the_scenario_recorded_thresholds_not_the_defaults(tmp_path):

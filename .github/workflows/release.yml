@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  BENCH_IMAGE_PREBUILT: "1"
+
 jobs:
   dataset:
     runs-on: ubuntu-latest

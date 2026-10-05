@@ -23,6 +23,8 @@ jobs:
   # pull twice for a suite that finishes in seconds.
   test:
     runs-on: ubuntu-latest
+    env:
+      BENCH_IMAGE_PREBUILT: "1"
     steps:
       - uses: actions/checkout@v7
 

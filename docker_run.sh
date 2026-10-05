@@ -12,7 +12,7 @@ IMAGE="kalmannet-bench:cpu"
 # handed in -- every results artifact logs it, per the reproducibility brief.
 GIT_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 
-docker build --network=host -q -f "$REPO_ROOT/docker/Dockerfile" -t "$IMAGE" "$REPO_ROOT" >/dev/null
+[ -n "${BENCH_IMAGE_PREBUILT:-}" ] || docker build --network=host -q -f "$REPO_ROOT/docker/Dockerfile" -t "$IMAGE" "$REPO_ROOT" >/dev/null
 
 # --user keeps generated results, caches and .coverage owned by the caller
 # instead of root; MPLCONFIGDIR because that uid has no home inside the image.
