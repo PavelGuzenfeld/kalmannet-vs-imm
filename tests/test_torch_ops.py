@@ -30,6 +30,50 @@ def test_h_torch_matches_numpy_on_random_states():
         assert np.allclose(z_np, z_torch, atol=1e-8)
 
 
+def _h_both_at(px, py, pz):
+    x = np.zeros(STATE_DIM)
+    x[:3] = px, py, pz
+    return h(x), h_torch(torch.tensor(x)).numpy()
+
+
+def test_h_torch_equals_numpy_directly_overhead():
+    """MS-23: overhead, azimuth reads 0, elevation pi/2 and range |pz|, with no rho floor in either path."""
+    z_np, z_torch = _h_both_at(0.0, 0.0, 300.0)
+    assert np.array_equal(z_torch, z_np)
+    assert np.array_equal(z_torch, [0.0, np.pi / 2, 300.0])
+
+
+def test_h_torch_range_equals_numpy_inside_one_millimetre_of_the_z_axis():
+    """MS-23: a 1e-6 floor on rho squared would read 1 mm of range for a target 0.49 mm from the sensor."""
+    z_np, z_torch = _h_both_at(2.0**-11, 0.0, 0.0)
+    assert np.array_equal(z_torch, z_np)
+    assert z_torch[2] == 2.0**-11
+
+
+def test_h_torch_elevation_matches_numpy_inside_one_millimetre_overhead():
+    """MS-23: a rho floor shifts elevation by ~1.7e-6 rad here. Torch and libm atan2 differ by ulps only,
+    so the tolerance is 4 ulp relative."""
+    z_np, z_torch = _h_both_at(2.0**-11, 2.0**-12, 300.0)
+    np.testing.assert_allclose(z_torch, z_np, rtol=4 * np.finfo(np.float64).eps, atol=0.0)
+
+
+def test_h_torch_equals_numpy_at_and_above_the_old_floor():
+    """MS-23: rho = 1 mm and rho = 2 mm read their exact horizontal range in both paths."""
+    for px in (1e-3, 2.0**-9):
+        z_np, z_torch = _h_both_at(px, 0.0, 0.0)
+        assert np.array_equal(z_torch, z_np)
+        assert z_torch[2] == px
+
+
+def test_h_torch_gradient_is_finite_directly_overhead():
+    """MS-23: KalmanNet backpropagates through h at rho = 0, so azimuth, elevation and range stay finite."""
+    x = torch.zeros(STATE_DIM, dtype=torch.float64, requires_grad=True)
+    with torch.no_grad():
+        x[2] = 300.0
+    h_torch(x).sum().backward()
+    assert torch.isfinite(x.grad).all()
+
+
 def test_innovation_torch_matches_numpy_including_wrap_boundary():
     rng = np.random.default_rng(1)
     for _ in range(50):

@@ -1,6 +1,6 @@
 """Differentiable torch counterparts of filters/measurement_model.py and the
 CV motion model, used inside KalmanNet's BPTT loop. Must match the numpy
-versions exactly (same wrap convention, same singularity floor) -- verified
+versions exactly (same wrap convention, same MS-23 singularity handling) -- verified
 in tests/test_torch_ops.py -- or KalmanNet would train against a subtly
 different model than the one the classical filters are evaluated with,
 breaking the fairness the brief demands.
@@ -22,11 +22,13 @@ def wrap_angle_torch(a):
 def h_torch(x):
     """x: [..., 9] -> [..., 3] (azimuth, elevation, range)."""
     px, py, pz = x[..., 0], x[..., 1], x[..., 2]
-    rho2 = torch.clamp(px * px + py * py, min=_EPS)
-    rho = torch.sqrt(rho2)
-    r2 = torch.clamp(rho2 + pz * pz, min=_EPS)
-    r = torch.sqrt(r2)
-    az = torch.atan2(py, px)
+    rho2 = px * px + py * py
+    overhead = rho2 == 0.0
+    rho = torch.where(
+        overhead, torch.zeros_like(rho2), torch.sqrt(torch.where(overhead, torch.ones_like(rho2), rho2))
+    )
+    r = torch.sqrt(rho2 + pz * pz)
+    az = torch.atan2(py, torch.where(overhead, torch.ones_like(px), px))
     el = torch.atan2(pz, rho)
     return torch.stack([az, el, r], dim=-1)
 
