@@ -3,6 +3,7 @@ import numpy as np
 from data.config import Regime
 from data.trajectory_gen import measure
 from filters.ekf import EKF
+from filters.measurement_model import h
 from filters.motion_models import cv_model, step
 from filters.ukf import UKF
 from filters.state import STATE_DIM
@@ -95,10 +96,29 @@ def test_ukf_handles_target_crossing_the_azimuth_wrap_boundary():
     P = np.diag([200.0, 200.0, 50.0, 20.0, 20.0, 5.0, 1.0, 1.0, 1.0])
 
     x_pred, P_pred, pts_pred = ukf.predict(x, P)
-    from filters.measurement_model import h
     z = h(x_pred)
     x_upd, P_upd, y, S = ukf.update(x_pred, P_pred, pts_pred, z)
 
     assert np.all(np.isfinite(x_upd))
     assert abs(y[0]) < 0.1  # innovation on a noiseless self-consistent measurement stays tiny
     assert np.all(np.linalg.eigvalsh(P_upd) > -1e-6)
+
+
+def test_ukf_range_innovation_variance_includes_process_noise_in_measurement_sigma_points():
+    """MS-9/MS-32. At (1000, 0, 0) range is px to first order, so S[range] must equal
+    (F P F^T + Q)[px, px] + R[range]. rtol 1e-6 covers the O(sigma^2 / r) curvature of
+    range and the cancellation error of alpha = 1e-3 sigma-point weights."""
+    R = Regime(name="range_axis", T=1).R()
+    dt_long, sigma_a_large = 1.0, 5.0
+    ukf = UKF(dt_long, R, sigma_a=sigma_a_large)
+    x = np.zeros(STATE_DIM)
+    x[0] = 1000.0
+    P = np.diag([1e-4, 1e-4, 1e-4, 1e-6, 1e-6, 1e-6, 1e-8, 1e-8, 1e-8])
+    P_pred_expected = ukf.F @ P @ ukf.F.T + ukf.Q
+    process_noise_share = ukf.Q[0, 0] / P_pred_expected[0, 0]
+    assert process_noise_share > 0.9
+
+    x_pred, P_pred, pts_pred = ukf.predict(x, P)
+    _, _, _, S = ukf.update(x_pred, P_pred, pts_pred, h(x_pred))
+
+    assert np.isclose(S[2, 2], P_pred_expected[0, 0] + R[2, 2], rtol=1e-6, atol=0.0)
