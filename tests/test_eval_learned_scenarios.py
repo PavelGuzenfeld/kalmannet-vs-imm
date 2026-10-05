@@ -18,7 +18,7 @@ from scripts.eval_knet import main as eval_knet_main
 from scripts.eval_rkn import main as eval_rkn_main
 
 REPO = Path(__file__).resolve().parents[1]
-SEED_SCENARIO = REPO / "data" / "scenarios" / "break_turn_9g.json"
+SCENARIO_FILES = sorted((REPO / "data" / "scenarios").glob("*.json"))
 INIT_OFFSET = np.array([2.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 BURN_IN = 20
 INITIAL_P_DIAGONAL = 100.0
@@ -45,8 +45,11 @@ def zeroed(net, path):
     return path
 
 
-def open_loop_cv_errors():
-    states, _ = fly_scenario(json.loads(SEED_SCENARIO.read_text()))
+def flights():
+    return [fly_scenario(json.loads(path.read_text())) for path in SCENARIO_FILES]
+
+
+def open_loop_cv_flight_errors(states):
     F, _ = cv_model(NOMINAL.dt)
     estimate, errors = states[0] + INIT_OFFSET, []
     for truth in states:
@@ -55,8 +58,11 @@ def open_loop_cv_errors():
     return np.array(errors)[BURN_IN:]
 
 
-def fixed_gain_errors(gain):
-    states, measurements = fly_scenario(json.loads(SEED_SCENARIO.read_text()))
+def open_loop_cv_errors():
+    return np.concatenate([open_loop_cv_flight_errors(states) for states, _ in flights()])
+
+
+def fixed_gain_flight_errors(gain, states, measurements):
     F, _ = cv_model(NOMINAL.dt)
     estimate, errors = states[0] + INIT_OFFSET, []
     for truth, z in zip(states, measurements):
@@ -70,6 +76,10 @@ def fixed_gain_errors(gain):
     return np.array(errors)[BURN_IN:]
 
 
+def fixed_gain_errors(gain):
+    return np.concatenate([fixed_gain_flight_errors(gain, *flight) for flight in flights()])
+
+
 def constant_gain_checkpoint(net, final_layer, path):
     zeroed(net, path)
     final_layer.bias.data = torch.tensor(CONSTANT_GAIN.reshape(-1))
@@ -77,13 +87,17 @@ def constant_gain_checkpoint(net, final_layer, path):
     return path
 
 
-def open_loop_cv_nees(errors):
+def open_loop_cv_flight_nees(errors):
     F, _ = cv_model(NOMINAL.dt)
     P, covariances = np.eye(9) * INITIAL_P_DIAGONAL, []
     for _ in range(len(errors) + BURN_IN):
         P = F @ P @ F.T
         covariances.append(P)
     return np.array([e @ np.linalg.solve(P, e) for e, P in zip(errors, covariances[BURN_IN:])])
+
+
+def open_loop_cv_nees():
+    return np.concatenate([open_loop_cv_flight_nees(open_loop_cv_flight_errors(states)) for states, _ in flights()])
 
 
 def scenarios_rows(csv_path):
@@ -125,11 +139,10 @@ def test_eval_rkn_reports_the_committed_scenarios_as_a_regime_row_with_its_nees(
     eval_rkn_main()
 
     rows = scenarios_rows(out_csv)
-    errors = open_loop_cv_errors()
     assert [row["filter"] for row in rows] == ["RKN"]
-    assert_rmse(rows[0], errors)
+    assert_rmse(rows[0], open_loop_cv_errors())
     assert json.loads(out.read_text())["scenarios"]["anees_mean"] == pytest.approx(
-        np.mean(open_loop_cv_nees(errors)), rel=SUMMATION_ORDER_REL
+        np.mean(open_loop_cv_nees()), rel=SUMMATION_ORDER_REL
     )
 
 
