@@ -4,6 +4,7 @@ import sys
 from dataclasses import astuple
 
 import numpy as np
+import pytest
 
 from data.config import NOMINAL
 from data.fixed_wing import (
@@ -235,3 +236,45 @@ def test_overthrottled_flight_holds_the_full_throttle_equilibrium_speed():
     throttles = np.where(np.arange(100) % 2, 1.5, 1.0)
     states = fly_east(benchmark.max_speed_m_s, held_controls(100, throttle=throttles), envelope=benchmark)
     assert np.all(speeds(states) == benchmark.max_speed_m_s)
+
+def drag_m_s2(speed_m_s, load_factor):
+    return G / (2.0 * 10.0) * (speed_m_s**2 / 4000.0 + load_factor**2 * 4000.0 / speed_m_s**2)
+
+
+def part_throttle_trim(speed_m_s):
+    return drag_m_s2(speed_m_s, 1.0) / drag_m_s2(200.0, 1.0)
+
+
+def test_level_flight_at_part_throttle_trim_holds_speed_and_height():
+    """Best-glide speed squared is 20 * 200 = 4000. atol 1e-9: roundoff of a velocity difference over dt."""
+    states = fly_east(100.0, held_controls(50, throttle=part_throttle_trim(100.0)))
+    np.testing.assert_allclose(speeds(states), 100.0, atol=1e-9)
+    np.testing.assert_allclose(states[:, 2], ORIGIN[2], atol=1e-9)
+
+
+def test_wings_level_unaccelerated_flight_holds_heading():
+    """Velocity (60, 80, 0) is the 3-4-5 heading at 100 m/s. atol 1e-9: velocity roundoff."""
+    controls = held_controls(50, throttle=part_throttle_trim(100.0))
+    states = fly(TEST_ENVELOPE, ORIGIN, np.array([60.0, 80.0, 0.0]), 0.0, controls, DT)
+    np.testing.assert_allclose(states[:, 3], 60.0, atol=1e-9)
+    np.testing.assert_allclose(states[:, 4], 80.0, atol=1e-9)
+    np.testing.assert_allclose(states[:, 5], 0.0, atol=1e-9)
+
+
+@pytest.mark.parametrize("load_factor", [2.0, 3.0])
+def test_induced_drag_grows_with_the_square_of_load_factor(load_factor):
+    """Zero throttle, wings level: lift is vertical so the whole x acceleration is drag. rtol 1e-12: one step."""
+    states = fly_east(100.0, held_controls(1, load_factor=load_factor))
+    assert_step_acceleration(states[0, 6], -drag_m_s2(100.0, load_factor))
+
+
+def test_coasting_climb_trades_speed_for_height_at_g_sin_path_angle():
+    """Thrust cancels drag at the first step, so along-path deceleration is g sin(30 deg) = g/2."""
+    path_rad = np.pi / 6.0
+    climb_direction = np.array([np.cos(path_rad), 0.0, np.sin(path_rad)])
+    trim_throttle = drag_m_s2(100.0, np.cos(path_rad)) / drag_m_s2(200.0, 1.0)
+    controls = held_controls(10, load_factor=np.cos(path_rad), throttle=trim_throttle)
+    states = fly(TEST_ENVELOPE, ORIGIN, 100.0 * climb_direction, 0.0, controls, DT)
+    assert_step_acceleration(states[0, 6:9] @ climb_direction, -G / 2.0)
+    assert np.all(np.diff(speeds(states)) < 0.0)
+    assert np.all(np.diff(states[:, 2]) > 0.0)
