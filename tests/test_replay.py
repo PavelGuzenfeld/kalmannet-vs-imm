@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import json
 import subprocess
 import sys
@@ -25,6 +26,7 @@ FLAGS = ("track_loss", "overconfidence", "raw_error")
 KNET_INIT_OFFSET = np.array([2.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 BURN_IN = 20
 BREAK_TURN_START_STEP, BREAK_TURN_END_STEP = 50, 50 + 23 + 150
+RECORDED_TRUTH_SHA256 = "d0adbff6c23bf7f12f544d3de769e6a2c5595ee4f3f455b3a37ec469a2ad01ab"
 
 
 @pytest.fixture
@@ -66,6 +68,12 @@ def test_record_rewrites_the_committed_seed_scenario_and_the_flags_it_tripped(tm
     committed = json.loads(SEED_SCENARIO.read_text())
     assert set(committed) == {"controls", "seed", "envelope", "noise_regime", "thresholds", "git_tag", "tripped"}
     assert json.loads(recorded.read_text()) == {**committed, "git_tag": "recorded-sha"}
+
+
+def test_model_change_silently_shifts_a_recorded_scenario():
+    """MS-27: a scenario's fixed-wing flight is the Layer 5 truth; flags pin only trip steps. Re-record, re-pin."""
+    states, _ = fly_scenario(json.loads(SEED_SCENARIO.read_text()))
+    assert hashlib.sha256(states.tobytes()).hexdigest() == RECORDED_TRUTH_SHA256
 
 
 def test_replay_trips_on_the_scenario_recorded_thresholds_not_the_defaults(tmp_path):
