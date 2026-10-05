@@ -7,7 +7,7 @@ brief's #1 bug, again, on a second code path)."""
 import numpy as np
 import torch
 
-from filters.measurement_model import H_jacobian, h, innovation, wrap_angle
+from filters.measurement_model import AZIMUTH_ROW_FLOOR_M, H_jacobian, h, innovation, wrap_angle
 from filters.state import STATE_DIM
 from filters.torch_ops import CVMotionModel, H_jacobian_torch, h_torch, innovation_torch, wrap_angle_torch
 from filters.motion_models import cv_model, step
@@ -68,6 +68,24 @@ def test_H_jacobian_torch_matches_numpy_batched():
     H_np = np.stack([H_jacobian(xs[i]) for i in range(10)])
     H_t = H_jacobian_torch(torch.tensor(xs)).numpy()
     assert np.allclose(H_np, H_t, atol=1e-8)
+
+
+def test_H_jacobian_torch_matches_numpy_at_and_below_the_azimuth_floor():
+    """MS-23: RKN's torch Jacobian carries the same azimuth cap and overhead zero row as the numpy one."""
+    xs = np.zeros((4, STATE_DIM))
+    xs[:, 2] = 300.0
+    xs[:, 0] = [0.0, AZIMUTH_ROW_FLOOR_M / 2, AZIMUTH_ROW_FLOOR_M, 2 * AZIMUTH_ROW_FLOOR_M]
+    H_np = np.stack([H_jacobian(x) for x in xs])
+    assert np.array_equal(H_jacobian_torch(torch.tensor(xs)).numpy()[:, 0], H_np[:, 0])
+
+
+def test_H_jacobian_torch_gradient_is_finite_directly_overhead():
+    """MS-23: RKN backpropagates through the Jacobian, so the rho = 0 branch must not leak a 0/0 gradient."""
+    x = torch.zeros(1, STATE_DIM, dtype=torch.float64, requires_grad=True)
+    with torch.no_grad():
+        x[0, 2] = 300.0
+    H_jacobian_torch(x)[:, 0].sum().backward()
+    assert torch.isfinite(x.grad).all()
 
 
 def test_cv_motion_model_matches_numpy_step():

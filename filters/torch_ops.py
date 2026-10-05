@@ -8,6 +8,7 @@ breaking the fairness the brief demands.
 
 import torch
 
+from filters.measurement_model import AZIMUTH_ROW_FLOOR_M
 from filters.motion_models import cv_model
 from filters.state import STATE_DIM
 
@@ -54,8 +55,12 @@ def H_jacobian_torch(x):
     r = torch.sqrt(r2)
 
     H = torch.zeros(batch, 3, STATE_DIM, dtype=x.dtype, device=x.device)
-    H[:, 0, 0] = -py / rho2
-    H[:, 0, 1] = px / rho2
+    horizontal_range_sq = px * px + py * py
+    overhead = horizontal_range_sq == 0.0
+    horizontal_range = torch.sqrt(torch.where(overhead, torch.ones_like(px), horizontal_range_sq))
+    azimuth_gain = 1.0 / torch.clamp(horizontal_range, min=AZIMUTH_ROW_FLOOR_M)
+    H[:, 0, 0] = -py / horizontal_range * azimuth_gain
+    H[:, 0, 1] = px / horizontal_range * azimuth_gain
     H[:, 1, 0] = -pz * px / (r2 * rho)
     H[:, 1, 1] = -pz * py / (r2 * rho)
     H[:, 1, 2] = rho / r2

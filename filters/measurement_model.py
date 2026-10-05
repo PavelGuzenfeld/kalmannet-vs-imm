@@ -14,6 +14,7 @@ from filters.state import PX, PY, PZ, STATE_DIM
 # the sensor) -- both are measure-zero in practice but would otherwise divide
 # by zero and NaN the whole filter.
 _EPS = 1e-6
+AZIMUTH_ROW_FLOOR_M = 2.0**-10
 
 
 def wrap_angle(a):
@@ -32,8 +33,9 @@ def h(x):
 
 
 def H_jacobian(x):
-    """d h / d x at x, zero in the velocity/acceleration columns (h depends
-    only on position)."""
+    """d h / d x at x, zero in the velocity/acceleration columns (h depends only on position).
+    Azimuth row: exact above AZIMUTH_ROW_FLOOR_M, capped at 1/floor below, zero at rho = 0, so an azimuth
+    update moves the state along the azimuth gradient by at most pi * floor (~3 mm)."""
     px, py, pz = x[PX], x[PY], x[PZ]
     rho2 = max(px * px + py * py, _EPS)
     rho = np.sqrt(rho2)
@@ -41,9 +43,11 @@ def H_jacobian(x):
     r = np.sqrt(r2)
 
     H = np.zeros((3, STATE_DIM))
-    # d(azimuth)/d(px, py)
-    H[0, PX] = -py / rho2
-    H[0, PY] = px / rho2
+    horizontal_range = np.hypot(px, py)
+    if horizontal_range > 0.0:
+        azimuth_gain = 1.0 / max(horizontal_range, AZIMUTH_ROW_FLOOR_M)
+        H[0, PX] = -py / horizontal_range * azimuth_gain
+        H[0, PY] = px / horizontal_range * azimuth_gain
     # d(elevation)/d(px, py, pz)
     H[1, PX] = -pz * px / (r2 * rho)
     H[1, PY] = -pz * py / (r2 * rho)
