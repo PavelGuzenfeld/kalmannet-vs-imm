@@ -14,7 +14,7 @@ from filters.state import STATE_DIM
 
 
 class UKF:
-    def __init__(self, dt, R, sigma_a=0.05, tau=0.05, alpha=1e-3, beta=2.0, kappa=0.0):
+    def __init__(self, dt, R, sigma_a=0.05, tau=0.05, alpha=1.0, beta=2.0, kappa=0.0):
         self.F, self.Q = cv_model(dt, sigma_a=sigma_a, tau=tau)
         self.R = R
         n = STATE_DIM
