@@ -12,6 +12,8 @@ from filters.measurement_model import h, wrap_angle
 from filters.motion_models import cv_model
 from filters.state import STATE_DIM
 
+CHOLESKY_JITTER_RELATIVE = 1e-12
+
 
 class UKF:
     def __init__(self, dt, R, sigma_a=0.05, tau=0.05, alpha=1.0, beta=2.0, kappa=0.0):
@@ -27,7 +29,8 @@ class UKF:
 
     def _sigma_points(self, x, P):
         n = self.n
-        S = np.linalg.cholesky((n + self.lam) * (P + 1e-12 * np.eye(n)))
+        jitter = CHOLESKY_JITTER_RELATIVE * np.trace(P) / n
+        S = np.linalg.cholesky((n + self.lam) * (P + jitter * np.eye(n)))
         pts = np.zeros((2 * n + 1, n))
         pts[0] = x
         for i in range(n):
@@ -63,7 +66,8 @@ class UKF:
         y[0] = wrap_angle(y[0])
 
         x_upd = x_pred + K @ y
-        P_upd = P_pred - K @ S @ K.T
+        cross_term = Pxz @ K.T
+        P_upd = P_pred - cross_term - cross_term.T + K @ S @ K.T
         return x_upd, P_upd, y, S
 
     def step(self, x, P, z):

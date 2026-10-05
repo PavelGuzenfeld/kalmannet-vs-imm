@@ -37,10 +37,9 @@ def h_torch(x):
 
 
 def wrap_measurement_diff(diff):
-    """diff: [..., 3] (az, el, range) -- wrap the angular components only."""
+    """diff: [..., 3] (az, el, range) -- wrap azimuth only; elevation stays in [-pi/2, pi/2]."""
     az = wrap_angle_torch(diff[..., 0])
-    el = wrap_angle_torch(diff[..., 1])
-    return torch.stack([az, el, diff[..., 2]], dim=-1)
+    return torch.stack([az, diff[..., 1], diff[..., 2]], dim=-1)
 
 
 def innovation_torch(z_meas, x_pred):

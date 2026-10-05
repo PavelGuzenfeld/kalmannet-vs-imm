@@ -129,3 +129,17 @@ def test_fixed_wing_overhead_pass_keeps_every_filter_state_finite():
             run_imm(IMM(NOMINAL.dt, NOMINAL.R()), states, z),
         ):
             assert np.isfinite(err).all() and np.isfinite(nees).all() and np.isfinite(nis).all()
+
+
+def test_elevation_innovation_at_the_pi_boundary_is_not_wrapped():
+    """MS-34/MS-2: elevation lies in [-pi/2, pi/2], so +pi/2 against -pi/2 is an innovation of +pi, not -pi."""
+    z_meas = np.array([0.0, np.pi / 2, 100.0])
+    x_pred = _state_at(az=0.0, el=-np.pi / 2, r=100.0)
+    assert innovation(z_meas, x_pred)[1] == np.pi
+
+
+def test_azimuth_innovation_at_the_pi_boundary_wraps_to_minus_pi():
+    """MS-34: angles wrap to [-pi, pi), so an azimuth innovation of exactly +pi comes back as -pi."""
+    z_meas = np.array([np.pi / 2, 0.0, 100.0])
+    x_pred = _state_at(az=-np.pi / 2, el=0.0, r=100.0)
+    assert innovation(z_meas, x_pred)[0] == -np.pi

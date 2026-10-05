@@ -4,7 +4,7 @@ covariance propagation -- Q and R are exactly what the learned gain replaces
 (issue #14 sec. 1c). Ported from the reference KNet_step/step_prior/
 step_KGain_est, with one correctness fix the reference never needed: every
 angular quantity (the observation difference, the innovation, and the
-update itself) is wrapped to (-pi, pi] before use. The reference was built
+update itself) is wrapped to [-pi, pi) before use. The reference was built
 for the Lorenz-attractor / linear-canonical cases, which have no angle
 measurement at all -- ported verbatim, a target crossing the +-pi seam would
 hand the network a spurious ~2*pi feature and a ~2*pi correction.

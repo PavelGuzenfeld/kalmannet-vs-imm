@@ -92,7 +92,7 @@ def generate_ground_truth(rng, regime):
 def measure(rng, states, regime):
     """Apply h() plus sensor noise to a ground-truth trajectory. Azimuth is
     re-wrapped after adding noise so a true target sitting near +-pi never
-    leaks a measurement outside (-pi, pi]."""
+    leaks a measurement outside [-pi, pi)."""
     T = states.shape[0]
     z = np.zeros((T, 3))
     scale = np.array([regime.sigma_az_rad, regime.sigma_el_rad, regime.sigma_range_m])

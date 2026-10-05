@@ -31,11 +31,13 @@ filters/knet/, which is gated."""
 
 [[waiver]]
 file = "scripts/train_rkn.py"
-uncovered = true
-reason = """Training driver: its output is a checkpoint after hours of CPU training,
-so a test would either retrain (too slow for the gate) or pin one run's weights
-(not a requirement). The NLL loss, network and filter step it calls live in
-filters/knet/, which is gated."""
+line = 38
+old = "-1"
+new = "1"
+reason = """`.sum(dim=-1)` over the [batch, m] result of `torch.diagonal`: dim=-1 and dim=1 are
+the same axis, so this mutant is equivalent (bitwise-equal sums on a 64x9 factor, rebuilt and
+diffed). Line 38 carries a second `-1` (`dim2=-1`) which this waiver's shape cannot exclude;
+that one is killed by the NLL tests, which fail when the diagonal is taken over the wrong axis."""
 
 [[waiver]]
 file = "scripts/make_animation.py"

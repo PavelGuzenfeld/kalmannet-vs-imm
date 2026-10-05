@@ -211,3 +211,12 @@ def test_replay_numpy_kalmannet_errors_match_the_torch_backend_from_the_same_sta
 
     assert np.all(np.isfinite(numpy_err))
     np.testing.assert_allclose(numpy_err, torch_err, rtol=0.0, atol=SEQUENCE_ATOL_STATE)
+
+
+def test_numpy_wrap_measurement_diff_matches_torch_on_azimuth_and_elevation_at_pi():
+    """MS-34/MS-2: the Pyodide mirror wraps azimuth to [-pi, pi) and leaves elevation alone, like torch."""
+    from filters.torch_ops import wrap_measurement_diff as wrap_measurement_diff_torch
+
+    diff = np.array([np.pi, np.pi, 5.0])
+    expected = wrap_measurement_diff_torch(torch.tensor(diff)).numpy()
+    assert np.array_equal(numpy_forward.wrap_measurement_diff(diff), expected)

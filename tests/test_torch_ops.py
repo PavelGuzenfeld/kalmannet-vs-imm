@@ -9,7 +9,14 @@ import torch
 
 from filters.measurement_model import AZIMUTH_ROW_FLOOR_M, H_jacobian, h, innovation, wrap_angle
 from filters.state import STATE_DIM
-from filters.torch_ops import CVMotionModel, H_jacobian_torch, h_torch, innovation_torch, wrap_angle_torch
+from filters.torch_ops import (
+    CVMotionModel,
+    H_jacobian_torch,
+    h_torch,
+    innovation_torch,
+    wrap_angle_torch,
+    wrap_measurement_diff,
+)
 from filters.motion_models import cv_model, step
 
 
@@ -145,3 +152,10 @@ def test_cv_motion_model_matches_numpy_step():
     torch_model = CVMotionModel(dt)
     x1_torch = torch_model(torch.tensor(x, dtype=torch.float64)).numpy()
     assert np.allclose(x1_np, x1_torch, atol=1e-10)
+
+
+def test_wrap_measurement_diff_leaves_elevation_alone_and_wraps_azimuth_to_minus_pi():
+    """MS-34/MS-2: torch mirrors numpy, azimuth in [-pi, pi) and elevation unwrapped."""
+    diff = torch.tensor([np.pi, np.pi, 5.0], dtype=torch.float64)
+    wrapped = wrap_measurement_diff(diff)
+    assert wrapped.tolist() == [-np.pi, np.pi, 5.0]

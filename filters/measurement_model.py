@@ -60,11 +60,10 @@ def H_jacobian(x):
 
 
 def innovation(z_meas, x_pred):
-    """z_meas - h(x_pred), with azimuth/elevation components wrapped to
-    (-pi, pi] so a target sitting across the +-pi boundary doesn't produce a
+    """z_meas - h(x_pred), with the azimuth component wrapped to
+    [-pi, pi) so a target sitting across the +-pi boundary doesn't produce a
     spurious ~2*pi innovation."""
     z_pred = h(x_pred)
     innov = z_meas - z_pred
     innov[0] = wrap_angle(innov[0])
-    innov[1] = wrap_angle(innov[1])
     return innov

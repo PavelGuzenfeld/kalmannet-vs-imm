@@ -6,7 +6,7 @@ import numpy as np
 
 from filters.measurement_model import H_jacobian, h, innovation, wrap_angle
 from filters.motion_models import cv_model
-from filters.state import AZIMUTH, ELEVATION, MEAS_DIM, STATE_DIM
+from filters.state import AZIMUTH, MEAS_DIM, STATE_DIM
 
 GRU_GATES = 3
 
@@ -48,7 +48,7 @@ def normalize(v):
 
 def wrap_measurement_diff(diff):
     wrapped = diff.copy()
-    wrapped[[AZIMUTH, ELEVATION]] = wrap_angle(diff[[AZIMUTH, ELEVATION]])
+    wrapped[AZIMUTH] = wrap_angle(diff[AZIMUTH])
     return wrapped
 
 
