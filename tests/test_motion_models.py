@@ -48,3 +48,43 @@ def test_all_process_noise_covariances_are_psd():
     for F, Q in (cv_model(dt), ca_model(dt), ct_model(dt, omega=np.deg2rad(10))):
         assert np.allclose(Q, Q.T)
         assert np.all(np.linalg.eigvalsh(Q) > -1e-10)
+
+
+CT_H_IDX = [PX, VX, PY, VY]
+EXACT_DT = 2.0**-5
+EXACT_SIGMA_A = 0.5
+BENCHMARK_DT = 0.02
+
+
+def test_ct_white_accel_psd_does_not_scale_with_dt():
+    """MS-7: Q[vx,vx]/dt is the continuous PSD under isotropic rotation; rtol 1e-12 covers expm roundoff."""
+    _, Q_full = ct_model(EXACT_DT, omega=np.deg2rad(25.0), sigma_a=EXACT_SIGMA_A)
+    _, Q_half = ct_model(EXACT_DT / 2, omega=np.deg2rad(25.0), sigma_a=EXACT_SIGMA_A)
+    assert np.isclose(Q_full[VX, VX] / EXACT_DT, Q_half[VX, VX] / (EXACT_DT / 2), rtol=1e-12, atol=0.0)
+
+
+def test_ct_zero_omega_q_is_dwna_closed_form_per_horizontal_axis():
+    """MS-7. rtol 1e-12 covers expm roundoff; the PSD is sigma_a^2 * 0.02 s."""
+    _, Q = ct_model(EXACT_DT, omega=0.0, sigma_a=EXACT_SIGMA_A)
+    q_c = EXACT_SIGMA_A**2 * BENCHMARK_DT
+    dwna = q_c * np.array([[EXACT_DT**3 / 3, EXACT_DT**2 / 2], [EXACT_DT**2 / 2, EXACT_DT]])
+    expected = np.zeros((4, 4))
+    expected[:2, :2] = dwna
+    expected[2:, 2:] = dwna
+    assert np.allclose(Q[np.ix_(CT_H_IDX, CT_H_IDX)], expected, rtol=1e-12, atol=0.0)
+
+
+def test_ct_velocity_variance_at_benchmark_dt_keeps_former_hand_typed_value():
+    """MS-7: the PSD is pinned so 50 Hz matches the old (sigma_a*dt)^2; rtol 1e-12 covers expm roundoff."""
+    _, Q = ct_model(BENCHMARK_DT, omega=np.deg2rad(25.0), sigma_a=0.3)
+    assert np.isclose(Q[VX, VX], (0.3 * BENCHMARK_DT) ** 2, rtol=1e-12, atol=0.0)
+    assert np.isclose(Q[VY, VY], (0.3 * BENCHMARK_DT) ** 2, rtol=1e-12, atol=0.0)
+
+
+def test_ct_horizontal_q_is_symmetric_positive_definite_with_position_terms():
+    """MS-7: white acceleration drives position too, so the 4x4 block is full rank.
+    Symmetry atol is 1e-12 of the largest entry: expm roundoff, not a modelled asymmetry."""
+    _, Q = ct_model(BENCHMARK_DT, omega=np.deg2rad(25.0))
+    Q_h = Q[np.ix_(CT_H_IDX, CT_H_IDX)]
+    assert np.allclose(Q_h, Q_h.T, rtol=0.0, atol=1e-12 * np.abs(Q_h).max())
+    assert np.all(np.linalg.eigvalsh(Q_h) > 0.0)

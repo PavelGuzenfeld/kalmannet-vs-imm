@@ -62,35 +62,27 @@ def ca_model(dt, sigma_a=2.0, tau=5.0):
 
 
 def ct_model(dt, omega, sigma_a=0.3, tau=5.0):
-    """omega in rad/s, positive = counter-clockwise. omega=0 degenerates to
-    the CV horizontal transition (the exact CT matrix has a 1/omega
-    singularity there)."""
+    """omega in rad/s, positive = counter-clockwise. Horizontal: white acceleration on vx, vy with
+    PSD sigma_a^2 * psd_reference_dt in m^2/s^3, the PSD whose van Loan Q[vx, vx] equals the
+    former hand-typed (sigma_a * dt)^2 at the 50 Hz benchmark dt."""
+    psd_reference_dt = 0.02
     F = np.eye(STATE_DIM)
     Q = np.zeros((STATE_DIM, STATE_DIM))
 
-    if abs(omega) < 1e-8:
-        F_h = np.array([
-            [1.0, dt, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, dt],
-            [0.0, 0.0, 0.0, 1.0],
-        ])
-    else:
-        s, c = np.sin(omega * dt), np.cos(omega * dt)
-        F_h = np.array([
-            [1.0, s / omega, 0.0, -(1 - c) / omega],
-            [0.0, c, 0.0, -s],
-            [0.0, (1 - c) / omega, 1.0, s / omega],
-            [0.0, s, 0.0, c],
-        ])
-    h_idx = [PX, VX, PY, VY]
-    F[np.ix_(h_idx, h_idx)] = F_h
-
+    A_h = np.array([
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, -omega],
+        [0.0, 0.0, 0.0, 1.0],
+        [0.0, omega, 0.0, 0.0],
+    ])
+    G_h = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 0.0], [0.0, 1.0]])
     # Budgets sigma_a of unmodelled lateral acceleration, |d_omega| <= sigma_a / v;
     # the nominal-vs-true turn-rate mismatch is absorbed by IMM mode switching (MS-13).
-    q_h = (sigma_a * dt) ** 2
-    Q[VX, VX] += q_h
-    Q[VY, VY] += q_h
+    q_c = sigma_a**2 * psd_reference_dt
+    F_h, Q_h = van_loan_discretize(A_h, G_h, q_c * np.eye(2), dt)
+    h_idx = [PX, VX, PY, VY]
+    F[np.ix_(h_idx, h_idx)] = F_h
+    Q[np.ix_(h_idx, h_idx)] = Q_h
 
     F3z, Q3z = singer_axis(dt, tau=tau, sigma_a=sigma_a)
     z_idx = [PZ, VZ, A_Z]
