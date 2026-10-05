@@ -196,11 +196,42 @@ def test_default_preset_spans_the_benchmark_speed_envelope():
     assert (default.min_speed_m_s, default.max_speed_m_s) == NOMINAL.speed0
 
 
-def test_named_presets_keep_the_envelopes_scenarios_were_flown_in():
-    """A scenario names its preset; changing a preset's numbers would silently change its replay."""
+def test_named_presets_pin_the_values_recorded_in_issue_2_decision_49():
+    """Scenarios record the envelope by value, so this guards the preset table itself, not any replay."""
     assert {name: astuple(envelope) for name, envelope in PRESETS.items()} == {
         "benchmark": (20.0, 250.0, 9.0, np.deg2rad(180.0)),
         "small aerial object": (12.0, 45.0, 4.0, np.deg2rad(120.0)),
         "light aircraft": (25.0, 70.0, 3.8, np.deg2rad(60.0)),
         "jet": (70.0, 300.0, 9.0, np.deg2rad(240.0)),
     }
+
+
+def first_step_acceleration(throttle):
+    return fly_east(100.0, held_controls(1, throttle=throttle))[0, 6:9]
+
+
+def test_throttle_exactly_one_is_stronger_than_half_throttle():
+    assert first_step_acceleration(1.0)[0] > first_step_acceleration(0.5)[0]
+
+
+def test_throttle_one_eighth_above_one_is_clipped_to_full_thrust():
+    assert np.array_equal(first_step_acceleration(1.125), first_step_acceleration(1.0))
+
+
+def test_throttle_well_above_one_is_clipped_to_full_thrust():
+    assert np.array_equal(first_step_acceleration(1.5), first_step_acceleration(1.0))
+
+
+def test_throttle_one_eighth_below_zero_is_clipped_to_idle():
+    assert np.array_equal(first_step_acceleration(-0.125), first_step_acceleration(0.0))
+
+
+def test_throttle_exactly_zero_is_weaker_than_half_throttle():
+    assert first_step_acceleration(0.0)[0] < first_step_acceleration(0.5)[0]
+
+
+def test_overthrottled_flight_holds_the_full_throttle_equilibrium_speed():
+    benchmark = PRESETS["benchmark"]
+    throttles = np.where(np.arange(100) % 2, 1.5, 1.0)
+    states = fly_east(benchmark.max_speed_m_s, held_controls(100, throttle=throttles), envelope=benchmark)
+    assert np.all(speeds(states) == benchmark.max_speed_m_s)

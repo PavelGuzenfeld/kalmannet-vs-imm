@@ -75,7 +75,7 @@ def fly(
         unit_velocity = velocity / speed
         available_load_factor = min(envelope.max_load_factor, (speed / envelope.min_speed_m_s) ** 2)
         load_factor = np.clip(load_factor_command, -available_load_factor, available_load_factor)
-        tangential = throttle * max_thrust_m_s2 - _drag_m_s2(envelope, speed, load_factor)
+        tangential = np.clip(throttle, 0.0, 1.0) * max_thrust_m_s2 - _drag_m_s2(envelope, speed, load_factor)
         acceleration = (
             tangential * unit_velocity
             + load_factor * STANDARD_GRAVITY_M_S2 * _lift_direction(unit_velocity, bank_rad)
