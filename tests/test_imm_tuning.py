@@ -43,7 +43,7 @@ def _tune(monkeypatch, tmp_path, rmse_of_kwargs, *flags):
 
 
 def test_tune_imm_refuses_to_write_a_selection_left_on_an_edge_and_names_the_axis(monkeypatch, tmp_path):
-    with pytest.raises(SystemExit, match="cv_sigma_a"):
+    with pytest.raises(SystemExit, match=r"on axes \[.cv_sigma_a.\]:"):
         _tune(monkeypatch, tmp_path, lambda kwargs: -kwargs["cv_sigma_a"])
     assert not (tmp_path / "imm_tuning.json").exists()
 
@@ -73,7 +73,9 @@ def test_search_space_tunes_cv_and_ct_sigma_a_alongside_the_ms12_axes():
         "cv_sigma_a": [0.02, 0.05, 0.1],
         "ct_sigma_a": [0.1, 0.3, 1.0],
     }
-    assert all(IMM_SEARCH_START[axis] in grid for axis, grid in IMM_SEARCH_GRIDS.items())
+    assert IMM_SEARCH_START == {
+        "p_stay": 0.99, "omega_ct_deg": 25.0, "ca_sigma_a": 2.0, "ca_tau": 2.0, "cv_sigma_a": 0.05, "ct_sigma_a": 0.3,
+    }
 
 
 def test_every_initial_grid_increases_strictly_with_the_start_strictly_inside():
@@ -147,3 +149,13 @@ def test_extension_leaves_the_callers_grids_untouched():
 def test_a_tie_with_the_current_value_does_not_move_the_selection():
     best, _, _ = coordinate_search({"ca_tau": [1.0, 2.0, 4.0]}, {"ca_tau": 2.0}, lambda c: 0.0, MAX_EXTENSIONS)
     assert best == {"ca_tau": 2.0}
+
+
+def test_a_coupled_axis_is_revisited_after_a_later_axis_moves():
+    best, _, _ = coordinate_search(
+        {"a": [0.5, 1.0, 2.0, 4.0, 8.0], "b": [0.5, 1.0, 2.0, 4.0, 8.0]},
+        {"a": 1.0, "b": 1.0},
+        lambda c: (c["a"] - c["b"]) ** 2 + (c["b"] - 4.0) ** 2,
+        MAX_EXTENSIONS,
+    )
+    assert best == {"a": 2.0, "b": 2.0}
