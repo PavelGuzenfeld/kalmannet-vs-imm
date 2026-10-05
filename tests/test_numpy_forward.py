@@ -111,7 +111,7 @@ def test_numpy_kalmannet_matches_torch_at_every_step_of_the_committed_scenario(f
 
 def test_numpy_rkn_matches_torch_state_and_covariance_at_every_step_of_the_committed_scenario(flight, tmp_path):
     """MS-10: same CV f, h and H, learned K and B. float64 summation order over the 296 steps drifts x by 9.3e-12
-    (atol 1e-10, ~10x) and P by 4.6e-10 at |P| <= 4e4 (atol 5e-9, ~10x)."""
+    (atol 1e-10, ~10x) and P by 3.6e-10 at |P| <= 4e4 (atol 5e-9, ~10x)."""
     states, z = flight
     net = rkn_stand_in()
     x0, P0 = states[0] + _INIT_OFFSET.numpy(), np.eye(STATE_DIM) * P0_VARIANCE

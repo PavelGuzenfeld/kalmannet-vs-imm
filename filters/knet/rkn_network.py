@@ -10,7 +10,8 @@ independent GRU networks, matching the reference's `GRUNetwork` structure
              Cholesky factor L; B_t = L_t L_t^T is the learned half of the
              Joseph-form covariance (issue #14 sec. 2). The other half, A_t
              (the propagated (I-K_tH_t)F_t P_{t-1} F_t^T (I-K_tH_t)^T term),
-             is computed in closed form -- this is what distinguishes RKN
+             is propagated in square-root form with L (decision 54 in
+             #2) -- this is what distinguishes RKN
              from vanilla KalmanNet, Split-KalmanNet, and Cholesky-KalmanNet.
 
 Both networks share the same 4 input features (innovation, observation
@@ -97,6 +98,5 @@ class RKNGainCovNetwork(nn.Module):
 
         L = torch.zeros(batch, self.m, self.m, dtype=features.dtype, device=features.device)
         L[:, self._tril_rows, self._tril_cols] = C
-        B = L @ L.transpose(1, 2)  # PSD by construction for any real L
 
-        return K, B, (h_K, h_cov)
+        return K, L, (h_K, h_cov)

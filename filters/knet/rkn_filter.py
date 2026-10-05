@@ -23,7 +23,7 @@ class RKNFilter:
         batch = x0.shape[0]
         self.hidden = self.net.init_hidden(batch, self.device)
         self.x = x0
-        self.P = P0
+        self.S = torch.linalg.cholesky(P0)
         # Mirrors the reference's init_sequence: treat the "previous prior"
         # as x0 propagated once, and "previous observation" as h(x0).
         self.x_prior_previous = self.f(x0)
@@ -43,24 +43,24 @@ class RKNFilter:
         features = torch.cat([y, z_diff, H_t.reshape(H_t.shape[0], -1), correction], dim=-1)
         features = features ** 2
 
-        K, B, self.hidden = self.net(features, self.hidden)
+        K, L, self.hidden = self.net(features, self.hidden)
 
         x_upd = x_prior + torch.bmm(K, y.unsqueeze(-1)).squeeze(-1)
 
         eye = torch.eye(STATE_DIM, dtype=x_prior.dtype, device=x_prior.device).unsqueeze(0)
         IKH = eye - K @ H_t
         F = self.f.F.unsqueeze(0)
-        A = IKH @ F @ self.P @ F.transpose(1, 2) @ IKH.transpose(1, 2)
-        P_upd = A + B
+        _, R = torch.linalg.qr(torch.cat([(IKH @ F @ self.S).transpose(1, 2), L.transpose(1, 2)], dim=1))
+        negative_row = (torch.diagonal(R, dim1=-2, dim2=-1) < 0.0).unsqueeze(-1)
 
         self.x = x_upd
-        self.P = P_upd
-        return x_upd, P_upd
+        self.S = torch.where(negative_row, -R, R).transpose(1, 2)
+        return x_upd, self.S @ self.S.transpose(1, 2)
 
     def detach_state(self):
         """Detach recurrent state from the autograd graph at a truncated-BPTT boundary."""
         self.x = self.x.detach()
-        self.P = self.P.detach()
+        self.S = self.S.detach()
         self.x_prior_previous = self.x_prior_previous.detach()
         self.z_previous = self.z_previous.detach()
         self.hidden = tuple(h.detach() for h in self.hidden)

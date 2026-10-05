@@ -68,3 +68,13 @@ file = "tests/test_eval_learned_scenarios.py"
 test = "test_diverged_knet_estimate_is_clipped_to_1e5_per_component_so_the_rmse_stays_finite"
 reason = """The 1e5 clip is an evaluation-harness guard so one diverged run reports a large
 finite RMSE instead of NaN; it is not model behaviour, so no MS-n line states it."""
+
+[[waiver]]
+file = "filters/knet/rkn_filter.py"
+line = 54
+old = """torch.diagonal(R, dim1=-2, dim2=-1) < 0.0"""
+new = """torch.diagonal(R, dim1=-2, dim2=-1) <= 0.0"""
+reason = """Equivalent: the two differ only when R_jj is exactly 0.0, and flipping
+that row's sign leaves S S^T, the returned P and the zero diagonal the NLL
+guards on unchanged. Rerun by hand on tests/test_rkn.py and test_train_rkn.py:
+19 passed under the mutant, while < 1 and dropping the flip each fail."""
