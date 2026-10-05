@@ -131,9 +131,8 @@ def test_replay_skips_imm_without_a_tuning_file_instead_of_inventing_parameters(
 
 def test_zero_gain_kalmannet_trips_raw_error_where_cv_dead_reckoning_leaves_20_m(imm_tuning, tmp_path):
     """MS-10: KalmanNet keeps the CV f and learns only the gain, so zero gain is open-loop CV."""
-    knet, rkn = tmp_path / "knet.pt", tmp_path / "rkn.pt"
+    knet, missing = tmp_path / "knet.pt", tmp_path / "missing"
     zero_gain_knet(knet)
-    torch.save(RKNGainCovNetwork(fc1_mult=3, hidden_mult=3, fc2_mult=4).double().state_dict(), rkn)
     states, _ = fly_scenario(json.loads(SEED_SCENARIO.read_text()))
     F, _ = cv_model(NOMINAL.dt)
     estimate, error_m = states[0] + KNET_INIT_OFFSET, []
@@ -142,7 +141,7 @@ def test_zero_gain_kalmannet_trips_raw_error_where_cv_dead_reckoning_leaves_20_m
         error_m.append(np.linalg.norm(estimate[:3] - truth[:3]))
     expected_step = int(np.flatnonzero(np.array(error_m) > 20.0)[0])
 
-    lines = replay(SEED_SCENARIO, "--imm-tuning", imm_tuning, "--knet-checkpoint", knet, "--rkn-checkpoint", rkn)
+    lines = replay(SEED_SCENARIO, "--imm-tuning", imm_tuning, "--knet-checkpoint", knet, "--rkn-checkpoint", missing)
 
     assert lines["KalmanNet"] == f"KalmanNet: track_loss=n/a overconfidence=n/a raw_error={expected_step}"
 
