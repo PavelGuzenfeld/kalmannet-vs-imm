@@ -3,12 +3,92 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  dataset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build bench image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          tags: kalmannet-bench:cpu
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Generate datasets
+        run: |
+          ./docker_run.sh python scripts/make_dataset.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: datasets
+          path: datasets/
+
+  train-knet:
+    needs: dataset
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build bench image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          tags: kalmannet-bench:cpu
+          load: true
+          cache-from: type=gha
+      - uses: actions/download-artifact@v8
+        with:
+          name: datasets
+          path: datasets/
+      - name: Train KalmanNet
+        run: |
+          ./docker_run.sh python scripts/train_knet.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: knet-checkpoint
+          path: results/knet_vanilla/
+
+  train-rkn:
+    needs: dataset
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build bench image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          tags: kalmannet-bench:cpu
+          load: true
+          cache-from: type=gha
+      - uses: actions/download-artifact@v8
+        with:
+          name: datasets
+          path: datasets/
+      - name: Train RKN
+        run: |
+          ./docker_run.sh python scripts/train_rkn.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rkn-checkpoint
+          path: results/rkn/
+
   release:
+    if: github.ref_type == 'tag'
+    needs: [train-knet, train-rkn]
     runs-on: ubuntu-latest
     steps:
       - name: Create GitHub release
