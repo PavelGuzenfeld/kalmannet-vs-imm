@@ -7,9 +7,11 @@ contains maneuvers no filter was tuned to a single fixed instance of.
 
 import numpy as np
 
+from data.config import REGIMES
+from data.fixed_wing import Envelope, fly
 from filters.measurement_model import h, wrap_angle
 from filters.motion_models import MOTION_LABELS, ca_model, ct_model, cv_model, step
-from filters.state import PX, PY, PZ, STATE_DIM, VX, VY, VZ
+from filters.state import POS, PX, PY, PZ, STATE_DIM, VEL, VX, VY, VZ
 
 
 def _sample_initial_state(rng, regime):
@@ -103,3 +105,13 @@ def measure(rng, states, regime):
         z[t] = z_true + noise
         z[t, 0] = wrap_angle(z[t, 0])
     return z
+
+
+def fly_scenario(scenario):
+    """(states[T, 9], measurements[T, 3]) of a data/scenarios/ flight: seeded start, wings level, then its controls."""
+    regime = REGIMES[scenario["noise_regime"]]
+    rng = np.random.default_rng(scenario["seed"])
+    x0 = _sample_initial_state(rng, regime)
+    controls = np.asarray(scenario["controls"], dtype=np.float64)
+    states = fly(Envelope(**scenario["envelope"]), x0[POS], x0[VEL], 0.0, controls, regime.dt)
+    return states, measure(rng, states, regime)
