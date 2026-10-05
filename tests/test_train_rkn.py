@@ -1,11 +1,46 @@
 import math
 
+import numpy as np
 import pytest
 import torch
 
-from scripts.train_rkn import _gaussian_nll
+from scripts.train_rkn import _gaussian_nll, run_epoch
 
 _DIM = 3
+_STATE_DIM = 9
+_MEAS_DIM = 3
+
+
+class _NegativeCovarianceNet(torch.nn.Module):
+    """Zero gain and B = -scale * I, so P = A + B is negative definite from the first step."""
+
+    def __init__(self, scale):
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.tensor(scale, dtype=torch.float64))
+
+    def init_hidden(self, batch, device):
+        return (torch.zeros(1, dtype=torch.float64),)
+
+    def forward(self, features, hidden):
+        batch = features.shape[0]
+        K = torch.zeros(batch, _STATE_DIM, _MEAS_DIM, dtype=torch.float64)
+        B = -self.scale * torch.eye(_STATE_DIM, dtype=torch.float64).repeat(batch, 1, 1)
+        return K, B, hidden
+
+
+def test_training_epoch_on_a_non_positive_definite_covariance_completes_without_updating_weights():
+    torch.manual_seed(0)
+    steps, range_m = 2, 1000.0
+    states = np.zeros((1, steps, _STATE_DIM))
+    states[..., 0] = range_m
+    measurements = np.zeros((1, 1, steps, _MEAS_DIM))
+    measurements[..., 2] = range_m
+    net = _NegativeCovarianceNet(1000.0)
+    optimizer = torch.optim.SGD(net.parameters(), lr=1.0)
+
+    run_epoch(net, 0.02, states, measurements, 1, steps, np.random.default_rng(0), optimizer)
+
+    assert net.scale.item() == 1000.0
 
 
 def _nll_with_grad(e, P):
