@@ -195,3 +195,61 @@ def test_ukf_posterior_differs_from_ekf_by_gain_times_range_bias_when_measuremen
     gain_px_range = CROSS_RANGE_SIGMA_M**2 * np.linalg.inv(S)[2, 2]
     expected_gap_m = -gain_px_range * _range_bias_m(LINE_OF_SIGHT_RANGE_M, CROSS_RANGE_SIGMA_M)
     assert abs((x_ukf[0] - x_ekf[0]) - expected_gap_m) < FLOAT_TOLERANCE_M
+
+
+def test_ukf_sigma_points_factorise_a_rank_deficient_covariance_at_1e4_m2_scale():
+    """MS-33: a fixed 1e-12 jitter is below double resolution at 1e4 m^2, so the jitter scales with trace(P)/n."""
+    ukf = UKF(dt=0.1, R=np.diag([1e-6, 1e-6, 1.0]))
+    direction = np.random.default_rng(0).normal(size=STATE_DIM)
+    P = 1e4 * np.outer(direction, direction)
+    pts = ukf._sigma_points(np.zeros(STATE_DIM), P)
+    assert np.all(np.isfinite(pts))
+
+
+def test_ukf_sigma_point_spread_includes_exactly_the_trace_over_n_jitter():
+    """MS-33: jitter is 1e-12 * trace(P)/n; rtol 1e-14 is the rounding of one sqrt, so a trace or n slip shows."""
+    ukf = UKF(dt=0.1, R=np.diag([1e-6, 1e-6, 1.0]))
+    diagonal = 1e4
+    P = diagonal * np.eye(STATE_DIM)
+    pts = ukf._sigma_points(np.zeros(STATE_DIM), P)
+    expected = np.sqrt(STATE_DIM * (diagonal + 1e-12 * diagonal))
+    assert np.isclose(pts[1, 0], expected, rtol=1e-14, atol=0.0)
+
+
+def test_ukf_update_covariance_stays_psd_when_the_gain_is_off_optimal(monkeypatch):
+    """MS-29: Joseph form is a valid covariance for any gain; P - K S K^T goes indefinite once K is 3x too large."""
+    ukf = UKF(dt=0.1, R=np.diag([1e-6, 1e-6, 1.0]))
+    x = np.array([3000.0, 500.0, 200.0, 50.0, -20.0, 5.0, 0.0, 0.0, 0.0])
+    P = np.diag([100.0, 100.0, 100.0, 25.0, 25.0, 25.0, 1.0, 1.0, 1.0])
+    x_pred, P_pred, pts_pred = ukf.predict(x, P)
+    exact_inv = np.linalg.inv
+    monkeypatch.setattr(np.linalg, "inv", lambda a: 3.0 * exact_inv(a))
+    _, P_upd, _, _ = ukf.update(x_pred, P_pred, pts_pred, h(x_pred))
+    assert np.linalg.eigvalsh((P_upd + P_upd.T) / 2).min() > 0.0
+
+
+def test_ukf_update_covariance_follows_p_minus_two_c_minus_c_squared_times_the_optimal_reduction(monkeypatch):
+    """MS-29: for gain c*K_opt the Joseph form gives P - (2c - c^2) Q, Q = Pxz S^-1 Pxz^T; tol 1e-9 is the
+    rounding of 9x9 products at 1e4 m^2 scale."""
+    ukf = UKF(dt=0.1, R=np.diag([1e-6, 1e-6, 1.0]))
+    x = np.array([3000.0, 500.0, 200.0, 50.0, -20.0, 5.0, 0.0, 0.0, 0.0])
+    P = np.diag([100.0, 100.0, 100.0, 25.0, 25.0, 25.0, 1.0, 1.0, 1.0])
+    x_pred, P_pred, pts_pred = ukf.predict(x, P)
+    z = h(x_pred)
+    _, P_optimal, _, _ = ukf.update(x_pred, P_pred, pts_pred, z)
+    reduction = P_pred - P_optimal
+    exact_inv = np.linalg.inv
+    monkeypatch.setattr(np.linalg, "inv", lambda a: 3.0 * exact_inv(a))
+    _, P_oversized, _, _ = ukf.update(x_pred, P_pred, pts_pred, z)
+    assert np.trace(reduction) > 0.0
+    assert np.allclose(P_oversized, P_pred + 3.0 * reduction, rtol=1e-9, atol=1e-9)
+
+
+def test_ukf_sigma_point_spread_uses_n_plus_lambda_for_a_non_unit_alpha():
+    """MS-9, MS-31: lambda = alpha^2 (n + kappa) - n, so alpha=0.5 spreads sigma points by sqrt(n + lambda)."""
+    alpha = 0.5
+    ukf = UKF(dt=0.1, R=np.diag([1e-6, 1e-6, 1.0]), alpha=alpha)
+    diagonal = 4.0
+    pts = ukf._sigma_points(np.zeros(STATE_DIM), diagonal * np.eye(STATE_DIM))
+    expected = np.sqrt(alpha**2 * STATE_DIM * diagonal * (1 + 1e-12))
+    assert np.isclose(pts[1, 0], expected, rtol=1e-14, atol=0.0)
