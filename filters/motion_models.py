@@ -11,15 +11,15 @@ truth trajectory generator and the IMM's per-mode filters:
                               same continuous-time model; this is the
                               multi-second-correlation, large-driving-noise
                               case.
-  - CT  (coordinated turn):   horizontal (px,vx,py,vy) rotates at a fixed
-                              known turn rate omega -- the standard exact
-                              discrete transition (Li & Jilkov, "Survey of
+  - CT  (coordinated turn):   horizontal velocity rotates at a fixed known
+                              turn rate omega (Li & Jilkov, "Survey of
                               Maneuvering Target Tracking," Part I, 2003);
-                              z-axis follows the same Singer axis as CV/CA.
+                              every axis carries the same Singer acceleration
+                              as CV/CA, feeding velocity alongside the turn.
 
-CV and CA are both instances of the Singer axis model discretized via
-van_loan_discretize (verified against the closed-form DWNA case in
-test_discretize.py) rather than hand-typed closed-form Singer formulas.
+CV, CA and CT are all discretized via van_loan_discretize (verified against
+the closed-form DWNA case in test_discretize.py) rather than hand-typed
+closed-form formulas.
 """
 
 import numpy as np
@@ -62,41 +62,20 @@ def ca_model(dt, sigma_a=2.0, tau=5.0):
 
 
 def ct_model(dt, omega, sigma_a=0.3, tau=5.0):
-    """omega in rad/s, positive = counter-clockwise. omega=0 degenerates to
-    the CV horizontal transition (the exact CT matrix has a 1/omega
-    singularity there)."""
-    F = np.eye(STATE_DIM)
-    Q = np.zeros((STATE_DIM, STATE_DIM))
-
-    if abs(omega) < 1e-8:
-        F_h = np.array([
-            [1.0, dt, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, dt],
-            [0.0, 0.0, 0.0, 1.0],
-        ])
-    else:
-        s, c = np.sin(omega * dt), np.cos(omega * dt)
-        F_h = np.array([
-            [1.0, s / omega, 0.0, -(1 - c) / omega],
-            [0.0, c, 0.0, -s],
-            [0.0, (1 - c) / omega, 1.0, s / omega],
-            [0.0, s, 0.0, c],
-        ])
-    h_idx = [PX, VX, PY, VY]
-    F[np.ix_(h_idx, h_idx)] = F_h
-
-    # Budgets sigma_a of unmodelled lateral acceleration, |d_omega| <= sigma_a / v;
-    # the nominal-vs-true turn-rate mismatch is absorbed by IMM mode switching (MS-13).
-    q_h = (sigma_a * dt) ** 2
-    Q[VX, VX] += q_h
-    Q[VY, VY] += q_h
-
-    F3z, Q3z = singer_axis(dt, tau=tau, sigma_a=sigma_a)
-    z_idx = [PZ, VZ, A_Z]
-    F[np.ix_(z_idx, z_idx)] = F3z
-    Q[np.ix_(z_idx, z_idx)] = Q3z
-    return F, Q
+    """omega in rad/s, positive = counter-clockwise. Velocity rotates at omega and is driven by
+    the Singer acceleration of every axis, so omega = 0 is the ca_model Singer model."""
+    alpha = 1.0 / tau
+    A = np.zeros((STATE_DIM, STATE_DIM))
+    for p, v, a in ((PX, VX, A_X), (PY, VY, A_Y), (PZ, VZ, A_Z)):
+        A[p, v] = 1.0
+        A[v, a] = 1.0
+        A[a, a] = -alpha
+    A[VX, VY] = -omega
+    A[VY, VX] = omega
+    G = np.zeros((STATE_DIM, 3))
+    G[[A_X, A_Y, A_Z], [0, 1, 2]] = 1.0
+    q_c = 2.0 * sigma_a**2 * alpha
+    return van_loan_discretize(A, G, q_c * np.eye(3), dt)
 
 
 def step(x, F):
