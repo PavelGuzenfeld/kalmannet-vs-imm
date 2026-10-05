@@ -208,9 +208,10 @@ def test_wings_level_constant_pull_loops_through_vertical_up_and_down_back_to_ea
     assert pitch_rad[looped[0]] - 2.0 * np.pi < (load_factor + 1.0) * G * DT / benchmark.min_speed_m_s
 
 
-def test_start_pointing_straight_up_flies_finite_states():
+@pytest.mark.parametrize("vertical_speed_m_s", [100.0, -100.0])
+def test_start_pointing_straight_up_or_down_flies_finite_states(vertical_speed_m_s):
     controls = held_controls(50, roll_rate_rad_s=1.0, load_factor=2.0, throttle=0.5)
-    states = fly(TEST_ENVELOPE, ORIGIN, np.array([0.0, 0.0, 100.0]), 0.0, controls, DT)
+    states = fly(TEST_ENVELOPE, ORIGIN, np.array([0.0, 0.0, vertical_speed_m_s]), 0.0, controls, DT)
     assert np.all(np.isfinite(states))
 
 
@@ -218,6 +219,13 @@ def test_pull_from_straight_up_pitches_toward_north():
     states = fly(TEST_ENVELOPE, ORIGIN, np.array([0.0, 0.0, 100.0]), 0.0, held_controls(1, load_factor=2.0), DT)
     assert states[0, 6] == 0.0
     assert_step_acceleration(states[0, 7], 2.0 * G)
+
+
+def test_right_bank_from_straight_up_pulls_toward_the_right_wing_west():
+    """atol 1e-12: cos(pi / 2) leaves about 1e-16 g of lift along north."""
+    controls = held_controls(1, load_factor=2.0)
+    states = fly(TEST_ENVELOPE, ORIGIN, np.array([0.0, 0.0, 100.0]), np.pi / 2.0, controls, DT)
+    np.testing.assert_allclose(states[0, 6:8], [-2.0 * G, 0.0], rtol=1e-12, atol=1e-12)
 
 
 def test_default_preset_spans_the_benchmark_speed_envelope():
