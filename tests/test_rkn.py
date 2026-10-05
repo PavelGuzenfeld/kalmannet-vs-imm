@@ -247,8 +247,9 @@ def test_learned_factor_adds_L_L_transpose_not_L_transpose_L():
 
 
 def test_covariance_factor_stays_positive_definite_where_the_closed_form_goes_indefinite():
-    """MS-10: a diverged run's 1e32 m^2 position variance sits next to unit ones (#62). B = I bounds P's
-    eigenvalues below by 1, yet float64 rounds the closed-form A + B indefinite; S keeps a positive diagonal."""
+    """MS-10: a diverged run's 1e32 m^2 position variance next to unit ones (#62). B = I bounds lambda_min(P)
+    by 1, yet float64 rounds the closed-form A + B indefinite. Triangular S has S_jj >= sigma_min(S) =
+    sqrt(lambda_min(P)) >= 1 in exact arithmetic; measured min 1.21."""
     dt = 0.02
     x0 = torch.zeros(1, STATE_DIM, dtype=torch.float64)
     x0[0, :3] = torch.tensor([640.0, 410.0, -95.0], dtype=torch.float64)
@@ -267,7 +268,7 @@ def test_covariance_factor_stays_positive_definite_where_the_closed_form_goes_in
 
     assert torch.linalg.cholesky_ex(closed_form).info.item() != 0
     S_diagonal = torch.diagonal(flt.S, dim1=-2, dim2=-1)
-    assert torch.all(torch.isfinite(S_diagonal)) and torch.all(S_diagonal > 0.0)
+    assert torch.all(torch.isfinite(S_diagonal)) and torch.all(S_diagonal >= 1.0)
     assert torch.isfinite(_gaussian_nll(torch.ones(1, STATE_DIM, dtype=torch.float64), flt.S))
 
 
