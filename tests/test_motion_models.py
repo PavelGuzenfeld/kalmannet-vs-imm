@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from filters.motion_models import cv_model, ca_model, ct_model, step
 from filters.state import STATE_DIM, PX, PY, VX, VY
@@ -72,6 +73,27 @@ def test_ct_zero_omega_q_is_dwna_closed_form_per_horizontal_axis():
     expected[:2, :2] = dwna
     expected[2:, 2:] = dwna
     assert np.allclose(Q[np.ix_(CT_H_IDX, CT_H_IDX)], expected, rtol=1e-12, atol=0.0)
+
+
+@pytest.mark.parametrize("dt", [2.0**-2, 2.0**-3])
+def test_ct_turning_q_matches_li_jilkov_closed_form_at_dt_and_half_dt(dt):
+    """MS-7: Li & Jilkov 2003 known-omega CT Q for white acceleration on vx, vy, omega*dt = 1 and 1/2.
+    atol 1e-12 of the largest entry covers expm roundoff on the zero px-py terms."""
+    omega = 4.0
+    q_c = EXACT_SIGMA_A**2 * BENCHMARK_DT
+    s, c = np.sin(omega * dt), np.cos(omega * dt)
+    pp = 2 * (omega * dt - s) / omega**3
+    pv = (1 - c) / omega**2
+    cross = (omega * dt - s) / omega**2
+    expected = q_c * np.array([
+        [pp, pv, 0.0, cross],
+        [pv, dt, -cross, 0.0],
+        [0.0, -cross, pp, pv],
+        [cross, 0.0, pv, dt],
+    ])
+    _, Q = ct_model(dt, omega=omega, sigma_a=EXACT_SIGMA_A)
+    Q_h = Q[np.ix_(CT_H_IDX, CT_H_IDX)]
+    assert np.allclose(Q_h, expected, rtol=1e-12, atol=1e-12 * np.abs(expected).max())
 
 
 def test_ct_velocity_variance_at_benchmark_dt_keeps_former_hand_typed_value():
