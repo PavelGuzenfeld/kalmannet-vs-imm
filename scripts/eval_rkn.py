@@ -14,6 +14,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from data.config import NOMINAL
+from data.trajectory_gen import fly_scenario
 from filters.knet.rkn_filter import RKNFilter
 from filters.knet.rkn_network import RKNGainCovNetwork
 from filters.metrics import anees_with_bounds, empirical_coverage, fraction_inside_bounds
@@ -82,6 +84,7 @@ def main():
     ap.add_argument("--fc1-mult", type=int, default=3)
     ap.add_argument("--hidden-mult", type=int, default=3)
     ap.add_argument("--fc2-mult", type=int, default=4)
+    ap.add_argument("--scenario-dir", default="data/scenarios")
     ap.add_argument("--out", default="results/rkn_eval.json")
     ap.add_argument("--out-csv", default="results/rkn_test_rmse.csv")
     args = ap.parse_args()
@@ -110,6 +113,16 @@ def main():
               f"ANEES={summary['anees_mean']:.2f} (bounds {summary['anees_bounds'][0]:.2f}-{summary['anees_bounds'][1]:.2f}) "
               f"frac_in_95={summary['anees_fraction_inside_95']:.3f} coverage68={summary['coverage_68']:.3f} coverage95={summary['coverage_95']:.3f}",
               flush=True)
+
+    flights = [fly_scenario(json.loads(p.read_text())) for p in sorted(Path(args.scenario_dir).glob("*.json"))]
+    if flights:
+        runs = [evaluate_dataset(net, NOMINAL.dt, states[None], z[None, None]) for states, z in flights]
+        pooled = {key: np.concatenate([run[key][0, 0, _BURN_IN:] for run in runs])[None, None] for key in runs[0]}
+        summary = summarize(pooled, burn_in=0)
+        results["scenarios"] = summary
+        csv_rows.append({"filter": "RKN", "regime": "scenarios", "pos_rmse": summary["pos_rmse"], "vel_rmse": summary["vel_rmse"]})
+        print(f"scenarios: pos_rmse={summary['pos_rmse']:.2f}m vel_rmse={summary['vel_rmse']:.2f}m/s "
+              f"ANEES={summary['anees_mean']:.2f} frac_in_95={summary['anees_fraction_inside_95']:.3f}", flush=True)
 
     # High-MC subset: the tight-bound headline calibration numbers.
     highmc = np.load(data_dir / "test_highmc.npz")
