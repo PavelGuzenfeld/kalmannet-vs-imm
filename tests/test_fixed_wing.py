@@ -1,0 +1,206 @@
+import os
+import subprocess
+import sys
+from dataclasses import astuple
+
+import numpy as np
+
+from data.config import NOMINAL
+from data.fixed_wing import (
+    LOAD_FACTOR,
+    DEFAULT_PRESET,
+    PRESETS,
+    ROLL_RATE,
+    THROTTLE,
+    Envelope,
+    fly,
+)
+from data.trajectory_gen import measure
+
+G = 9.80665
+DT = NOMINAL.dt
+EAST = np.array([1.0, 0.0, 0.0])
+ORIGIN = np.array([0.0, 0.0, 1000.0])
+TEST_ENVELOPE = Envelope(min_speed_m_s=20.0, max_speed_m_s=200.0, max_load_factor=4.0, max_roll_rate_rad_s=2.0)
+
+
+def held_controls(steps, roll_rate_rad_s=0.0, load_factor=1.0, throttle=0.0):
+    controls = np.zeros((steps, 3))
+    controls[:, ROLL_RATE] = roll_rate_rad_s
+    controls[:, LOAD_FACTOR] = load_factor
+    controls[:, THROTTLE] = throttle
+    return controls
+
+
+def fly_east(speed_m_s, controls, bank_rad=0.0, envelope=TEST_ENVELOPE):
+    return fly(envelope, ORIGIN, speed_m_s * EAST, bank_rad, controls, DT)
+
+
+def speeds(states):
+    return np.linalg.norm(states[:, 3:6], axis=1)
+
+
+def assert_step_acceleration(actual_m_s2, expected_m_s2):
+    """rtol 1e-12: the column is a velocity difference over dt, so it carries float64 roundoff."""
+    np.testing.assert_allclose(actual_m_s2, expected_m_s2, rtol=1e-12)
+
+
+def test_scripted_flight_from_seeded_start_is_measurable_truth():
+    rng = np.random.default_rng(5)
+    azimuth = rng.uniform(-np.pi, np.pi)
+    heading = rng.uniform(-np.pi, np.pi)
+    start_range_m = rng.uniform(*NOMINAL.range0)
+    start_speed_m_s = rng.uniform(*NOMINAL.speed0)
+    position = start_range_m * np.array([np.cos(azimuth), np.sin(azimuth), 0.2])
+    velocity = start_speed_m_s * np.array([np.cos(heading), np.sin(heading), 0.0])
+    controls = np.concatenate(
+        [
+            held_controls(20, roll_rate_rad_s=1.0, load_factor=1.5, throttle=0.8),
+            held_controls(40, load_factor=3.0, throttle=1.0),
+            held_controls(20, roll_rate_rad_s=-1.0, load_factor=0.5, throttle=0.2),
+        ]
+    )
+
+    states = fly(PRESETS[DEFAULT_PRESET], position, velocity, 0.0, controls, DT)
+    z = measure(np.random.default_rng(6), states, NOMINAL)
+
+    assert states.shape == (80, 9)
+    assert states.dtype == np.float64
+    assert np.all(np.isfinite(states))
+    assert np.all(np.isfinite(z)) and np.all(z[:, 2] > 0)
+
+
+def test_acceleration_columns_are_the_step_acceleration_up_to_roundoff():
+    controls = np.concatenate([held_controls(10, roll_rate_rad_s=1.5, load_factor=3.0, throttle=1.0)] * 2)
+    states = fly_east(60.0, controls)
+    position, velocity, acceleration = states[:, 0:3], states[:, 3:6], states[:, 6:9]
+
+    np.testing.assert_allclose(velocity[1:], velocity[:-1] + DT * acceleration[:-1], rtol=1e-12, atol=1e-9)
+    np.testing.assert_allclose(
+        position[1:],
+        position[:-1] + DT * velocity[:-1] + 0.5 * DT**2 * acceleration[:-1],
+        rtol=1e-12,
+        atol=1e-9,
+    )
+
+
+def test_fixed_wing_import_pulls_in_no_filters_module():
+    probe = "import sys, data.fixed_wing; print(sorted(m for m in sys.modules if m.split('.')[0] == 'filters'))"
+    clean_env = {"PATH": os.environ["PATH"], "PYTHONPATH": os.getcwd()}
+    result = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=True, env=clean_env
+    )
+    assert result.stdout.strip() == "[]"
+
+
+def test_load_factor_command_at_max_g_pulls_exactly_max_g():
+    states = fly_east(100.0, held_controls(1, load_factor=4.0))
+    assert_step_acceleration(states[0, 8], 4.0 * G - G)
+
+
+def test_load_factor_command_above_max_g_is_clamped_to_max_g():
+    at_max = fly_east(100.0, held_controls(20, load_factor=4.0))
+    above_max = fly_east(100.0, held_controls(20, load_factor=4.5))
+    assert np.array_equal(above_max, at_max)
+
+
+def test_load_factor_command_below_max_g_is_not_clamped():
+    states = fly_east(100.0, held_controls(1, load_factor=3.5))
+    assert_step_acceleration(states[0, 8], 3.5 * G - G)
+
+
+def test_negative_load_factor_command_beyond_max_g_is_clamped_to_minus_max_g():
+    states = fly_east(100.0, held_controls(1, load_factor=-4.5))
+    assert_step_acceleration(states[0, 8], -4.0 * G - G)
+
+
+def test_load_factor_is_capped_by_lift_available_at_twice_stall_speed():
+    stall_limited = Envelope(min_speed_m_s=20.0, max_speed_m_s=200.0, max_load_factor=6.0, max_roll_rate_rad_s=2.0)
+    states = fly_east(40.0, held_controls(1, load_factor=6.0), envelope=stall_limited)
+    assert_step_acceleration(states[0, 8], 4.0 * G - G)
+
+
+def test_roll_rate_command_above_max_is_clamped_to_max_roll_rate():
+    at_max = fly_east(100.0, held_controls(20, roll_rate_rad_s=2.0, load_factor=2.0))
+    above_max = fly_east(100.0, held_controls(20, roll_rate_rad_s=2.5, load_factor=2.0))
+    assert np.array_equal(above_max, at_max)
+
+
+def test_negative_roll_rate_command_beyond_max_is_clamped_to_minus_max_roll_rate():
+    at_max = fly_east(100.0, held_controls(20, roll_rate_rad_s=-2.0, load_factor=2.0))
+    beyond_max = fly_east(100.0, held_controls(20, roll_rate_rad_s=-2.5, load_factor=2.0))
+    assert np.array_equal(beyond_max, at_max)
+
+
+def test_roll_rate_command_below_max_rolls_slower_than_max():
+    at_max = fly_east(100.0, held_controls(2, roll_rate_rad_s=2.0, load_factor=2.0))
+    below_max = fly_east(100.0, held_controls(2, roll_rate_rad_s=1.5, load_factor=2.0))
+    assert_step_acceleration(at_max[0, 7], -2.0 * G * np.sin(2.0 * DT))
+    assert_step_acceleration(below_max[0, 7], -2.0 * G * np.sin(1.5 * DT))
+
+
+def test_speed_is_floored_at_stall_speed_with_idle_throttle():
+    """rtol 1e-15: rescaling onto the stall speed rounds within a few ulp."""
+    states = fly_east(20.0, held_controls(30, throttle=0.0))
+    np.testing.assert_allclose(speeds(states), 20.0, rtol=1e-15)
+
+
+def test_pull_up_at_stall_speed_gets_only_one_g():
+    pull_up = fly_east(20.0, held_controls(30, load_factor=3.0))
+    level = fly_east(20.0, held_controls(30, load_factor=1.0))
+    assert np.array_equal(pull_up, level)
+
+
+def test_level_full_throttle_flight_at_max_speed_holds_speed_and_height():
+    states = fly_east(200.0, held_controls(50, throttle=1.0))
+    assert np.all(speeds(states) == 200.0)
+    assert np.all(states[:, 2] == ORIGIN[2])
+
+
+def test_level_flight_below_max_speed_at_full_throttle_accelerates():
+    states = fly_east(100.0, held_controls(50, throttle=1.0))
+    assert np.all(np.diff(speeds(states)) > 0.0)
+
+
+def test_sustained_max_g_level_turn_at_full_throttle_loses_speed():
+    level_turn_bank_rad = np.arccos(1.0 / 4.0)
+    states = fly_east(200.0, held_controls(50, load_factor=4.0, throttle=1.0), bank_rad=level_turn_bank_rad)
+    assert np.all(np.diff(speeds(states)) < 0.0)
+
+
+def test_max_g_level_turn_decelerates_by_the_extra_induced_drag():
+    """rtol 1e-12: one step of float64 roundoff on terms of order 10 m/s^2."""
+    level_turn_bank_rad = np.arccos(1.0 / 4.0)
+    states = fly_east(200.0, held_controls(1, load_factor=4.0, throttle=1.0), bank_rad=level_turn_bank_rad)
+    best_glide_speed_m_s = np.sqrt(20.0 * 200.0)
+    induced_drag_per_g_squared = G / (2.0 * 10.0) * (best_glide_speed_m_s / 200.0) ** 2
+    np.testing.assert_allclose(states[0, 6], -(4.0**2 - 1.0) * induced_drag_per_g_squared, rtol=1e-12)
+
+
+def test_climb_loses_speed_that_the_mirrored_descent_gains():
+    """Same speed, load factor and drag; only gravity along the path differs: 2 g sin(30 deg) = g.
+    rtol 1e-12: one step of float64 roundoff on terms of order 10 m/s^2."""
+    path_rad = np.pi / 6.0
+    controls = held_controls(1, load_factor=np.cos(path_rad), throttle=0.5)
+    climb_direction = np.array([np.cos(path_rad), 0.0, np.sin(path_rad)])
+    descent_direction = np.array([np.cos(path_rad), 0.0, -np.sin(path_rad)])
+    climbing = fly(TEST_ENVELOPE, ORIGIN, 100.0 * climb_direction, 0.0, controls, DT)
+    descending = fly(TEST_ENVELOPE, ORIGIN, 100.0 * descent_direction, 0.0, controls, DT)
+    along_climb = climbing[0, 6:9] @ climb_direction
+    along_descent = descending[0, 6:9] @ descent_direction
+    np.testing.assert_allclose(along_climb - along_descent, -G, rtol=1e-12)
+
+
+def test_default_preset_spans_the_benchmark_speed_envelope():
+    default = PRESETS[DEFAULT_PRESET]
+    assert (default.min_speed_m_s, default.max_speed_m_s) == NOMINAL.speed0
+
+
+def test_named_presets_keep_the_envelopes_scenarios_were_flown_in():
+    """A scenario names its preset; changing a preset's numbers would silently change its replay."""
+    assert {name: astuple(envelope) for name, envelope in PRESETS.items()} == {
+        "benchmark": (20.0, 250.0, 9.0, np.deg2rad(180.0)),
+        "small aerial object": (12.0, 45.0, 4.0, np.deg2rad(120.0)),
+        "light aircraft": (25.0, 70.0, 3.8, np.deg2rad(60.0)),
+        "jet": (70.0, 300.0, 9.0, np.deg2rad(240.0)),
+    }
