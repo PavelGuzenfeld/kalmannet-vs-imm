@@ -14,12 +14,12 @@ Short answer: no. A tuned IMM wins on accuracy, on calibration, and on cost.
 | Median CPU latency (ms) | 0.235 | 0.333 | 0.391 |
 | Params | 0 | 526,116 | 301,266 |
 
-Recursive KalmanNet's one genuine win: it produces a usable, better-calibrated covariance where
-vanilla KalmanNet produces none (state dim 9 > measurement dim 3).
+Recursive KalmanNet's one win: it produces a usable, better-calibrated covariance where vanilla
+KalmanNet produces none (state dim 9 > measurement dim 3).
 
 Full write-up, methodology, deployment analysis and the conditions that would flip the verdict:
-[`REPORT.md`](docs/REPORT.md). Literature extraction the implementations are grounded in:
-[`NOTES.md`](docs/NOTES.md).
+[#15](https://github.com/PavelGuzenfeld/kalmannet-vs-imm/issues/15). Literature extraction the implementations are grounded in:
+[#14](https://github.com/PavelGuzenfeld/kalmannet-vs-imm/issues/14).
 
 ![Five filters tracking one maneuvering target](docs/assets/kalmannet_motion_hud.gif)
 
@@ -40,7 +40,7 @@ Everything runs in a CPU-only Docker image; `docker_run.sh` builds it and mounts
 ./docker_run.sh python scripts/make_animation.py
 ```
 
-Run them in that order — each step reads the previous step's output from its default path.
+Run them in that order. Each step reads the previous step's output from its default path.
 Generated datasets, checkpoints and results are gitignored; regenerate them with the commands
 above. Every results artifact records the host `GIT_COMMIT` it was produced at.
 
@@ -52,7 +52,7 @@ filters/              the library: EKF, UKF, IMM, motion/measurement models, met
 filters/knet/         KalmanNet and Recursive KalmanNet (torch)
 data/                 the trajectory generator and regime definitions
 tests/                unit tests -- `./docker_run.sh pytest -q`
-docs/                 the report, the literature notes, the animation plan
+docs/assets/          the README animation
 docker/               the CPU-only image both CI and docker_run.sh use
 
 datasets/             generated trajectories (gitignored)
@@ -62,7 +62,7 @@ results/              every artifact the pipeline writes, plots included (gitign
 ## Checks
 
 CI (`.github/workflows/ci.yml`) lints with ruff, runs the unit tests in the bench image, and
-smokes the pipeline above at toy sizes on its default paths — the unit tests import the packages
+smokes the pipeline above at toy sizes on its default paths. The unit tests import the packages
 directly and so never execute an entrypoint.
 
 Pre-commit adds the diff-scoped mutation gate over `filters/` and `data/`:
@@ -73,7 +73,7 @@ pip install pre-commit && pre-commit install
 
 ## References
 
-What the filters and the comparison are built on (extracted in [`NOTES.md`](docs/NOTES.md)):
+What the filters and the comparison are built on (extracted in [#14](https://github.com/PavelGuzenfeld/kalmannet-vs-imm/issues/14)):
 
 1. H. A. P. Blom, Y. Bar-Shalom, "The interacting multiple model algorithm for systems with Markovian switching coefficients," *IEEE Trans. Automatic Control* 33(8), 780–783, 1988. [doi:10.1109/9.1299](https://doi.org/10.1109/9.1299)
 2. Y. Bar-Shalom, X.-R. Li, T. Kirubarajan, *Estimation with Applications to Tracking and Navigation*, Wiley, 2001. [doi:10.1002/0471221279](https://doi.org/10.1002/0471221279)

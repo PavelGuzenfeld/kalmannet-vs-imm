@@ -1,7 +1,7 @@
 """KalmanNet filter recursion: architecture #2's gain network driving the
 same predict/update structure as the classical filters, but with NO explicit
 covariance propagation -- Q and R are exactly what the learned gain replaces
-(NOTES.md sec. 1c). Ported from the reference KNet_step/step_prior/
+(issue #14 sec. 1c). Ported from the reference KNet_step/step_prior/
 step_KGain_est, with one correctness fix the reference never needed: every
 angular quantity (the observation difference, the innovation, and the
 update itself) is wrapped to (-pi, pi] before use. The reference was built

@@ -2,7 +2,7 @@
 """Evaluate the trained vanilla KalmanNet checkpoint on the same test.npz
 (all mc realizations) and robustness-sweep sets the classical filters are
 judged on, so its number in the results table is directly comparable. No
-covariance is reported (see REPORT.md sec. 1.3 -- state dim 9 > measurement
+covariance is reported (see issue #15 sec. 1.3 -- state dim 9 > measurement
 dim 3, so vanilla KalmanNet has no recoverable Sigma): RMSE only.
 """
 

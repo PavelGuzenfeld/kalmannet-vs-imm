@@ -20,3 +20,33 @@ axis, so this mutant is equivalent and no test can distinguish it. Line 43 carri
 a second `-1` (the H_t.reshape flatten) which this waiver's shape cannot exclude;
 that one is killed by test_feature_vector_is_the_specified_squared_quadruple, which
 pins the full 48-wide feature vector."""
+
+[[waiver]]
+file = "scripts/train_knet.py"
+uncovered = true
+reason = """Training driver: its output is a checkpoint after hours of CPU training,
+so a test would either retrain (too slow for the gate) or pin one run's weights
+(not a requirement). The loss, network and filter step it calls live in
+filters/knet/, which is gated."""
+
+[[waiver]]
+file = "scripts/train_rkn.py"
+uncovered = true
+reason = """Training driver: its output is a checkpoint after hours of CPU training,
+so a test would either retrain (too slow for the gate) or pin one run's weights
+(not a requirement). The NLL loss, network and filter step it calls live in
+filters/knet/, which is gated."""
+
+[[waiver]]
+file = "scripts/eval_knet.py"
+uncovered = true
+reason = """Evaluation driver that needs the trained checkpoints from train_knet.py and
+train_rkn.py, which CI does not produce. The metrics it reports come from
+filters/metrics.py, which is gated."""
+
+[[waiver]]
+file = "scripts/make_animation.py"
+uncovered = true
+reason = """It renders a GIF judged by eye, like make_plots.py; asserting on frames
+would pin the current rendering, not a requirement. The per-filter data it draws
+comes from filters/plot_data.py and filters/metrics.py, which are gated."""

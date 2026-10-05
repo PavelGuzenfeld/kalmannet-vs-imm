@@ -8,14 +8,14 @@ independent GRU networks, matching the reference's `GRUNetwork` structure
   - rnn_K:   outputs the flattened Kalman gain, K in R^{m x n}.
   - rnn_cov: outputs the p = m(m+1)/2 free lower-triangular entries of a
              Cholesky factor L; B_t = L_t L_t^T is the learned half of the
-             Joseph-form covariance (NOTES.md sec. 2). The other half, A_t
+             Joseph-form covariance (issue #14 sec. 2). The other half, A_t
              (the propagated (I-K_tH_t)F_t P_{t-1} F_t^T (I-K_tH_t)^T term),
              is computed in closed form -- this is what distinguishes RKN
              from vanilla KalmanNet, Split-KalmanNet, and Cholesky-KalmanNet.
 
 Both networks share the same 4 input features (innovation, observation
 difference, Jacobian H_t, state correction), squared elementwise -- per the
-reference and NOTES.md's extraction ("covariance is a second-order/quadratic
+reference and issue #14's extraction ("covariance is a second-order/quadratic
 quantity").
 """
 
@@ -74,7 +74,7 @@ class RKNGainCovNetwork(nn.Module):
         our m=9 (the reference's own examples use smaller m), that default
         sizing produces a ~7.8M-parameter network whose forward pass alone
         measures ~3.3 ms/step single-threaded -- already over the brief's
-        2 ms budget before any accelerator is involved (see REPORT.md sec.
+        2 ms budget before any accelerator is involved (see issue #15 sec.
         3). Pass smaller multipliers for a latency-competitive trained
         variant; the reference-default size is reported separately as a
         deployment-audit data point, not silently discarded."""

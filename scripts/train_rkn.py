@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Truncated-BPTT training for Recursive KalmanNet, with the tuning-free
-Gaussian NLL loss (NOTES.md sec. 2, eq. 9; ported from the reference's
+Gaussian NLL loss (issue #14 sec. 2, eq. 9; ported from the reference's
 `GaussianLikelihoodLoss`, using `slogdet` instead of `log(det(...))` for
 numerical stability): L_t = e_t^T P_t^{-1} e_t + logdet(P_t), batch+time-
 averaged. Same protocol conventions as train_knet.py for a fair, direct

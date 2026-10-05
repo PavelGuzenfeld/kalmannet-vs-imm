@@ -1,6 +1,6 @@
 """KalmanNet architecture #2 (Revach et al., arXiv:2107.10043) -- three GRUs
 (Q, Sigma, S) plus FC pre/post layers, ported from the reference
-KNet/KalmanNet_nn.py (see NOTES.md sec. 1). Kept as close to the reference's
+KNet/KalmanNet_nn.py (see issue #14 sec. 1). Kept as close to the reference's
 data flow as possible, including the non-standard "backward flow" where FC3
 -> FC4 overwrites the Sigma-GRU's hidden state each step.
 
