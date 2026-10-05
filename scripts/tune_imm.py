@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-"""Grid search for IMM hyperparameters (transition-matrix self-stay
-probability, nominal CT turn rate, CA/Singer sigma_a and tau) on the
-validation set ONLY -- an under-tuned IMM is a strawman baseline, so this is
-real tuning effort, not a rubber stamp. Every candidate and the final choice
-are recorded to results/imm_tuning.json; the test set is never touched here.
-"""
+"""Coordinate search for IMM hyperparameters (filters/imm_tuning.py) on the
+validation set ONLY; every candidate and the final choice are recorded to
+results/imm_tuning.json, the test set is never touched, and an edge selection exits non-zero unless allowed."""
 
 import argparse
-import itertools
 import json
 import os
 import time
@@ -16,6 +12,10 @@ from pathlib import Path
 import numpy as np
 
 from filters.imm import IMM
+from filters.imm_tuning import IMM_PINNED, IMM_SEARCH_GRIDS, IMM_SEARCH_START, coordinate_search, edge_axes
+from filters.plot_data import imm_kwargs_from_tuning
+
+MAX_EXTENSIONS_PER_AXIS = 3
 
 
 def _load_split(path):
@@ -48,7 +48,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", default="datasets")
     ap.add_argument("--out", default="results/imm_tuning.json")
-    ap.add_argument("--n-search", type=int, default=30, help="val trajectories used during grid search")
+    ap.add_argument("--n-search", type=int, default=30, help="val trajectories used during the search")
+    ap.add_argument(
+        "--allow-edge-selection", action="store_true",
+        help="write a selection left on a grid edge instead of refusing; for plumbing smoke runs only",
+    )
     args = ap.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -63,51 +67,35 @@ def main():
     val_states, val_meas = _load_split(data_dir / "val.npz")
     search_states, search_meas = val_states[: args.n_search], val_meas[: args.n_search]
 
-    p_stay_grid = [0.90, 0.95, 0.97, 0.99]
-    omega_ct_deg_grid = [10.0, 15.0, 20.0, 25.0]
-    ca_sigma_a_grid = [2.0, 4.0, 6.0]
-    ca_tau_grid = [2.0, 4.0]
+    def score(candidate):
+        rmse = run_imm(search_states, search_meas, dt, R, **imm_kwargs_from_tuning({**IMM_PINNED, **candidate}))
+        print(f"  {candidate} -> {rmse:.3f} m", flush=True)
+        return rmse
 
-    candidates = list(itertools.product(p_stay_grid, omega_ct_deg_grid, ca_sigma_a_grid, ca_tau_grid))
-    print(f"grid search over {len(candidates)} candidates, {args.n_search} val trajectories each", flush=True)
-
-    results = []
+    print(f"coordinate search from {IMM_SEARCH_START}, {args.n_search} val trajectories each", flush=True)
     t0 = time.time()
-    for i, (p_stay, omega_deg, ca_sigma_a, ca_tau) in enumerate(candidates):
-        rmse = run_imm(
-            search_states, search_meas, dt, R,
-            omega_ct=np.deg2rad(omega_deg), p_stay=p_stay,
-            ca_sigma_a=ca_sigma_a, ca_tau=ca_tau,
-        )
-        results.append({
-            "p_stay": p_stay, "omega_ct_deg": omega_deg,
-            "ca_sigma_a": ca_sigma_a, "ca_tau": ca_tau, "val_pos_rmse": rmse,
-        })
-        if (i + 1) % 20 == 0:
-            print(f"  {i + 1}/{len(candidates)} done, {time.time() - t0:.0f}s elapsed", flush=True)
-
-    results.sort(key=lambda r: r["val_pos_rmse"])
-    best = results[0]
+    best, grids, evaluated = coordinate_search(IMM_SEARCH_GRIDS, IMM_SEARCH_START, score, MAX_EXTENSIONS_PER_AXIS)
     print(f"search took {time.time() - t0:.1f}s")
+    on_edge = edge_axes(grids, best)
+    if on_edge and not args.allow_edge_selection:
+        raise SystemExit(f"selection sits on a grid edge on axes {on_edge}: {best}")
+    best = {**IMM_PINNED, **best, "val_pos_rmse": evaluated[tuple(sorted(best.items()))]}
     print(f"best (search subset): {best}")
 
-    full_rmse = run_imm(
-        val_states, val_meas, dt, R,
-        omega_ct=np.deg2rad(best["omega_ct_deg"]), p_stay=best["p_stay"],
-        ca_sigma_a=best["ca_sigma_a"], ca_tau=best["ca_tau"],
-    )
+    full_rmse = run_imm(val_states, val_meas, dt, R, **imm_kwargs_from_tuning(best))
     print(f"best config, full val set ({val_states.shape[0]} traj) RMSE: {full_rmse:.2f} m")
 
+    results = sorted(
+        ({**IMM_PINNED, **dict(key), "val_pos_rmse": rmse} for key, rmse in evaluated.items()), key=lambda r: r["val_pos_rmse"]
+    )
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({
         "git_commit": os.environ.get("GIT_COMMIT", "unknown"),
         "n_search_trajectories": args.n_search,
         "n_full_val_trajectories": int(val_states.shape[0]),
-        "grid": {
-            "p_stay": p_stay_grid, "omega_ct_deg": omega_ct_deg_grid,
-            "ca_sigma_a": ca_sigma_a_grid, "ca_tau": ca_tau_grid,
-        },
+        "grid": grids,
+        "edge_axes": on_edge,
         "all_candidates": results,
         "best": best,
         "best_full_val_pos_rmse": full_rmse,

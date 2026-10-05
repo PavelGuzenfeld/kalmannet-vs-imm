@@ -21,6 +21,7 @@ from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.knet_filter import KalmanNetFilter
 from filters.knet.rkn_filter import RKNFilter
 from filters.knet.rkn_network import RKNGainCovNetwork
+from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import STATE_DIM
 from filters.ukf import UKF
 
@@ -77,10 +78,7 @@ def main():
     results["UKF"] = bench(lambda: ukf.step(x, P, z), args.n_warmup, args.n_measure)
 
     imm_best = json.loads(Path(args.imm_tuning).read_text())["best"]
-    imm = IMM(
-        dt, R, omega_ct=np.deg2rad(imm_best["omega_ct_deg"]), p_stay=imm_best["p_stay"],
-        ca_sigma_a=imm_best["ca_sigma_a"], ca_tau=imm_best["ca_tau"],
-    )
+    imm = IMM(dt, R, **imm_kwargs_from_tuning(imm_best))
     imm_state = imm.init_state(x, P)
     results["IMM"] = bench(lambda: imm.step(imm_state, z), args.n_warmup, args.n_measure)
 

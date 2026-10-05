@@ -14,6 +14,8 @@ def imm_kwargs_from_tuning(imm_best):
         "p_stay": imm_best["p_stay"],
         "ca_sigma_a": imm_best["ca_sigma_a"],
         "ca_tau": imm_best["ca_tau"],
+        "cv_sigma_a": imm_best["cv_sigma_a"],
+        "ct_sigma_a": imm_best["ct_sigma_a"],
     }
 
 

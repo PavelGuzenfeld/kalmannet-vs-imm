@@ -21,7 +21,9 @@ from scripts.replay import main as replay_main
 
 REPO = Path(__file__).resolve().parents[1]
 SEED_SCENARIO = REPO / "data" / "scenarios" / "break_turn_9g.json"
-IMM_CONSTRUCTOR_DEFAULTS = {"omega_ct_deg": 15.0, "p_stay": 0.97, "ca_sigma_a": 3.0, "ca_tau": 4.0}
+IMM_CONSTRUCTOR_DEFAULTS = {
+    "omega_ct_deg": 15.0, "p_stay": 0.97, "ca_sigma_a": 3.0, "ca_tau": 4.0, "cv_sigma_a": 0.05, "ct_sigma_a": 0.3,
+}
 FLAGS = ("track_loss", "overconfidence", "raw_error")
 KNET_INIT_OFFSET = np.array([2.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 BURN_IN = 20

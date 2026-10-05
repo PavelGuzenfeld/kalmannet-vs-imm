@@ -17,6 +17,7 @@ from data.trajectory_gen import fly_scenario
 from filters.ekf import EKF
 from filters.imm import IMM
 from filters.metrics import anees_with_bounds, empirical_coverage, fraction_inside_bounds
+from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import POS, STATE_DIM, VEL
 from filters.ukf import UKF
 
@@ -148,10 +149,7 @@ def main():
             "EKF": (lambda: EKF(dt, R), run_ekf_like),
             "UKF": (lambda: UKF(dt, R), run_ekf_like),
             "IMM": (
-                lambda: IMM(
-                    dt, R, omega_ct=np.deg2rad(best["omega_ct_deg"]), p_stay=best["p_stay"],
-                    ca_sigma_a=best["ca_sigma_a"], ca_tau=best["ca_tau"],
-                ),
+                lambda: IMM(dt, R, **imm_kwargs_from_tuning(best)),
                 run_imm,
             ),
         }
