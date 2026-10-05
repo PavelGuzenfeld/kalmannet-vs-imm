@@ -53,7 +53,7 @@ def test_all_process_noise_covariances_are_psd():
 def test_ct_horizontal_acceleration_decays_with_singer_time_constant():
     """MS-6/MS-30: inside CT, ax and ay follow the Singer axis, a_k+1 = exp(-dt/tau) a_k.
     rtol 1e-12: expm Pade rounding against np.exp, a few ulp."""
-    dt, tau = 0.02, 5.0
+    dt, tau = 0.02, 2.0
     F, _ = ct_model(dt, omega=np.deg2rad(25.0), sigma_a=0.3, tau=tau)
     x = np.zeros(STATE_DIM)
     x[A_X], x[A_Y] = 1.0, -2.0
@@ -61,6 +61,26 @@ def test_ct_horizontal_acceleration_decays_with_singer_time_constant():
     decay = np.exp(-dt / tau)
     assert np.isclose(x1[A_X], decay, rtol=1e-12, atol=0.0)
     assert np.isclose(x1[A_Y], -2.0 * decay, rtol=1e-12, atol=0.0)
+
+
+def test_ct_horizontal_acceleration_feeds_the_turning_velocity():
+    """MS-6/MS-30: with v = vx + i vy, a = ax + i ay, v' = i omega v + a, a' = -a/tau, so a unit ax
+    reaches v as (exp(i omega dt) - exp(-dt/tau)) / (i omega + 1/tau). rtol 1e-12: expm rounding."""
+    dt, tau, omega = 0.02, 2.0, np.deg2rad(25.0)
+    F, _ = ct_model(dt, omega=omega, sigma_a=0.3, tau=tau)
+    v = (np.exp(1j * omega * dt) - np.exp(-dt / tau)) / (1j * omega + 1.0 / tau)
+    assert np.isclose(F[VX, A_X], v.real, rtol=1e-12, atol=0.0)
+    assert np.isclose(F[VY, A_X], v.imag, rtol=1e-12, atol=0.0)
+
+
+def test_ct_horizontal_acceleration_has_singer_process_noise_while_turning():
+    """MS-6/MS-30: the ax, ay rows are an Ornstein-Uhlenbeck process with stationary variance
+    sigma_a^2, so one step adds sigma_a^2 (1 - exp(-2 dt/tau)). rtol 1e-12: expm rounding."""
+    dt, tau, sigma_a = 0.02, 2.0, 0.3
+    _, Q = ct_model(dt, omega=np.deg2rad(25.0), sigma_a=sigma_a, tau=tau)
+    q_a = sigma_a**2 * (1.0 - np.exp(-2.0 * dt / tau))
+    assert np.isclose(Q[A_X, A_X], q_a, rtol=1e-12, atol=0.0)
+    assert np.isclose(Q[A_Y, A_Y], q_a, rtol=1e-12, atol=0.0)
 
 
 def test_ct_positive_turn_rate_rotates_velocity_counter_clockwise():
