@@ -1,18 +1,16 @@
-"""Coordinate-wise IMM hyperparameter search (scripts/tune_imm.py, MS-12): one axis at a time,
-extending an axis geometrically past whichever edge its argmin sits on, so a reported
-selection is interior to every searched grid unless an axis hits its extension cap."""
+"""Coordinate-wise IMM search for scripts/tune_imm.py (MS-12); an edge-hit axis extends geometrically, capped.
+CV sigma_a is pinned at the truth generator's 0.05, not searched: on validation, RMSE is flat to 26 um and
+ANEES unchanged from 0.0001 to 0.05, so no selection on these metrics can identify it."""
 
+IMM_PINNED = {"cv_sigma_a": 0.05}
 IMM_SEARCH_GRIDS = {
     "p_stay": [0.95, 0.97, 0.99, 0.995, 0.998],
     "omega_ct_deg": [15.0, 20.0, 25.0, 30.0, 40.0],
     "ca_sigma_a": [1.0, 2.0, 4.0],
     "ca_tau": [1.0, 2.0, 4.0],
-    "cv_sigma_a": [0.02, 0.05, 0.1],
     "ct_sigma_a": [0.1, 0.3, 1.0],
 }
-IMM_SEARCH_START = {
-    "p_stay": 0.99, "omega_ct_deg": 25.0, "ca_sigma_a": 2.0, "ca_tau": 2.0, "cv_sigma_a": 0.05, "ct_sigma_a": 0.3,
-}
+IMM_SEARCH_START = {"p_stay": 0.99, "omega_ct_deg": 25.0, "ca_sigma_a": 2.0, "ca_tau": 2.0, "ct_sigma_a": 0.3}
 PROBABILITY_AXES = frozenset({"p_stay"})
 
 

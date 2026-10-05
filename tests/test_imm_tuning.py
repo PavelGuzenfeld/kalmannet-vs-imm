@@ -43,38 +43,47 @@ def _tune(monkeypatch, tmp_path, rmse_of_kwargs, *flags):
 
 
 def test_tune_imm_refuses_to_write_a_selection_left_on_an_edge_and_names_the_axis(monkeypatch, tmp_path):
-    with pytest.raises(SystemExit, match=r"on axes \[.cv_sigma_a.\]:"):
-        _tune(monkeypatch, tmp_path, lambda kwargs: -kwargs["cv_sigma_a"])
+    with pytest.raises(SystemExit, match=r"on axes \[.ct_sigma_a.\]:"):
+        _tune(monkeypatch, tmp_path, lambda kwargs: -kwargs["ct_sigma_a"])
     assert not (tmp_path / "imm_tuning.json").exists()
 
 
 def test_tune_imm_records_the_edge_axes_when_an_edge_selection_is_allowed(monkeypatch, tmp_path):
-    out = _tune(monkeypatch, tmp_path, lambda kwargs: -kwargs["cv_sigma_a"], "--allow-edge-selection")
+    out = _tune(monkeypatch, tmp_path, lambda kwargs: -kwargs["ct_sigma_a"], "--allow-edge-selection")
     tuning = json.loads(out.read_text())
-    assert tuning["edge_axes"] == ["cv_sigma_a"]
-    assert tuning["best"]["cv_sigma_a"] == tuning["grid"]["cv_sigma_a"][-1]
-    assert len(tuning["grid"]["cv_sigma_a"]) == len(IMM_SEARCH_GRIDS["cv_sigma_a"]) + MAX_EXTENSIONS
+    assert tuning["edge_axes"] == ["ct_sigma_a"]
+    assert tuning["best"]["ct_sigma_a"] == tuning["grid"]["ct_sigma_a"][-1]
+    assert len(tuning["grid"]["ct_sigma_a"]) == len(IMM_SEARCH_GRIDS["ct_sigma_a"]) + MAX_EXTENSIONS
 
 
 def test_tune_imm_writes_an_interior_selection_with_no_edge_axes(monkeypatch, tmp_path):
-    out = _tune(monkeypatch, tmp_path, lambda kwargs: (kwargs["ct_sigma_a"] - 0.3) ** 2)
+    out = _tune(monkeypatch, tmp_path, lambda kwargs: (kwargs["ca_tau"] - 2.0) ** 2)
     tuning = json.loads(out.read_text())
     assert tuning["edge_axes"] == []
     assert {axis: tuning["best"][axis] for axis in IMM_SEARCH_START} == IMM_SEARCH_START
 
 
-def test_search_space_tunes_cv_and_ct_sigma_a_alongside_the_ms12_axes():
+def test_cv_sigma_a_is_pinned_at_the_truth_value_in_every_scored_and_written_candidate(monkeypatch, tmp_path):
+    scored_cv = set()
+    out = _tune(monkeypatch, tmp_path, lambda kwargs: scored_cv.add(kwargs["cv_sigma_a"]) or (kwargs["ca_tau"] - 2.0) ** 2)
+    tuning = json.loads(out.read_text())
+    assert scored_cv == {0.05}
+    assert tuning["best"]["cv_sigma_a"] == 0.05
+    assert "cv_sigma_a" not in tuning["grid"]
+    assert {c["cv_sigma_a"] for c in tuning["all_candidates"]} == {0.05}
+
+
+def test_search_space_tunes_ct_sigma_a_alongside_the_ms12_axes():
     """MS-12 initial grids; edge axes extend past them at run time."""
     assert IMM_SEARCH_GRIDS == {
         "p_stay": [0.95, 0.97, 0.99, 0.995, 0.998],
         "omega_ct_deg": [15.0, 20.0, 25.0, 30.0, 40.0],
         "ca_sigma_a": [1.0, 2.0, 4.0],
         "ca_tau": [1.0, 2.0, 4.0],
-        "cv_sigma_a": [0.02, 0.05, 0.1],
         "ct_sigma_a": [0.1, 0.3, 1.0],
     }
     assert IMM_SEARCH_START == {
-        "p_stay": 0.99, "omega_ct_deg": 25.0, "ca_sigma_a": 2.0, "ca_tau": 2.0, "cv_sigma_a": 0.05, "ct_sigma_a": 0.3,
+        "p_stay": 0.99, "omega_ct_deg": 25.0, "ca_sigma_a": 2.0, "ca_tau": 2.0, "ct_sigma_a": 0.3,
     }
 
 

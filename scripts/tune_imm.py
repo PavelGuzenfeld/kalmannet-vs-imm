@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from filters.imm import IMM
-from filters.imm_tuning import IMM_SEARCH_GRIDS, IMM_SEARCH_START, coordinate_search, edge_axes
+from filters.imm_tuning import IMM_PINNED, IMM_SEARCH_GRIDS, IMM_SEARCH_START, coordinate_search, edge_axes
 from filters.plot_data import imm_kwargs_from_tuning
 
 MAX_EXTENSIONS_PER_AXIS = 3
@@ -68,7 +68,7 @@ def main():
     search_states, search_meas = val_states[: args.n_search], val_meas[: args.n_search]
 
     def score(candidate):
-        rmse = run_imm(search_states, search_meas, dt, R, **imm_kwargs_from_tuning(candidate))
+        rmse = run_imm(search_states, search_meas, dt, R, **imm_kwargs_from_tuning({**IMM_PINNED, **candidate}))
         print(f"  {candidate} -> {rmse:.3f} m", flush=True)
         return rmse
 
@@ -79,14 +79,14 @@ def main():
     on_edge = edge_axes(grids, best)
     if on_edge and not args.allow_edge_selection:
         raise SystemExit(f"selection sits on a grid edge on axes {on_edge}: {best}")
-    best ={**best, "val_pos_rmse": evaluated[tuple(sorted(best.items()))]}
+    best = {**IMM_PINNED, **best, "val_pos_rmse": evaluated[tuple(sorted(best.items()))]}
     print(f"best (search subset): {best}")
 
     full_rmse = run_imm(val_states, val_meas, dt, R, **imm_kwargs_from_tuning(best))
     print(f"best config, full val set ({val_states.shape[0]} traj) RMSE: {full_rmse:.2f} m")
 
     results = sorted(
-        ({**dict(key), "val_pos_rmse": rmse} for key, rmse in evaluated.items()), key=lambda r: r["val_pos_rmse"]
+        ({**IMM_PINNED, **dict(key), "val_pos_rmse": rmse} for key, rmse in evaluated.items()), key=lambda r: r["val_pos_rmse"]
     )
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
