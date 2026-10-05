@@ -107,9 +107,10 @@ def test_ukf_handles_target_crossing_the_azimuth_wrap_boundary():
 def test_ukf_range_innovation_variance_includes_process_noise_in_measurement_sigma_points():
     """MS-9/MS-32. At (1000, 0, 0) range is px to first order, so S[range] must equal
     (F P F^T + Q)[px, px] + R[range]. rtol 1e-6 covers the O(sigma^2 / r) curvature of
-    range at the sigma points."""
+    range at the sigma points. dt = 5 tau keeps van Loan clear of the e^(dt/tau) cancellation that
+    made dt = 20 tau CPU-dependent on CI."""
     R = Regime(name="range_axis", T=1).R()
-    dt_long, sigma_a_large = 1.0, 5.0
+    dt_long, sigma_a_large = 0.25, 20.0
     ukf = UKF(dt_long, R, sigma_a=sigma_a_large)
     x = np.zeros(STATE_DIM)
     x[0] = 1000.0
