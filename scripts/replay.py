@@ -30,6 +30,7 @@ from scripts.eval_knet import _INIT_OFFSET, _priors
 from scripts.eval_rkn import evaluate_dataset as rkn_errors_and_nees
 
 FLAGS = ("track_loss", "overconfidence", "raw_error")
+UNGATED_REASONS = {("RKN", "track_loss"): "RKN defines no innovation covariance"}
 RKN_LAYER_MULTS = {"fc1_mult": 3, "hidden_mult": 3, "fc2_mult": 4}
 SEED_SCENARIO_SEED = 8
 SEED_BREAK_TURN_BANK_STEPS = 23
@@ -104,9 +105,10 @@ def replay(scenario, imm_tuning, knet_checkpoint, rkn_checkpoint):
     return out
 
 
-def shown(trips, flag):
+def shown(name, trips, flag):
     if flag not in trips:
-        return "n/a"
+        reason = UNGATED_REASONS.get((name, flag))
+        return f"n/a ({reason})" if reason else "n/a"
     return "-" if trips[flag] is None else str(trips[flag])
 
 
@@ -125,7 +127,7 @@ def main():
         if isinstance(trips, str):
             print(f"{name}: {trips}")
         else:
-            print(f"{name}: " + " ".join(f"{flag}={shown(trips, flag)}" for flag in FLAGS))
+            print(f"{name}: " + " ".join(f"{flag}={shown(name, trips, flag)}" for flag in FLAGS))
 
     if args.record:
         scenario["tripped"] = {name: trips for name, trips in results.items() if not isinstance(trips, str)}

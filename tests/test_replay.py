@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -131,7 +132,18 @@ def test_zero_gain_kalmannet_trips_raw_error_where_cv_dead_reckoning_leaves_20_m
     lines = replay(SEED_SCENARIO, "--imm-tuning", imm_tuning, "--knet-checkpoint", knet, "--rkn-checkpoint", rkn)
 
     assert lines["KalmanNet"] == f"KalmanNet: track_loss=n/a overconfidence=n/a raw_error={expected_step}"
-    assert lines["RKN"].startswith("RKN: track_loss=n/a overconfidence=")
+
+
+def test_rkn_track_loss_reads_n_a_with_the_reason_it_has_no_innovation_gate(tmp_path):
+    """MS-10: RKN learns its gain and covariance, never an innovation covariance, so it gets no gate (#2 decision 51)."""
+    rkn, missing = tmp_path / "rkn.pt", tmp_path / "missing"
+    torch.save(RKNGainCovNetwork(fc1_mult=3, hidden_mult=3, fc2_mult=4).double().state_dict(), rkn)
+
+    lines = replay(SEED_SCENARIO, "--imm-tuning", missing, "--knet-checkpoint", missing, "--rkn-checkpoint", rkn)
+
+    rkn_line = re.fullmatch(r"RKN: track_loss=(.*) overconfidence=(-|\d+) raw_error=(-|\d+)", lines["RKN"])
+    assert rkn_line is not None, lines["RKN"]
+    assert rkn_line[1] == "n/a (RKN defines no innovation covariance)"
 
 
 def test_eval_reports_the_committed_scenarios_as_their_own_regime(imm_tuning, tmp_path, monkeypatch):
