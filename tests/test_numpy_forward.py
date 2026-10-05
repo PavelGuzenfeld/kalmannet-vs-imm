@@ -17,7 +17,15 @@ from filters.knet.rkn_network import RKNGainCovNetwork
 from filters.motion_models import cv_model
 from filters.state import STATE_DIM
 from scripts.eval_knet import _INIT_OFFSET, _priors
-from scripts.replay import RKN_LAYER_MULTS, error_and_nees, numpy_weights, rkn_run, rkn_run_numpy
+from scripts.replay import (
+    RKN_LAYER_MULTS,
+    error_and_nees,
+    knet_errors,
+    knet_errors_numpy,
+    numpy_weights,
+    rkn_run,
+    rkn_run_numpy,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 SEED_SCENARIO = REPO / "data" / "scenarios" / "break_turn_9g.json"
@@ -153,6 +161,7 @@ def test_replay_numpy_backend_prints_the_torch_backend_learned_filter_flags(tmp_
     torch_lines = learned_lines("torch")
 
     assert learned_lines("numpy") == torch_lines
+    assert [line.split(":")[0] for line in torch_lines] == ["KalmanNet", "RKN"]
     assert all("raw_error=" in line for line in torch_lines)
 
 
@@ -176,6 +185,7 @@ def test_replay_numpy_rkn_errors_and_nees_match_the_torch_backend_from_the_same_
     numpy_err, numpy_nees = rkn_run_numpy(checkpoint, states, z)
 
     np.testing.assert_allclose(numpy_err, torch_err, rtol=0.0, atol=SEQUENCE_ATOL_STATE)
+    assert np.all(np.isfinite(numpy_nees))
     np.testing.assert_allclose(numpy_nees, torch_nees, rtol=SEQUENCE_RTOL_NEES, atol=0.0)
 
 
@@ -187,3 +197,17 @@ def test_diverged_rkn_estimate_reads_a_signed_bounded_error_and_singular_p_a_hug
 
     np.testing.assert_array_equal(e[:3], [1e5, -1e5, 1e5])
     assert nees == 1e10
+
+
+def test_replay_numpy_kalmannet_errors_match_the_torch_backend_from_the_same_start(flight, tmp_path):
+    """MS-10: both backends start KalmanNet from x0 + offset and the same Q, Sigma, S hidden priors.
+    Same float64 drift budget as the filter-level comparison: atol 1e-10."""
+    states, z = flight
+    checkpoint = tmp_path / "knet.pt"
+    torch.save(knet_stand_in().state_dict(), checkpoint)
+
+    torch_err = knet_errors(checkpoint, states, z, NOMINAL.R())
+    numpy_err = knet_errors_numpy(checkpoint, states, z, NOMINAL.R())
+
+    assert np.all(np.isfinite(numpy_err))
+    np.testing.assert_allclose(numpy_err, torch_err, rtol=0.0, atol=SEQUENCE_ATOL_STATE)
