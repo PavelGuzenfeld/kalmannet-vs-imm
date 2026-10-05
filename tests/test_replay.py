@@ -24,6 +24,7 @@ IMM_CONSTRUCTOR_DEFAULTS = {"omega_ct_deg": 15.0, "p_stay": 0.97, "ca_sigma_a": 
 FLAGS = ("track_loss", "overconfidence", "raw_error")
 KNET_INIT_OFFSET = np.array([2.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 BURN_IN = 20
+BREAK_TURN_START_STEP, BREAK_TURN_END_STEP = 50, 50 + 23 + 150
 
 
 @pytest.fixture
@@ -62,7 +63,21 @@ def test_record_rewrites_the_committed_seed_scenario_and_the_flags_it_tripped(tm
     replay_main()
 
     assert recorded.read_text().endswith("}\n")
-    assert json.loads(recorded.read_text()) == {**json.loads(SEED_SCENARIO.read_text()), "git_tag": "recorded-sha"}
+    committed = json.loads(SEED_SCENARIO.read_text())
+    assert set(committed) == {"controls", "seed", "envelope", "noise_regime", "thresholds", "git_tag", "tripped"}
+    assert json.loads(recorded.read_text()) == {**committed, "git_tag": "recorded-sha"}
+
+
+def test_replay_trips_on_the_scenario_recorded_thresholds_not_the_defaults(tmp_path):
+    """MS-11: same flight, same nominal R; only the recorded raw-error limit differs."""
+    scenario = json.loads(SEED_SCENARIO.read_text())
+    scenario["thresholds"]["raw_error_m"] = 1e9
+    loose, missing = tmp_path / "loose.json", tmp_path / "missing"
+    loose.write_text(json.dumps(scenario))
+
+    lines = replay(loose, "--imm-tuning", missing, "--knet-checkpoint", missing, "--rkn-checkpoint", missing)
+
+    assert lines["EKF"].endswith(" raw_error=-")
 
 
 def test_replay_prints_the_recorded_first_trip_step_of_every_flag_per_filter(imm_tuning, tmp_path):
@@ -75,7 +90,7 @@ def test_replay_prints_the_recorded_first_trip_step_of_every_flag_per_filter(imm
     )
 
     assert set(lines) == {"EKF", "UKF", "IMM", "KalmanNet", "RKN"}
-    assert scenario["tripped"]["EKF"]["track_loss"] is not None
+    assert BREAK_TURN_START_STEP < scenario["tripped"]["EKF"]["track_loss"] < BREAK_TURN_END_STEP
     for name, trips in scenario["tripped"].items():
         assert lines[name] == f"{name}: " + " ".join(f"{flag}={shown(trips[flag])}" for flag in FLAGS)
     assert all(f"{flag}=" in lines["IMM"] for flag in FLAGS)

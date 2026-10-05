@@ -3,7 +3,7 @@ from dataclasses import asdict
 import numpy as np
 
 from data.config import NOMINAL, Regime
-from data.fixed_wing import DEFAULT_PRESET, PRESETS
+from data.fixed_wing import DEFAULT_PRESET, PRESETS, STANDARD_GRAVITY_M_S2
 from data.trajectory_gen import fly_scenario, generate_ground_truth, measure
 
 
@@ -90,3 +90,17 @@ def test_scenario_measurement_noise_follows_its_named_regime():
     _, z_noisy = fly_scenario(level_scenario(noise_regime="high_noise", steps=400))
     range_m = np.linalg.norm(states[:, 0:3], axis=1)
     assert np.std(z_noisy[:, 2] - range_m) > 2 * np.std(z_nominal[:, 2] - range_m)
+
+
+def test_scenario_flies_its_recorded_envelope_so_a_9_g_command_pulls_that_envelope_max_g():
+    """MS-1, z up. rtol 1e-9: acceleration is a velocity difference over dt, ~1e-12 m/s^2 roundoff at 200 m/s."""
+    scenario = level_scenario(seed=8, steps=1)
+    scenario["envelope"]["max_load_factor"] = 3.0
+    scenario["controls"] = [[0.0, 9.0, 1.0]]
+
+    states, _ = fly_scenario(scenario)
+
+    unit_velocity = states[0, 3:6] / np.linalg.norm(states[0, 3:6])
+    specific_force = states[0, 6:9] + np.array([0.0, 0.0, STANDARD_GRAVITY_M_S2])
+    lift = specific_force - (specific_force @ unit_velocity) * unit_velocity
+    np.testing.assert_allclose(np.linalg.norm(lift), 3.0 * STANDARD_GRAVITY_M_S2, rtol=1e-9)
