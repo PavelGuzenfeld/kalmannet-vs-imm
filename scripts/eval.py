@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from data.trajectory_gen import fly_scenario
 from filters.ekf import EKF
 from filters.imm import IMM
 from filters.metrics import anees_with_bounds, empirical_coverage, fraction_inside_bounds
@@ -85,16 +86,16 @@ def evaluate_dataset(filter_factory, run_fn, states, measurements):
     return {"err": err, "nees": nees, "nis": nis}
 
 
-def summarize_rmse(result):
-    err = result["err"][:, :, _BURN_IN:, :]
+def summarize_rmse(result, burn_in=_BURN_IN):
+    err = result["err"][:, :, burn_in:, :]
     pos_rmse = float(np.sqrt(np.mean(np.sum(err[..., POS] ** 2, axis=-1))))
     vel_rmse = float(np.sqrt(np.mean(np.sum(err[..., VEL] ** 2, axis=-1))))
     return pos_rmse, vel_rmse
 
 
-def summarize_consistency(result, dim=STATE_DIM, meas_dim=3):
-    nees = result["nees"][:, :, _BURN_IN:]  # [N, mc, T']
-    nis = result["nis"][:, :, _BURN_IN:]
+def summarize_consistency(result, dim=STATE_DIM, meas_dim=3, burn_in=_BURN_IN):
+    nees = result["nees"][:, :, burn_in:]  # [N, mc, T']
+    nis = result["nis"][:, :, burn_in:]
     mc = nees.shape[1]
 
     # ANEES: average over the MC axis per (trajectory, step), then test each
@@ -125,6 +126,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", default="datasets")
     ap.add_argument("--imm-tuning", default="results/imm_tuning.json")
+    ap.add_argument("--scenario-dir", default="data/scenarios")
     ap.add_argument("--out", default="results")
     args = ap.parse_args()
 
@@ -198,6 +200,21 @@ def main():
             cons = summarize_consistency(result)
             rows.append({"filter": name, "regime": regime_name, "pos_rmse": pos_rmse, "vel_rmse": vel_rmse, **cons})
             print(f"  {name}: pos_rmse={pos_rmse:.2f}m vel_rmse={vel_rmse:.2f}m/s frac_in_95={cons['anees_fraction_inside_95']:.3f}")
+
+    flights = [fly_scenario(json.loads(p.read_text())) for p in sorted(Path(args.scenario_dir).glob("*.json"))]
+    if flights:
+        print(f"evaluating scenarios regime ({len(flights)} recorded flights, nominal R)...", flush=True)
+        for name, (factory, run_fn) in filters.items():
+            runs = [run_fn(factory(), states, z) for states, z in flights]
+            result = {
+                key: np.concatenate([run[i][_BURN_IN:] for run in runs])[None, None]
+                for i, key in enumerate(("err", "nees", "nis"))
+            }
+            pos_rmse, vel_rmse = summarize_rmse(result, burn_in=0)
+            cons = summarize_consistency(result, burn_in=0)
+            rows.append({"filter": name, "regime": "scenarios", "pos_rmse": pos_rmse, "vel_rmse": vel_rmse, **cons})
+            print(f"  {name}: pos_rmse={pos_rmse:.2f}m vel_rmse={vel_rmse:.2f}m/s "
+                  f"frac_in_95={cons['anees_fraction_inside_95']:.3f}")
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

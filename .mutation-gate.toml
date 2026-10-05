@@ -41,3 +41,7 @@ reason = "Layer 5 harness (NEES/NIS/RMSE), evaluates the model and is not it"
 [[model_exclude]]
 path = "filters/plot_data.py"
 reason = "arranges results for plotting; `sigma` here is a column label"
+
+[[model_exclude]]
+path = "filters/flags.py"
+reason = "Layer 5 harness: scenario flag thresholds over NIS, NEES and position error; evaluates the model and is not it"
