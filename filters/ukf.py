@@ -41,7 +41,7 @@ class UKF:
         x_pred = self.Wm @ pts_pred
         diff = pts_pred - x_pred
         P_pred = (diff.T * self.Wc) @ diff + self.Q
-        return x_pred, P_pred, pts_pred
+        return x_pred, P_pred, self._sigma_points(x_pred, P_pred)
 
     def update(self, x_pred, P_pred, pts_pred, z):
         Z = np.array([h(p) for p in pts_pred])
