@@ -28,7 +28,9 @@ def h_torch(x):
         overhead, torch.zeros_like(rho2), torch.sqrt(torch.where(overhead, torch.ones_like(rho2), rho2))
     )
     r = torch.sqrt(rho2 + pz * pz)
-    az = torch.atan2(py, torch.where(overhead, torch.ones_like(px), px))
+    az = torch.where(
+        overhead, torch.zeros_like(px), torch.atan2(py, torch.where(overhead, torch.ones_like(px), px))
+    )
     el = torch.atan2(pz, rho)
     return torch.stack([az, el, r], dim=-1)
 

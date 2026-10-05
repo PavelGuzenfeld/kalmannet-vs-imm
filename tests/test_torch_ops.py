@@ -38,9 +38,10 @@ def _h_both_at(px, py, pz):
 
 def test_h_torch_equals_numpy_directly_overhead():
     """MS-23: overhead, azimuth reads 0, elevation pi/2 and range |pz|, with no rho floor in either path."""
-    z_np, z_torch = _h_both_at(0.0, 0.0, 300.0)
-    assert np.array_equal(z_torch, z_np)
-    assert np.array_equal(z_torch, [0.0, np.pi / 2, 300.0])
+    for pz in (300.0, -300.0):
+        z_np, z_torch = _h_both_at(0.0, 0.0, pz)
+        assert np.array_equal(z_torch, z_np)
+        assert np.array_equal(z_torch, [0.0, np.copysign(np.pi / 2, pz), 300.0])
 
 
 def test_h_torch_range_equals_numpy_inside_one_millimetre_of_the_z_axis():
@@ -66,12 +67,15 @@ def test_h_torch_equals_numpy_at_and_above_the_old_floor():
 
 
 def test_h_torch_gradient_is_finite_directly_overhead():
-    """MS-23: KalmanNet backpropagates through h at rho = 0, so azimuth, elevation and range stay finite."""
+    """MS-23: KalmanNet backpropagates through h at rho = 0. Only d(range)/d(pz) = 1 survives there,
+    matching the zero horizontal columns of H_jacobian overhead."""
     x = torch.zeros(STATE_DIM, dtype=torch.float64, requires_grad=True)
     with torch.no_grad():
         x[2] = 300.0
     h_torch(x).sum().backward()
-    assert torch.isfinite(x.grad).all()
+    expected = torch.zeros(STATE_DIM, dtype=torch.float64)
+    expected[2] = 1.0
+    assert torch.equal(x.grad, expected)
 
 
 def test_innovation_torch_matches_numpy_including_wrap_boundary():
