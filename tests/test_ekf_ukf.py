@@ -5,6 +5,7 @@ from data.trajectory_gen import measure
 from filters.ekf import EKF
 from filters.measurement_model import h
 from filters.motion_models import cv_model, step
+from filters.measurement_model import h
 from filters.ukf import UKF
 from filters.state import STATE_DIM
 
@@ -107,7 +108,7 @@ def test_ukf_handles_target_crossing_the_azimuth_wrap_boundary():
 def test_ukf_range_innovation_variance_includes_process_noise_in_measurement_sigma_points():
     """MS-9/MS-32. At (1000, 0, 0) range is px to first order, so S[range] must equal
     (F P F^T + Q)[px, px] + R[range]. rtol 1e-6 covers the O(sigma^2 / r) curvature of
-    range and the cancellation error of alpha = 1e-3 sigma-point weights."""
+    range at the sigma points."""
     R = Regime(name="range_axis", T=1).R()
     dt_long, sigma_a_large = 1.0, 5.0
     ukf = UKF(dt_long, R, sigma_a=sigma_a_large)
@@ -122,3 +123,42 @@ def test_ukf_range_innovation_variance_includes_process_noise_in_measurement_sig
     _, _, _, S = ukf.update(x_pred, P_pred, pts_pred, h(x_pred))
 
     assert np.isclose(S[2, 2], P_pred_expected[0, 0] + R[2, 2], rtol=1e-6, atol=0.0)
+
+
+LINE_OF_SIGHT_RANGE_M = 100.0
+CROSS_RANGE_SIGMA_M = 10.0
+CROSS_RANGE_AXES = 2
+WEIGHT_PER_SIGMA_POINT = 1.0 / (2 * STATE_DIM)
+FLOAT_TOLERANCE_M = 1e-9
+
+
+def _predicted_range_offset(update):
+    x = np.zeros(STATE_DIM)
+    x[0] = LINE_OF_SIGHT_RANGE_M
+    P = np.zeros((STATE_DIM, STATE_DIM))
+    P[1, 1] = P[2, 2] = CROSS_RANGE_SIGMA_M**2
+    y = update(x, P, h(x))[2]
+    return -y[2]
+
+
+def test_ukf_predicted_range_sits_at_alpha_one_sigma_points_ms9_ms31():
+    """MS-9/MS-31. alpha = 1, kappa = 0 gives lambda = 0: the 4 cross-range points sit at
+    +-3 sigma with weight 1/18 each, so the range bias is 4/18 (sqrt(r^2 + 9 s^2) - r) = 0.978 m,
+    not the 1.0 m second-order r + s^2/r. Tolerance is the 1e-12 jitter on P plus float rounding."""
+    ukf = UKF(0.1, np.eye(3))
+    spread_m = STATE_DIM**0.5 * CROSS_RANGE_SIGMA_M
+    offset_at_spread = np.hypot(LINE_OF_SIGHT_RANGE_M, spread_m) - LINE_OF_SIGHT_RANGE_M
+    expected = 2 * CROSS_RANGE_AXES * WEIGHT_PER_SIGMA_POINT * offset_at_spread
+    bias = _predicted_range_offset(lambda x, P, z: ukf.update(x, P, ukf._sigma_points(x, P), z))
+    assert abs(bias - expected) < FLOAT_TOLERANCE_M
+
+
+def test_ekf_predicted_range_omits_second_order_bias_ms9():
+    """MS-9. The EKF mean is h(x), so the second-order range bias is exactly zero."""
+    assert _predicted_range_offset(EKF(0.1, np.eye(3)).update) == 0.0
+
+
+def test_ukf_default_process_noise_matches_ekf_defaults_ms9():
+    """MS-9. EKF and UKF run the same CV model, so their default Q must be identical."""
+    dt = 0.1
+    assert np.array_equal(UKF(dt, np.eye(3)).Q, EKF(dt, np.eye(3)).Q)
