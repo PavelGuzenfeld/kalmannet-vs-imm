@@ -66,21 +66,6 @@ def test_ekf_tracks_cv_trajectory_with_bounded_error_and_valid_covariance():
         assert np.all(np.linalg.eigvalsh(P) > -1e-8)
 
 
-def test_ukf_matches_ekf_closely_on_mildly_nonlinear_case():
-    regime = Regime(name="cv_only2", T=150)
-    states = _pure_cv_trajectory(np.random.default_rng(5), regime, regime.T)
-    z = measure(np.random.default_rng(6), states, regime)
-
-    ekf = EKF(regime.dt, regime.R())
-    ukf = UKF(regime.dt, regime.R())
-    xs_ekf, _, _, _ = _run_filter(ekf, states, z)
-    xs_ukf, Ps_ukf, _, _ = _run_filter(ukf, states, z)
-
-    assert np.allclose(xs_ekf[-1, :3], xs_ukf[-1, :3], atol=5.0)
-    for P in Ps_ukf:
-        assert np.allclose(P, P.T, atol=1e-4)
-
-
 def test_ukf_handles_target_crossing_the_azimuth_wrap_boundary():
     """Construct sigma points that straddle +-pi and confirm the UKF's
     circular-mean measurement update doesn't diverge."""
@@ -162,3 +147,51 @@ def test_ukf_default_process_noise_matches_ekf_defaults_ms9():
     """MS-9. EKF and UKF run the same CV model, so their default Q must be identical."""
     dt = 0.1
     assert np.array_equal(UKF(dt, np.eye(3)).Q, EKF(dt, np.eye(3)).Q)
+
+
+UKF_ALPHA = 1.0
+UKF_BETA = 2.0
+UKF_LAMBDA = 0.0
+WC0_FROM_MS9 = UKF_LAMBDA / (STATE_DIM + UKF_LAMBDA) + 1 - UKF_ALPHA**2 + UKF_BETA
+NEAR_LINEAR_RANGE_M = 3000.0
+NEAR_LINEAR_SIGMA_M = 1.0
+
+
+def test_ukf_zeroth_covariance_weight_carries_beta_ms9():
+    """MS-9. alpha = 1, kappa = 0 gives lambda = 0, so Wc[0] = 0 + 1 - 1 + beta = 2 exactly."""
+    assert WC0_FROM_MS9 == 2.0
+    assert UKF(0.1, np.eye(3)).Wc[0] == WC0_FROM_MS9
+
+
+def _ukf_and_ekf_posteriors(range_m, cross_range_sigma_m):
+    x = np.zeros(STATE_DIM)
+    x[0] = range_m
+    P = np.diag([cross_range_sigma_m**2] * 3 + [1e-6] * 3 + [1e-8] * 3)
+    R = Regime(name="posterior_pair", T=1).R()
+    ukf = UKF(0.1, R)
+    ukf_post = ukf.update(x, P, ukf._sigma_points(x, P), h(x))
+    ekf_post = EKF(0.1, R).update(x, P, h(x))
+    return ukf_post, ekf_post
+
+
+def _range_bias_m(range_m, cross_range_sigma_m):
+    spread_m = STATE_DIM**0.5 * cross_range_sigma_m
+    return 2 * CROSS_RANGE_AXES * WEIGHT_PER_SIGMA_POINT * (np.hypot(range_m, spread_m) - range_m)
+
+
+def test_ukf_agrees_with_ekf_within_range_bias_when_measurement_is_near_linear_ms9():
+    """MS-9. At 3 km with 1 m position sigma the only UKF-EKF gap is the second-order range
+    bias (3.3e-4 m); the gain is below 1, so the posterior position gap is bounded by it."""
+    (x_ukf, P_ukf, _, _), (x_ekf, _, _, _) = _ukf_and_ekf_posteriors(NEAR_LINEAR_RANGE_M, NEAR_LINEAR_SIGMA_M)
+    bound_m = _range_bias_m(NEAR_LINEAR_RANGE_M, NEAR_LINEAR_SIGMA_M)
+    assert np.max(np.abs(x_ukf[:3] - x_ekf[:3])) < bound_m
+    assert np.allclose(P_ukf, P_ukf.T, atol=1e-9)
+
+
+def test_ukf_posterior_differs_from_ekf_by_gain_times_range_bias_when_measurement_is_curved_ms9():
+    """MS-9. At 100 m with 10 m sigma the UKF innovation is -bias on range only, so the
+    px posterior gap is K[px, range] * bias with Pxz[px, range] = sigma^2. Tolerance as FLOAT_TOLERANCE_M."""
+    (x_ukf, _, _, S), (x_ekf, _, _, _) = _ukf_and_ekf_posteriors(LINE_OF_SIGHT_RANGE_M, CROSS_RANGE_SIGMA_M)
+    gain_px_range = CROSS_RANGE_SIGMA_M**2 * np.linalg.inv(S)[2, 2]
+    expected_gap_m = -gain_px_range * _range_bias_m(LINE_OF_SIGHT_RANGE_M, CROSS_RANGE_SIGMA_M)
+    assert abs((x_ukf[0] - x_ekf[0]) - expected_gap_m) < FLOAT_TOLERANCE_M
