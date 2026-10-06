@@ -1,10 +1,12 @@
+import math
+
 import numpy as np
 import torch
 
 from filters.knet.rkn_network import RKNGainCovNetwork, normalise_groups
 from filters.knet.rkn_filter import RKNFilter
 from filters.torch_ops import CVMotionModel, H_jacobian_torch, h_torch
-from filters.measurement_model import h, wrap_angle
+from filters.measurement_model import HORIZONTAL_RANGE_FLOOR_M, h, wrap_angle
 from filters.state import STATE_DIM
 from scripts.train_rkn import _gaussian_nll
 
@@ -480,13 +482,24 @@ def test_hidden_state_is_threaded_between_steps():
 
 
 MIRROR_X_Y = torch.tensor([-1.0, -1.0, 1.0] * 3, dtype=torch.float64)
-MIRROR_H_COLUMNS = MIRROR_X_Y.repeat(3)
 FEATURE_DIM = 42
 FEATURE_SLICES = {"H": slice(6, 33), "correction": slice(33, 42)}
-MIRROR_ROUNDING_ATOL = 1e-15
-MIRROR_GAIN_FLOOR = 1e-6
+MIRROR_FEATURE_ATOL = 1e-13
+MIRROR_GAIN_RTOL = 2e-15
 MIRROR_WEIGHT_SCALE = 0.1
+MIRROR_STEPS = 4
+MIRROR_NOISE = torch.tensor([0.003, 0.004, 9.0], dtype=torch.float64)
 RUNAWAY_FEATURE_SCALE = 1e17
+LOS_TEST_RANGE_M = 1024.0
+FAR_RANGE_M = 2.0**20
+LEVEL_POSITION_M = (700.0, -120.0, 60.0)
+ELEVATED_POSITION_M = (300.0, -400.0, 1200.0)
+LOOP_GAIN_ATOL = 4e-14
+UNDER_FLOOR_RHO_M = 5e-4
+ABOVE_FLOOR_RHO_M = 2.0**-9
+ABOVE_FLOOR_RTOL = 1e-14
+UNDER_FLOOR_RANGE_RTOL = 1e-12
+UNIT_FEATURE_ATOL = 1e-15
 
 
 def _exact_raw_features():
@@ -530,11 +543,6 @@ def test_gain_features_unit_normalise_each_group_keeping_signs_and_leave_a_zero_
     assert torch.equal(normalise_groups(_exact_raw_features()), _exact_gain_features())
 
 
-def test_gain_network_reads_the_signed_normalised_features():
-    """MS-10, #70: rnn_K must see the sign of each feature, or a mirrored geometry gets the same gain."""
-    assert torch.equal(_branch_inputs(_exact_raw_features())["K"], _exact_gain_features())
-
-
 def _feature_groups(features):
     return features[0].split((3, 3, 27, 9))
 
@@ -566,40 +574,192 @@ def test_runaway_state_reaches_rnn_cov_with_the_ratios_of_the_same_state_at_unit
     assert torch.allclose(runaway, _branch_inputs(raw)["cov"], rtol=0, atol=1e-16)
 
 
-def _mirror_step(mirror):
-    """One step on a geometry, or its mirror through the z axis: x,y negated, azimuth shifted by pi."""
+def _mirror_run(mirror, position=LEVEL_POSITION_M):
+    """MIRROR_STEPS steps on a geometry, or its mirror through the z axis: x,y negated, azimuth shifted by pi."""
     x0 = torch.zeros(1, STATE_DIM, dtype=torch.float64)
-    x0[0, :3] = torch.tensor([700.0, -120.0, 60.0], dtype=torch.float64)
+    x0[0, :3] = torch.tensor(position, dtype=torch.float64)
     x0[0, 3:6] = torch.tensor([25.0, -40.0, 8.0], dtype=torch.float64)
-    z = h_torch(CVMotionModel(0.02)(x0)) + torch.tensor([0.003, 0.004, 9.0], dtype=torch.float64)
+    f = CVMotionModel(0.02)
+    truth, measurements = x0, []
+    for step in range(MIRROR_STEPS):
+        truth = f(truth)
+        measurements.append(h_torch(truth) + MIRROR_NOISE * (-1.0) ** step)
     if mirror:
         x0 = x0 * MIRROR_X_Y
-        z[0, 0] = wrap_angle(z[0, 0] + torch.pi)
+        for z in measurements:
+            z[0, 0] = wrap_angle(z[0, 0] + torch.pi)
     torch.manual_seed(5)
     net = RKNGainCovNetwork(fc1_mult=1, hidden_mult=1, fc2_mult=1).double()
     for parameter in net.parameters():
         torch.nn.init.uniform_(parameter, -MIRROR_WEIGHT_SCALE, MIRROR_WEIGHT_SCALE)
-    seen = {}
-    net.rnn_K.register_forward_pre_hook(_record_input(seen, "features"))
-    net.register_forward_hook(lambda _, args, out: seen.update(K=out[0]))
+    seen = {"features": [], "K": []}
+    net.rnn_K.register_forward_pre_hook(lambda _, args: seen["features"].append(args[0]))
+    net.register_forward_hook(lambda _, args, out: seen["K"].append(out[0]))
     flt = RKNFilter(net, dt=0.02)
     flt.init_sequence(x0, _p0(1))
     with torch.no_grad():
-        flt.step(z)
+        for z in measurements:
+            flt.step(z)
     return seen
 
 
-def test_mirrored_geometry_flips_the_x_y_signs_of_the_gain_input():
-    """MS-10, #70: a mirror through the z axis negates H's x,y columns and the correction's x,y entries.
-    Squared, both geometries fed rnn_K the same vector. az + pi rounds h(): measured 4.9e-17, atol ~20x."""
-    flipped = _mirror_step(False)["features"].clone()
-    flipped[0, FEATURE_SLICES["H"]] *= MIRROR_H_COLUMNS
-    flipped[0, FEATURE_SLICES["correction"]] *= MIRROR_X_Y
-    assert torch.allclose(_mirror_step(True)["features"], flipped, rtol=0, atol=MIRROR_ROUNDING_ATOL)
+def test_mirrored_geometry_feeds_rnn_K_the_same_input():
+    """MS-37, #85: in the line-of-sight frame H and the correction no longer flip sign under the mirror, so
+    the gain network cannot tell the two apart. az + pi rounds h(), and the correction x - x_prior cancels the
+    700 m state: measured 1.2e-14 by step 4, atol 1e-13 is about one ulp of that state."""
+    original, mirrored = _mirror_run(False)["features"], _mirror_run(True)["features"]
+    for step in range(MIRROR_STEPS):
+        assert torch.allclose(mirrored[step], original[step], rtol=0, atol=MIRROR_FEATURE_ATOL)
 
 
-def test_mirrored_geometry_gets_a_different_gain():
-    """MS-10, #70: squared features gave both the same K to rounding (0 here); signed, they differ by 1.3e-3.
-    Equivariance K' = diag(mirror) K is a training outcome, not a property of untrained weights."""
-    K, K_mirror = _mirror_step(False)["K"], _mirror_step(True)["K"]
-    assert (K - K_mirror).abs().max() > MIRROR_GAIN_FLOOR
+def test_mirrored_geometry_gets_the_mirrored_gain_at_every_step():
+    """MS-37, #85: K' = diag(mirror) K by construction, untrained weights included (#84 trained: |K' - MK|/|K|
+    median 1.0). Only az + pi rounding separates the runs: measured 2.7e-16 of max|K| by step 4, rtol 2e-15 ~7x."""
+    original, mirrored = _mirror_run(False)["K"], _mirror_run(True)["K"]
+    for step in range(MIRROR_STEPS):
+        expected = MIRROR_X_Y.view(1, STATE_DIM, 1) * original[step]
+        assert original[step].abs().max() > 0.0
+        assert (mirrored[step] - expected).abs().max() <= MIRROR_GAIN_RTOL * original[step].abs().max()
+
+
+def test_mirrored_elevated_geometry_gets_the_mirrored_gain_at_every_step():
+    """MS-37, #85: 67 deg up, horizontal and slant range differ (500 m vs 1300 m) and u_el leans on x,y; the
+    mirror still gives K' = diag(mirror) K. Measured 1.4e-16 of max|K| by step 4, rtol 2e-15 as on the level run."""
+    original = _mirror_run(False, ELEVATED_POSITION_M)["K"]
+    mirrored = _mirror_run(True, ELEVATED_POSITION_M)["K"]
+    for step in range(MIRROR_STEPS):
+        expected = MIRROR_X_Y.view(1, STATE_DIM, 1) * original[step]
+        assert original[step].abs().max() > 0.0
+        assert (mirrored[step] - expected).abs().max() <= MIRROR_GAIN_RTOL * original[step].abs().max()
+
+
+def _features_at(position, correction=None):
+    x = torch.zeros(1, STATE_DIM, dtype=torch.float64)
+    x[0, :3] = torch.tensor(position, dtype=torch.float64)
+    features = torch.zeros(1, FEATURE_DIM, dtype=torch.float64)
+    features[0, FEATURE_SLICES["H"]] = H_jacobian_torch(x).reshape(-1)
+    if correction is not None:
+        features[0, FEATURE_SLICES["correction"]] = torch.tensor(correction, dtype=torch.float64)
+    return features
+
+
+def _los_rotation(position):
+    """Rows u_az, u_el, u_r from the position itself, not from H."""
+    px, py, pz = position
+    rho, r = math.hypot(px, py), math.hypot(px, py, pz)
+    return torch.tensor(
+        [[-py / rho, px / rho, 0.0], [-pz * px / (rho * r), -pz * py / (rho * r), rho / r], [px / r, py / r, pz / r]],
+        dtype=torch.float64,
+    )
+
+
+def _gain_for_los_output(los_gain, features):
+    """rnn_K's last layer zeroed but for its bias, so it emits los_gain exactly whatever the GRU does."""
+    net = RKNGainCovNetwork(fc1_mult=1, hidden_mult=1, fc2_mult=1).double()
+    with torch.no_grad():
+        net.rnn_K.fc2[-1].weight.zero_()
+        net.rnn_K.fc2[-1].bias.copy_(los_gain.reshape(-1))
+        return net(features, net.init_hidden(1, "cpu"))[0][0]
+
+
+def test_gain_network_reads_the_correction_in_the_line_of_sight_frame():
+    """MS-37, #85: on the +x axis the azimuth, elevation and range axes are +y, +z and +x, so a position
+    correction (3, -4, 0) reads (-4, 0, 3), normalised to (-0.8, 0, 0.6). Exact in float64."""
+    correction = [3.0, -4.0, 0.0] + [0.0] * 6
+    seen = _branch_inputs(_features_at([LOS_TEST_RANGE_M, 0.0, 0.0], correction))["K"]
+    expected = torch.tensor([-0.8, 0.0, 0.6] + [0.0] * 6, dtype=torch.float64)
+    assert torch.equal(seen[0, FEATURE_SLICES["correction"]], expected)
+
+
+def test_los_gain_rows_land_on_the_cartesian_axes_of_the_line_of_sight():
+    """MS-37, #85: on the +x axis LOS rows (az, el, range) are Cartesian (y, z, x) in every 3-block, and the
+    angle columns scale by horizontal and slant range (both 1024 m here), the range column by 1. Exact."""
+    los_gain = torch.arange(1.0, STATE_DIM * 3 + 1.0, dtype=torch.float64).view(STATE_DIM, 3)
+    K = _gain_for_los_output(los_gain, _features_at([LOS_TEST_RANGE_M, 0.0, 0.0]))
+    angle_scale = torch.tensor([LOS_TEST_RANGE_M, LOS_TEST_RANGE_M, 1.0], dtype=torch.float64)
+    assert torch.equal(K, los_gain[[2, 0, 1, 5, 3, 4, 8, 6, 7]] * angle_scale)
+
+
+def test_identity_los_gain_fully_corrects_position_whatever_the_range_and_bearing():
+    """MS-37, #85: K H = blockdiag(Rᵀ) N P blockdiag(R), so the error loop depends on N alone. N = I on
+    position must give K H = I on position at 1024 m on +x and at 2^20 m on -y. Exact in float64."""
+    los_gain = torch.zeros(STATE_DIM, 3, dtype=torch.float64)
+    los_gain[:3] = torch.eye(3, dtype=torch.float64)
+    expected = torch.zeros(STATE_DIM, STATE_DIM, dtype=torch.float64)
+    expected[:3, :3] = torch.eye(3, dtype=torch.float64)
+    for position in ([LOS_TEST_RANGE_M, 0.0, 0.0], [0.0, -FAR_RANGE_M, 0.0]):
+        features = _features_at(position)
+        H = features[0, FEATURE_SLICES["H"]].view(3, STATE_DIM)
+        assert torch.equal(_gain_for_los_output(los_gain, features) @ H, expected)
+
+
+def test_target_within_the_horizontal_range_floor_takes_no_angle_correction_and_stays_finite():
+    """MS-37, #85: below rho = 1 mm H floors rho, u_el collapses onto u_r and r²/1e-3 would scale the elevation
+    column (5e10 here). Both angles are undefined there, so both columns are exactly 0, overhead and at 0.5 mm."""
+    los_gain = torch.arange(1.0, STATE_DIM * 3 + 1.0, dtype=torch.float64).view(STATE_DIM, 3)
+    for position in ([0.0, 0.0, LOS_TEST_RANGE_M], [UNDER_FLOOR_RHO_M, 0.0, LOS_TEST_RANGE_M]):
+        K = _gain_for_los_output(los_gain, _features_at(position))
+        assert torch.all(torch.isfinite(K))
+        assert torch.equal(K[:, :2], torch.zeros(STATE_DIM, 2, dtype=torch.float64))
+
+
+def test_target_within_the_horizontal_range_floor_gets_a_range_column_of_n_range_rows_along_u_r():
+    """MS-37, #85: below the floor R keeps only u_r, so each 3-block of K's range column is N[range, range] u_r with
+    no N[el, range] term (that would add 8..26). H's floor adds 1e-6 m² to r², so its range row is 1 - 4.8e-13 long
+    and K's range scale its inverse: measured 4.8e-13 relative, rtol 1e-12."""
+    los_gain = torch.arange(1.0, STATE_DIM * 3 + 1.0, dtype=torch.float64).view(STATE_DIM, 3)
+    for rho in (0.0, UNDER_FLOOR_RHO_M):
+        position = torch.tensor([rho, 0.0, LOS_TEST_RANGE_M], dtype=torch.float64)
+        K = _gain_for_los_output(los_gain, _features_at(position.tolist()))
+        expected = los_gain[2::3, 2].unsqueeze(1) * position / position.norm()
+        assert torch.allclose(K[:, 2].view(3, 3), expected, rtol=UNDER_FLOOR_RANGE_RTOL, atol=0)
+
+
+def test_gain_network_reads_no_angle_components_within_the_horizontal_range_floor():
+    """MS-37, #85: below the floor B keeps only u_r, so vec(H Bᵀ)'s and B·correction's azimuth and elevation
+    entries are exactly 0, the range entries are the correction along u_r (measured 1.1e-16 on unit entries, atol
+    1e-15), and every rnn_K input is finite, overhead and at 0.5 mm."""
+    correction = [3.0, -4.0, 5.0, 1.0, 2.0, -6.0, 0.5, -0.25, 7.0]
+    for position in ([0.0, 0.0, LOS_TEST_RANGE_M], [UNDER_FLOOR_RHO_M, 0.0, LOS_TEST_RANGE_M]):
+        seen = _branch_inputs(_features_at(position, correction))["K"][0]
+        assert torch.all(torch.isfinite(seen))
+        los_H = seen[FEATURE_SLICES["H"]].view(3, 3, 3)
+        los_correction = seen[FEATURE_SLICES["correction"]].view(3, 3)
+        assert torch.equal(los_H[:, :, :2], torch.zeros(3, 3, 2, dtype=torch.float64))
+        assert torch.equal(los_correction[:, :2], torch.zeros(3, 2, dtype=torch.float64))
+        u_r = torch.tensor(position, dtype=torch.float64) / math.hypot(*position)
+        along_u_r = torch.tensor(correction, dtype=torch.float64).view(3, 3) @ u_r
+        assert torch.allclose(los_correction[:, 2], along_u_r / along_u_r.norm(), rtol=0, atol=UNIT_FEATURE_ATOL)
+
+
+def test_angle_columns_at_and_above_the_horizontal_range_floor_scale_by_horizontal_and_slant_range():
+    """MS-37, #85: at rho = 1 mm H's floor is not yet active (azimuth row norm exactly 1000), and at 2 mm R is a
+    rotation: K's angle columns are blockdiag(Rᵀ) N's times rho and r. Measured 2.7e-16 of max, rtol 1e-14."""
+    los_gain = torch.arange(1.0, STATE_DIM * 3 + 1.0, dtype=torch.float64).view(STATE_DIM, 3)
+    for rho in (HORIZONTAL_RANGE_FLOOR_M, ABOVE_FLOOR_RHO_M):
+        position = (rho, 0.0, LOS_TEST_RANGE_M)
+        K = _gain_for_los_output(los_gain, _features_at(list(position)))
+        scale = torch.tensor([rho, math.hypot(rho, LOS_TEST_RANGE_M)], dtype=torch.float64)
+        expected = torch.kron(torch.eye(3, dtype=torch.float64), _los_rotation(position)).T @ los_gain[:, :2] * scale
+        assert torch.allclose(K[:, :2], expected, rtol=ABOVE_FLOOR_RTOL, atol=0)
+
+
+def test_gain_gradients_stay_finite_for_a_target_directly_overhead():
+    """MS-37, #85: the zero azimuth row must not reach 1/norm on the backward pass either."""
+    net = RKNGainCovNetwork(fc1_mult=1, hidden_mult=1, fc2_mult=1).double()
+    features = _features_at([0.0, 0.0, LOS_TEST_RANGE_M]).requires_grad_()
+    net(features, net.init_hidden(1, "cpu"))[0].sum().backward()
+    assert torch.all(torch.isfinite(features.grad))
+    assert all(torch.all(torch.isfinite(p.grad)) for p in net.rnn_K.parameters())
+
+
+def test_non_identity_los_gain_closes_the_position_loop_as_rotated_n_at_an_elevated_off_axis_target():
+    """MS-37, #85: K H = blockdiag(Rᵀ) N R on position and 0 elsewhere, R's rows u_az, u_el, u_r built here
+    from the position, not from H. Entries reach 44; measured 3.6e-15, atol 4e-14 is ~10x."""
+    rotation = _los_rotation(ELEVATED_POSITION_M)
+    los_gain = torch.arange(1.0, STATE_DIM * 3 + 1.0, dtype=torch.float64).view(STATE_DIM, 3)
+    features = _features_at(list(ELEVATED_POSITION_M))
+    H = features[0, FEATURE_SLICES["H"]].view(3, STATE_DIM)
+    expected = torch.zeros(STATE_DIM, STATE_DIM, dtype=torch.float64)
+    expected[:, :3] = torch.kron(torch.eye(3, dtype=torch.float64), rotation).T @ los_gain @ rotation
+    assert torch.allclose(_gain_for_los_output(los_gain, features) @ H, expected, rtol=0, atol=LOOP_GAIN_ATOL)

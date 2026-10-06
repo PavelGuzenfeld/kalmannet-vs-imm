@@ -4,12 +4,13 @@ state_dict as arrays keyed by its own names, read by load_weights from torch_ops
 
 import numpy as np
 
-from filters.measurement_model import H_jacobian, h, innovation, wrap_angle
+from filters.measurement_model import HORIZONTAL_RANGE_FLOOR_M, H_jacobian, h, innovation, wrap_angle
 from filters.motion_models import cv_model
-from filters.state import AZIMUTH, MEAS_DIM, STATE_DIM
+from filters.state import ACC, AZIMUTH, MEAS_DIM, POS, STATE_DIM, VEL
 
 GRU_GATES = 3
 RKN_FEATURE_SPLITS = np.cumsum([MEAS_DIM, MEAS_DIM, STATE_DIM * MEAS_DIM])
+KINEMATIC_BLOCKS = len((POS, VEL, ACC))
 
 
 def load_weights(npz):
@@ -50,6 +51,16 @@ def normalize(v):
 
 def normalise_rkn_groups(features):
     return np.concatenate([normalize(group) for group in np.split(features, RKN_FEATURE_SPLITS)])
+
+
+def los_frame(H):
+    position_rows = H[:, POS]
+    norms = np.linalg.norm(position_rows, axis=1)
+    angles_defined = 0.0 < norms[AZIMUTH] <= 1.0 / HORIZONTAL_RANGE_FLOOR_M
+    measured = np.array([angles_defined, angles_defined, True])
+    metres_per_unit = np.divide(1.0, norms, out=np.zeros_like(norms), where=measured)
+    rotation = np.array([normalize(row) for row in position_rows]) * measured[:, np.newaxis]
+    return np.kron(np.eye(KINEMATIC_BLOCKS), rotation), metres_per_unit
 
 
 def wrap_measurement_diff(diff):
@@ -129,11 +140,16 @@ class RKNGainCovNetwork:
 
     def forward(self, features, hidden):
         h_K, h_cov = hidden
-        K_flat, h_K = self.rnn_K.forward(normalise_rkn_groups(features), h_K)
+        y, z_diff, H_flat, correction = np.split(features, RKN_FEATURE_SPLITS)
+        H = H_flat.reshape(self.n, self.m)
+        blocks, metres_per_unit = los_frame(H)
+        los_features = np.concatenate([y, z_diff, (H @ blocks.T).flatten(), blocks @ correction])
+        los_gain, h_K = self.rnn_K.forward(normalise_rkn_groups(los_features), h_K)
         C, h_cov = self.rnn_cov.forward(normalise_rkn_groups(features**2), h_cov)
         L = np.zeros((self.m, self.m))
         L[self._tril] = C
-        return K_flat.reshape(self.m, self.n), L, (h_K, h_cov)
+        K = blocks.T @ los_gain.reshape(self.m, self.n) * metres_per_unit
+        return K, L, (h_K, h_cov)
 
 
 class RKNFilter:

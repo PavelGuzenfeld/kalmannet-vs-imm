@@ -170,3 +170,13 @@ column = 22
 old = """7"""
 new = """8"""
 reason = "The seed only has to give weights that run KalmanNet away with a finite estimate on break_turn_9g; seed 8 does too, so this mutant meets the same requirement and no test should pin the exact seed."
+
+[[waiver]]
+file = "filters/knet/rkn_network.py"
+line = 55
+column = 96
+old = "-1"
+new = "1"
+reason = """`torch.cat(..., dim=-1)` of three [batch, 1] masks into los_frame's [batch, 3]
+measured mask: on 2-D tensors dim=-1 and dim=1 are the same axis, so this mutant is
+equivalent and no test can tell them apart."""
