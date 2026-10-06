@@ -72,11 +72,15 @@ def test_trace_has_one_readout_per_control_and_ends_on_the_page_frame_readouts(c
     assert steps[-1] == flight.frame()["filters"]
 
 
-def test_max_abs_difference_takes_the_largest_component_gap_over_all_steps():
-    native = [{"EKF": {"estimate_m": [0.0, 0.0, 0.0]}}, {"EKF": {"estimate_m": [1.0, 2.0, 3.0]}}]
-    other = [{"EKF": {"estimate_m": [0.0, 0.5, 0.0]}}, {"EKF": {"estimate_m": [1.0, 2.0, 1.0]}}]
+def test_max_abs_difference_takes_the_largest_gap_over_steps_and_components_wherever_it_occurs():
+    native = [{"EKF": {"estimate_m": [0.0, 0.0, 0.0]}}] * 3
+    other = [
+        {"EKF": {"estimate_m": [0.0, 0.0, 4.0]}},
+        {"EKF": {"estimate_m": [0.0, 0.5, 0.0]}},
+        {"EKF": {"estimate_m": [1.0, 0.0, 0.0]}},
+    ]
 
-    assert max_abs_difference(native, other, "EKF", "estimate_m") == 2.0
+    assert max_abs_difference(native, other, "EKF", "estimate_m") == 4.0
 
 
 def test_absent_readout_on_both_sides_is_zero_difference():
@@ -118,10 +122,10 @@ def test_drift_table_has_a_row_per_filter_and_zero_drift_against_an_identical_tr
     assert rows == [("overhead_pass", name, 0.0, 0.0, 0.0) for name in ("EKF", "IMM", "UKF")]
 
 
-def test_drift_table_reports_a_one_metre_estimate_shift_in_one_filter_only():
+def test_drift_table_reports_a_one_metre_vertical_estimate_shift_in_one_filter_only():
     shifted = overhead_pyodide_stand_in()
     for step in shifted["overhead_pass"]:
-        step["UKF"]["estimate_m"][0] += 1.0
+        step["UKF"]["estimate_m"][2] += 1.0
 
     rows = drift_table(shifted)
 
