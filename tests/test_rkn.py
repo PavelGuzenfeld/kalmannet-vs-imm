@@ -499,6 +499,7 @@ UNDER_FLOOR_RHO_M = 5e-4
 ABOVE_FLOOR_RHO_M = 2.0**-9
 ABOVE_FLOOR_RTOL = 1e-14
 UNDER_FLOOR_RANGE_RTOL = 1e-12
+UNIT_FEATURE_ATOL = 1e-15
 
 
 def _exact_raw_features():
@@ -716,7 +717,8 @@ def test_target_within_the_horizontal_range_floor_gets_a_range_column_of_n_range
 
 def test_gain_network_reads_no_angle_components_within_the_horizontal_range_floor():
     """MS-37, #85: below the floor B keeps only u_r, so vec(H Bᵀ)'s and B·correction's azimuth and elevation
-    entries are exactly 0 and every rnn_K input is finite, overhead and at 0.5 mm."""
+    entries are exactly 0, the range entries are the correction along u_r (measured 1.1e-16 on unit entries, atol
+    1e-15), and every rnn_K input is finite, overhead and at 0.5 mm."""
     correction = [3.0, -4.0, 5.0, 1.0, 2.0, -6.0, 0.5, -0.25, 7.0]
     for position in ([0.0, 0.0, LOS_TEST_RANGE_M], [UNDER_FLOOR_RHO_M, 0.0, LOS_TEST_RANGE_M]):
         seen = _branch_inputs(_features_at(position, correction))["K"][0]
@@ -725,7 +727,9 @@ def test_gain_network_reads_no_angle_components_within_the_horizontal_range_floo
         los_correction = seen[FEATURE_SLICES["correction"]].view(3, 3)
         assert torch.equal(los_H[:, :, :2], torch.zeros(3, 3, 2, dtype=torch.float64))
         assert torch.equal(los_correction[:, :2], torch.zeros(3, 2, dtype=torch.float64))
-        assert torch.all(los_correction[:, 2] != 0.0)
+        u_r = torch.tensor(position, dtype=torch.float64) / math.hypot(*position)
+        along_u_r = torch.tensor(correction, dtype=torch.float64).view(3, 3) @ u_r
+        assert torch.allclose(los_correction[:, 2], along_u_r / along_u_r.norm(), rtol=0, atol=UNIT_FEATURE_ATOL)
 
 
 def test_angle_columns_at_and_above_the_horizontal_range_floor_scale_by_horizontal_and_slant_range():
