@@ -11,7 +11,10 @@ import torch
 from data.config import NOMINAL
 from data.fixed_wing import DEFAULT_PRESET, PRESETS
 from data.trajectory_gen import fly_scenario
-from filters.flags import DEFAULT_THRESHOLDS, FLAGS
+from filters.flags import DEFAULT_THRESHOLDS, ELLIPSOID_95_DOF3, FLAGS, NEES_LOWER_025_DOF9
+from filters.ekf import EKF
+from filters.imm import IMM
+from filters.plot_data import imm_kwargs_from_tuning
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.numpy_forward import load_weights
 from filters.motion_models import cv_model
@@ -19,7 +22,8 @@ from filters.torch_ops import export_npz
 from scripts.export_weights import main as export_weights_main
 from scripts.replay import SEED_SCENARIO_SEED, break_turn_controls, numpy_weights
 from tests.test_numpy_forward import knet_stand_in, rkn_stand_in
-from web.live_flight import FILTER_NAMES, LEARNED_WEIGHTS, LiveFlight, page_options
+from scripts.eval import ekf_like_steps, imm_steps
+from web.live_flight import FILTER_NAMES, LEARNED_WEIGHTS, LiveFlight, _ellipsoid, page_options
 
 REPO = Path(__file__).resolve().parents[1]
 SEED_SCENARIO = REPO / "data" / "scenarios" / "break_turn_9g.json"
@@ -41,6 +45,11 @@ def learned(tmp_path):
         npz.parent.mkdir(parents=True, exist_ok=True)
         export_npz(net.state_dict(), npz)
     return tmp_path / "site", checkpoints
+
+
+@pytest.fixture(scope="module")
+def seed_frame(tmp_path_factory):
+    return page_flight(tmp_path_factory.mktemp("no_weights")).frame()
 
 
 def page_flight(weights_root, noise_regime="nominal", thresholds=DEFAULT_THRESHOLDS, preset=DEFAULT_PRESET):
@@ -195,3 +204,98 @@ def test_scenario_with_a_recorded_start_flies_from_it_and_replays_to_the_page_pr
     assert lines == preview_lines(flight)
     assert json.loads(exported.read_text())["start"] == scenario["start"]
     assert flight.frame()["truth_m"] == fly_scenario(scenario)[0][-1, :3].tolist()
+
+
+def test_ellipsoid_of_an_axis_aligned_position_covariance_has_the_95_percent_semi_axes_and_identity_axes():
+    """Scaled by the pinned chi-square(3) 95% quantile; sqrt of exact binary variances, so atol only absorbs it."""
+    P = np.diag([4.0, 16.0, 64.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+
+    ellipsoid = _ellipsoid(P)
+
+    expected_semi_axes = np.sqrt(np.array([4.0, 16.0, 64.0]) * ELLIPSOID_95_DOF3)
+    np.testing.assert_allclose(ellipsoid["semi_axes_m"], expected_semi_axes, rtol=0.0, atol=1e-12)
+    np.testing.assert_array_equal(np.abs(ellipsoid["axes"]), np.eye(3))
+
+
+def test_ellipsoid_axis_rows_point_along_the_long_direction_of_a_rotated_covariance():
+    P = np.eye(9)
+    P[0, 0], P[1, 1], P[0, 1], P[1, 0] = 5.0, 5.0, 4.0, 4.0
+
+    ellipsoid = _ellipsoid(P)
+
+    long_axis = np.abs(ellipsoid["axes"][-1])
+    np.testing.assert_allclose(long_axis, [np.sqrt(0.5), np.sqrt(0.5), 0.0], rtol=0.0, atol=1e-12)
+    assert ellipsoid["semi_axes_m"][-1] == pytest.approx(np.sqrt(9.0 * ELLIPSOID_95_DOF3), abs=1e-12)
+
+
+def test_ellipsoid_of_a_covariance_with_a_negative_variance_has_a_zero_semi_axis():
+    assert _ellipsoid(np.diag([-1.0, 1.0, 1.0, 1, 1, 1, 1, 1, 1.0]))["semi_axes_m"][0] == 0.0
+
+
+def test_ellipsoid_of_a_non_finite_covariance_is_absent():
+    P = np.eye(9)
+    P[2, 2] = np.nan
+    assert _ellipsoid(P) is None
+
+
+def test_frame_carries_ellipsoids_for_covariance_filters_and_mode_probabilities_for_the_imm_only(seed_frame):
+    """MS-12: the IMM's four modes are CV, CT+, CT-, CA; KalmanNet has no covariance to draw."""
+    filters = seed_frame["filters"]
+    assert all(filters[name]["ellipsoid"] is not None for name in ("EKF", "UKF", "IMM"))
+    assert len(filters["IMM"]["mode_probabilities"]) == 4
+    assert sum(filters["IMM"]["mode_probabilities"]) == pytest.approx(1.0, abs=1e-12)
+    assert filters["EKF"]["mode_probabilities"] is None
+
+
+def test_frame_ellipsoid_comes_from_the_covariance_that_scored_the_nees(learned):
+    """MS-10: RKN's plotted covariance is the P its NEES is computed from."""
+    weights_root, _ = learned
+    frame = page_flight(weights_root).frame()["filters"]
+
+    assert frame["RKN"]["ellipsoid"] is not None
+    assert frame["KalmanNet"]["ellipsoid"] is None
+
+
+def test_frame_trips_are_the_numeric_steps_the_flag_cells_show(seed_frame):
+    committed = json.loads(SEED_SCENARIO.read_text())["tripped"]
+
+    assert {name: seed_frame["trips"][name] for name in committed} == committed
+    for name in ("EKF", "UKF", "IMM"):
+        for flag, step in seed_frame["trips"][name].items():
+            assert seed_frame["flags"][name][flag] == ("-" if step is None else str(step))
+    assert seed_frame["trips"]["IMM"]["raw_error"] is None
+
+
+def test_frame_truth_velocity_is_the_flown_state_velocity(seed_frame):
+    states, _ = fly_scenario(json.loads(SEED_SCENARIO.read_text()))
+
+    assert seed_frame["truth_velocity_m_s"] == states[-1, 3:6].tolist()
+
+
+def test_ekf_snapshot_holds_the_covariance_the_last_nees_was_scored_with():
+    states, z = fly_scenario(json.loads(SEED_SCENARIO.read_text()))
+    snapshot = {}
+    steps = ekf_like_steps(EKF(NOMINAL.dt, NOMINAL.R()), states, z, snapshot)
+
+    err, nees, _ = list(steps)[-1]
+
+    assert nees == err @ np.linalg.solve(snapshot["P"], err)
+
+
+def test_imm_snapshot_holds_the_mode_probabilities_after_the_last_step(seed_frame):
+    """MS-8: the IMM combines over [cv, ct+, ct-, ca]; the frame carries them in that order."""
+    states, z = fly_scenario(json.loads(SEED_SCENARIO.read_text()))
+    best = json.loads(PAGE_IMM_TUNING.read_text())["best"]
+    snapshot = {}
+    imm = IMM(NOMINAL.dt, NOMINAL.R(), **imm_kwargs_from_tuning(best))
+
+    list(imm_steps(imm, states, z, snapshot))
+
+    assert imm.mode_names == ["cv", "ct_pos", "ct_neg", "ca"]
+    assert seed_frame["filters"]["IMM"]["mode_probabilities"] == snapshot["mu"].tolist()
+    assert _ellipsoid(snapshot["P"]) == seed_frame["filters"]["IMM"]["ellipsoid"]
+    assert snapshot["mu"].sum() == pytest.approx(1.0, abs=1e-12)
+
+
+def test_page_options_offer_the_nees_lower_bound():
+    assert page_options()["nees_lower"] == NEES_LOWER_025_DOF9
