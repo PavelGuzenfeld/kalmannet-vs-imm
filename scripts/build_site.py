@@ -8,8 +8,8 @@ from pathlib import Path
 from string import Template
 
 REPO = Path(__file__).resolve().parents[1]
-SOURCE_DIRS = ["web", "data", "filters", "docs"]
-SOURCE_FILES = ["scripts/eval.py"]
+SOURCE_DIRS = ["web", "data", "filters"]
+SOURCE_FILES = ["scripts/eval.py", "docs/view.html", "docs/write-up.md", "docs/source-notes.md"]
 WEIGHTS_FILE = "best.npz"
 LANDING_PAGE = Template("""<!doctype html>
 <html lang="en">

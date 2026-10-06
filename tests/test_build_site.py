@@ -86,6 +86,10 @@ def test_site_serves_the_commits_own_copy_of_each_doc(site, doc):
     assert (site / "docs" / doc).read_bytes() == (REPO / "docs" / doc).read_bytes()
 
 
+def test_site_docs_exclude_the_readme_assets(site):
+    assert sorted(path.name for path in (site / "docs").iterdir()) == ["source-notes.md", "view.html", "write-up.md"]
+
+
 @pytest.mark.parametrize("doc", ["write-up.md", "source-notes.md"])
 def test_docs_do_not_cross_reference_by_issue_number_or_issue_link(doc):
     text = (REPO / "docs" / doc).read_text()

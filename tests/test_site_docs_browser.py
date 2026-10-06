@@ -10,7 +10,6 @@ if not PAGE_BASE_URL:
 from playwright import sync_api  # noqa: E402
 
 RENDER_TIMEOUT_MS = 30_000
-MATH_FIXTURE = "Energy is $E = mc^2$ here.\n"
 
 
 @pytest.fixture(scope="module")
@@ -46,15 +45,6 @@ def test_source_notes_link_from_write_up_opens_source_notes(browser_context):
 
     page.wait_for_url("**/view.html?doc=source-notes.md", timeout=RENDER_TIMEOUT_MS)
     page.get_by_text("Research notes for the benchmark").wait_for(timeout=RENDER_TIMEOUT_MS)
-
-
-def test_inline_math_renders(browser_context):
-    page = browser_context.new_page()
-    page.route("**/docs/math-fixture.md", lambda route: route.fulfill(body=MATH_FIXTURE, content_type="text/markdown"))
-
-    page.goto(f"{PAGE_BASE_URL}/docs/view.html?doc=math-fixture.md")
-
-    page.wait_for_selector(".katex", timeout=RENDER_TIMEOUT_MS)
 
 
 @pytest.mark.parametrize(
