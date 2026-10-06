@@ -85,8 +85,16 @@ def test_site_serves_the_commits_own_copy_of_each_doc(site, doc):
 
 
 @pytest.mark.parametrize("doc", ["write-up.md", "source-notes.md"])
-def test_docs_do_not_cross_reference_by_issue_number(doc):
-    assert not re.search(r"(?<![\w\[])#1[45]\b", (REPO / "docs" / doc).read_text())
+def test_docs_do_not_cross_reference_by_issue_number_or_issue_link(doc):
+    text = (REPO / "docs" / doc).read_text()
+    assert not re.search(r"(?<![\w\[])#1[45]\b", text)
+    assert not re.search(r"issues/1[45]\b", text)
+
+
+def test_readme_points_at_the_site_not_at_the_two_issues():
+    text = (REPO / "README.md").read_text()
+    assert "https://pavelguzenfeld.github.io/kalmannet-vs-imm/" in text
+    assert not re.search(r"issues/1[45]\b", text)
 
 
 def test_write_up_links_the_source_notes_by_relative_path():
