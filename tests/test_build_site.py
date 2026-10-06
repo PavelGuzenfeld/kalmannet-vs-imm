@@ -75,8 +75,10 @@ def test_landing_page_does_not_redirect(site):
     assert "http-equiv" not in (site / "index.html").read_text()
 
 
-def test_landing_page_shows_the_tag(site):
-    assert f"built from {TAG}" in (site / "index.html").read_text()
+@pytest.mark.parametrize("tag", [TAG, OTHER_TAG])
+def test_landing_page_shows_the_tag_it_was_given(tmp_path, monkeypatch, tag):
+    out = build(tmp_path, monkeypatch, tag)
+    assert f"built from {tag}" in (out / "index.html").read_text()
 
 
 @pytest.mark.parametrize("doc", ["write-up.md", "source-notes.md"])

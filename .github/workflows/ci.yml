@@ -127,9 +127,11 @@ jobs:
           docker run --rm --ipc=host -e PYTHONDONTWRITEBYTECODE=1 -v "$PWD":/w -w /w "$PLAYWRIGHT_IMAGE" sh -c '
             set -e
             pip install -q pytest==8.3.3 playwright==1.48.0
-            python -m http.server 8000 --directory _site >/dev/null 2>&1 &
+            mkdir /srv/root
+            ln -s /w/_site /srv/root/kalmannet-vs-imm
+            python -m http.server 8000 --directory /srv/root >/dev/null 2>&1 &
             sleep 1
-            SITE_BASE_URL=http://localhost:8000 python -m pytest -q -p no:cacheprovider tests/test_site_docs_browser.py'
+            SITE_BASE_URL=http://localhost:8000/kalmannet-vs-imm python -m pytest -q -p no:cacheprovider tests/test_site_docs_browser.py'
 
   # Informational: how far Pyodide's numpy drifts from native on the committed scenarios.
   pyodide-drift:

@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -54,3 +55,38 @@ def test_inline_math_renders(browser_context):
     page.goto(f"{PAGE_BASE_URL}/docs/view.html?doc=math-fixture.md")
 
     page.wait_for_selector(".katex", timeout=RENDER_TIMEOUT_MS)
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["?doc=../README.md", "?doc=https://example.com/x.md", "?doc=//example.com/x.md", "?doc=%2e%2e%2fREADME.md", "?doc=", ""],
+)
+def test_unsafe_or_absent_doc_name_is_refused_without_a_foreign_request(browser_context, query):
+    page = browser_context.new_page()
+    foreign_requests = []
+    page.on("request", lambda request: foreign_requests.append(request.url) if urlsplit(request.url).hostname == "example.com" else None)
+
+    page.goto(f"{PAGE_BASE_URL}/docs/view.html{query}")
+
+    page.get_by_text("Unknown document.").wait_for(timeout=RENDER_TIMEOUT_MS)
+    assert foreign_requests == []
+
+
+def test_well_formed_but_missing_doc_name_says_not_found(browser_context):
+    page = browser_context.new_page()
+
+    page.goto(f"{PAGE_BASE_URL}/docs/view.html?doc=no-such-doc.md")
+
+    page.get_by_text("Document not found.").wait_for(timeout=RENDER_TIMEOUT_MS)
+
+
+def test_home_link_from_the_source_notes_lands_on_the_landing_page_under_the_pages_subpath(browser_context):
+    page = open_doc_from_landing(browser_context, "Write-up")
+    page.wait_for_selector("table", timeout=RENDER_TIMEOUT_MS)
+    page.locator('a[href*="source-notes"]').first.click()
+    page.get_by_text("Research notes for the benchmark").wait_for(timeout=RENDER_TIMEOUT_MS)
+
+    page.get_by_role("link", name="Home").click()
+
+    page.wait_for_url(f"{PAGE_BASE_URL}/", timeout=RENDER_TIMEOUT_MS)
+    page.get_by_role("link", name="Tracking test ground").wait_for(timeout=RENDER_TIMEOUT_MS)
