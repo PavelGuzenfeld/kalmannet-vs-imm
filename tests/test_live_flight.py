@@ -246,6 +246,21 @@ def test_page_3_column_rows_export_as_full_rows_with_every_new_input_neutral(tmp
     assert json.loads(flight.scenario_json())["controls"] == recorded_today(scenario)["controls"]
 
 
+def test_page_6_column_rows_fly_the_new_inputs_and_export_them_unchanged(tmp_path):
+    """MS-27: the live flight is the replayed flight, rudder, brake and afterburner included."""
+    scenario = {**json.loads(OVERHEAD_SCENARIO.read_text()), "envelope": asdict(PRESETS[DEFAULT_PRESET])}
+    scenario["controls"] = [[0.0, 1.0, 1.0, 2.0, 1.0, 1.0]] * 3 + [[0.0, 1.0, 1.0, -1.0, 0.0, 1.0]] * 3
+    flight = LiveFlight(scenario, json.loads(PAGE_IMM_TUNING.read_text())["best"], tmp_path)
+    for control in scenario["controls"]:
+        flight.advance(control)
+
+    exported = json.loads(flight.scenario_json())
+    assert exported["controls"] == scenario["controls"]
+    assert flight.frame()["truth_m"] == fly_scenario(exported)[0][-1, :3].tolist()
+    neutral = {**scenario, "controls": [row[:3] for row in scenario["controls"]]}
+    assert flight.frame()["truth_m"] != fly_scenario(neutral)[0][-1, :3].tolist()
+
+
 def test_ellipsoid_of_an_axis_aligned_position_covariance_has_the_95_percent_semi_axes_and_identity_axes():
     """Scaled by the pinned chi-square(3) 95% quantile; sqrt of exact binary variances, so atol only absorbs it."""
     P = np.diag([4.0, 16.0, 64.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])

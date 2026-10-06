@@ -213,15 +213,24 @@ def test_afterburner_at_full_throttle_multiplies_max_thrust_by_the_afterburner_f
     assert_step_acceleration(states[0, 6], 1.5 * drag_m_s2(200.0, 1.0) - drag_m_s2(100.0, 1.0))
 
 
-def test_afterburner_short_of_full_throttle_adds_no_thrust():
-    with_afterburner = fly_east_with_controls(100.0, held_controls(1, throttle=0.875, afterburner=1.0))
-    without = fly_east_with_controls(100.0, held_controls(1, throttle=0.875))
+@pytest.mark.parametrize("throttle", [0.875, np.nextafter(1.0, 0.0)])
+def test_afterburner_short_of_full_throttle_adds_no_thrust(throttle):
+    with_afterburner = fly_east_with_controls(100.0, held_controls(1, throttle=throttle, afterburner=1.0))
+    without = fly_east_with_controls(100.0, held_controls(1, throttle=throttle))
     assert np.array_equal(with_afterburner, without)
 
 
+def test_afterburner_with_throttle_above_full_burns_as_at_full_throttle():
+    above = fly_east_with_controls(100.0, held_controls(1, throttle=1.5, afterburner=1.0))
+    full = fly_east_with_controls(100.0, held_controls(1, throttle=1.0, afterburner=1.0))
+    assert np.array_equal(above, full)
+
+
 def test_3_column_row_flies_bit_for_bit_as_the_full_row_with_every_new_input_neutral():
-    controls = held_controls(20, roll_rate_rad_s=1.5, load_factor=-3.0, throttle=1.0)
-    assert fly_east(100.0, controls[:, :3]).tobytes() == fly_east(100.0, controls).tobytes()
+    """Under an envelope whose new limits all act, so a non-neutral pad would show."""
+    controls = held_controls(20, roll_rate_rad_s=1.5, load_factor=-1.5, throttle=1.0)
+    short = fly_east_with_controls(100.0, controls[:, :3])
+    assert short.tobytes() == fly_east_with_controls(100.0, controls).tobytes()
 
 
 def test_load_factor_is_capped_by_lift_available_at_twice_stall_speed():
