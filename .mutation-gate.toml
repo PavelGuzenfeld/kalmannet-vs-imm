@@ -49,3 +49,7 @@ reason = "Layer 5 harness: scenario flag thresholds over NIS, NEES and position 
 [[model_exclude]]
 path = "filters/imm_tuning.py"
 reason = "search driver over IMM constructor kwargs for scripts/tune_imm.py; the values it selects are recorded as spec lines (MS-12), it holds no model"
+
+[[model_exclude]]
+path = "web/"
+reason = "browser test ground (#8): steps data/fixed_wing.py and the filters/ classes through scripts/eval.py's runners; it holds no model of its own"

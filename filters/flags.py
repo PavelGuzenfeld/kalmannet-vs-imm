@@ -9,6 +9,8 @@ INNOVATION_GATE_NIS_99_DOF3 = 11.344866730144373
 NEES_UPPER_975_DOF9 = 19.02276779864163
 OVERCONFIDENT_STEPS = 25
 RAW_ERROR_M = 20.0
+FLAGS = ("track_loss", "overconfidence", "raw_error")
+UNGATED_REASONS = {("RKN", "track_loss"): "RKN defines no innovation covariance"}
 
 DEFAULT_THRESHOLDS = {
     "innovation_gate_nis": INNOVATION_GATE_NIS_99_DOF3,
@@ -51,3 +53,10 @@ def first_trips(position_error_m, nees=None, nis=None, thresholds=DEFAULT_THRESH
         )
     trips["raw_error"] = first_raw_error_step(position_error_m, thresholds["raw_error_m"])
     return trips
+
+
+def shown(name, trips, flag):
+    if flag not in trips:
+        reason = UNGATED_REASONS.get((name, flag))
+        return f"n/a ({reason})" if reason else "n/a"
+    return "-" if trips[flag] is None else str(trips[flag])

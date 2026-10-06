@@ -107,14 +107,20 @@ def measure(rng, states, regime):
     return z
 
 
-def fly_scenario(scenario):
-    """(states[T, 9], measurements[T, 3]) of a data/scenarios/ flight: its "start" or else a seeded one, wings level."""
-    regime = REGIMES[scenario["noise_regime"]]
-    rng = np.random.default_rng(scenario["seed"])
+def scenario_start(scenario, rng, regime):
+    """The scenario's recorded "start", or else one drawn from rng, drawn before any measurement noise."""
     start = scenario.get("start")
     if start is None:
         x0 = _sample_initial_state(rng, regime)
         start = {"position": x0[POS], "velocity": x0[VEL]}
+    return start
+
+
+def fly_scenario(scenario):
+    """(states[T, 9], measurements[T, 3]) of a data/scenarios/ flight: its "start" or else a seeded one, wings level."""
+    regime = REGIMES[scenario["noise_regime"]]
+    rng = np.random.default_rng(scenario["seed"])
+    start = scenario_start(scenario, rng, regime)
     controls = np.asarray(scenario["controls"], dtype=np.float64)
     states = fly(Envelope(**scenario["envelope"]), start["position"], start["velocity"], 0.0, controls, regime.dt)
     return states, measure(rng, states, regime)

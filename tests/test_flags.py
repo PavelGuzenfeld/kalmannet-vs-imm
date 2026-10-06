@@ -11,6 +11,7 @@ from filters.flags import (
     first_raw_error_step,
     first_track_loss_step,
     first_trips,
+    shown,
 )
 
 INSIDE_NEES = 9.0
@@ -104,3 +105,9 @@ def test_first_trips_reads_each_threshold_from_the_recorded_set():
     trips = first_trips(error_m, nees=nees, nis=nis, thresholds=thresholds)
 
     assert trips == {"track_loss": 3, "overconfidence": 3, "raw_error": 2}
+
+
+def test_shown_reads_a_flag_that_never_tripped_as_a_dash_and_a_tripped_one_as_its_step():
+    trips = {"track_loss": None, "raw_error": 0}
+
+    assert [shown("EKF", trips, flag) for flag in ("track_loss", "raw_error")] == ["-", "0"]

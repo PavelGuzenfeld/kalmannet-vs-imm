@@ -18,22 +18,20 @@ from data.config import NOMINAL
 from data.fixed_wing import DEFAULT_PRESET, PRESETS
 from data.trajectory_gen import fly_scenario
 from filters.ekf import EKF
-from filters.flags import DEFAULT_THRESHOLDS, first_trips
+from filters.flags import DEFAULT_THRESHOLDS, FLAGS, first_trips, shown
 from filters.imm import IMM
 from filters.knet import numpy_forward
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.knet_filter import KalmanNetFilter
 from filters.knet.rkn_network import RKNGainCovNetwork
 from filters.plot_data import imm_kwargs_from_tuning
-from filters.state import POS, STATE_DIM
+from filters.state import POS
 from filters.torch_ops import export_npz
 from filters.ukf import UKF
-from scripts.eval import run_ekf_like, run_imm
+from scripts.eval import knet_steps, rkn_steps, run_ekf_like, run_imm
 from scripts.eval_knet import _INIT_OFFSET, _priors
 from scripts.eval_rkn import evaluate_dataset as rkn_errors_and_nees
 
-FLAGS = ("track_loss", "overconfidence", "raw_error")
-UNGATED_REASONS = {("RKN", "track_loss"): "RKN defines no innovation covariance"}
 RKN_LAYER_MULTS = {"fc1_mult": 3, "hidden_mult": 3, "fc2_mult": 4}
 SEED_SCENARIO_SEED = 8
 SEED_BREAK_TURN_BANK_STEPS = 23
@@ -41,9 +39,6 @@ SEED_BREAK_TURN_PULL_STEPS = 150
 OVERHEAD_SCENARIO_SEED = 4
 OVERHEAD_START_M = [-500.0, 0.0, 300.0]
 OVERHEAD_PASS_STEPS = 200
-RKN_P0_VARIANCE = 100.0
-DIVERGED_ERROR = 1e5
-SINGULAR_P_NEES = 1e10
 
 
 def break_turn_controls():
@@ -105,24 +100,11 @@ def numpy_weights(checkpoint):
 
 
 def knet_errors_numpy(checkpoint, states, z, R):
-    flt = numpy_forward.KalmanNetFilter(numpy_forward.KalmanGainGRU(numpy_weights(checkpoint)), NOMINAL.dt)
-    flt.init_sequence(states[0] + _INIT_OFFSET.numpy(), *(prior.numpy() for prior in _priors(NOMINAL.dt, R)))
-    return np.array([flt.step(z_t) for z_t in z]) - states
-
-
-def error_and_nees(x, P, truth):
-    """Same divergence and singular-P stand-ins as scripts/eval_rkn.evaluate_dataset."""
-    e = np.nan_to_num(x - truth, nan=DIVERGED_ERROR, posinf=DIVERGED_ERROR, neginf=-DIVERGED_ERROR)
-    try:
-        return e, e @ np.linalg.solve(P, e)
-    except np.linalg.LinAlgError:
-        return e, SINGULAR_P_NEES
+    return np.array(list(knet_steps(numpy_weights(checkpoint), NOMINAL.dt, R, states, z)))
 
 
 def rkn_run_numpy(checkpoint, states, z):
-    flt = numpy_forward.RKNFilter(numpy_forward.RKNGainCovNetwork(numpy_weights(checkpoint)), NOMINAL.dt)
-    flt.init_sequence(states[0] + _INIT_OFFSET.numpy(), np.eye(STATE_DIM) * RKN_P0_VARIANCE)
-    err, nees = zip(*(error_and_nees(*flt.step(z_t), truth) for z_t, truth in zip(z, states)))
+    err, nees = zip(*rkn_steps(numpy_weights(checkpoint), NOMINAL.dt, states, z))
     return np.array(err), np.array(nees)
 
 
@@ -157,13 +139,6 @@ def replay(scenario, imm_tuning, knet_checkpoint, rkn_checkpoint, learned_backen
     else:
         out["RKN"] = f"skipped, no checkpoint at {rkn_checkpoint}"
     return out
-
-
-def shown(name, trips, flag):
-    if flag not in trips:
-        reason = UNGATED_REASONS.get((name, flag))
-        return f"n/a ({reason})" if reason else "n/a"
-    return "-" if trips[flag] is None else str(trips[flag])
 
 
 def main():

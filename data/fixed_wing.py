@@ -3,6 +3,7 @@
 Independent of filters/ so the truth it flies is never the filters' own motion model (MS-27).
 """
 
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -62,23 +63,20 @@ def _lift_direction(unit_velocity: np.ndarray, wings_level_up: np.ndarray, bank_
     return np.cos(bank_rad) * wings_level_up + np.sin(bank_rad) * right_wing
 
 
-def fly(
+def fly_steps(
     envelope: Envelope,
     position_m: np.ndarray,
     velocity_m_s: np.ndarray,
     bank_rad: float,
-    controls: np.ndarray,
+    controls: Iterable[Sequence[float]],
     dt_s: float,
-) -> np.ndarray:
-    """controls[T, 3]: roll rate rad/s, load factor g, throttle in [0, 1].
-    bank_rad is from wings level at the start; wings level then turns with the flight path, not the horizon.
-    Returns states[T, 9] = px py pz vx vy vz ax ay az; row t's acceleration carries it to row t + 1."""
+) -> Iterator[np.ndarray]:
+    """Yields one state row per control row as `controls` yields it, so a live input can drive it; see fly."""
     max_thrust_m_s2 = _drag_m_s2(envelope, envelope.max_speed_m_s, 1.0)
     position = np.asarray(position_m, dtype=np.float64)
     velocity = np.asarray(velocity_m_s, dtype=np.float64)
     wings_level_up = _initial_wings_level_up(velocity / np.linalg.norm(velocity))
-    states = np.zeros((len(controls), 9))
-    for t, (roll_rate, load_factor_command, throttle) in enumerate(controls):
+    for roll_rate, load_factor_command, throttle in controls:
         max_roll_rate = envelope.max_roll_rate_rad_s
         bank_rad = bank_rad + np.clip(roll_rate, -max_roll_rate, max_roll_rate) * dt_s
         speed = np.linalg.norm(velocity)
@@ -96,7 +94,21 @@ def fly(
         next_speed = np.linalg.norm(next_velocity)
         next_velocity *= max(envelope.min_speed_m_s, next_speed) / next_speed
         acceleration = (next_velocity - velocity) / dt_s
-        states[t] = np.concatenate((position, velocity, acceleration))
+        yield np.concatenate((position, velocity, acceleration))
         position = position + velocity * dt_s + 0.5 * acceleration * dt_s**2
         velocity = next_velocity
-    return states
+
+
+def fly(
+    envelope: Envelope,
+    position_m: np.ndarray,
+    velocity_m_s: np.ndarray,
+    bank_rad: float,
+    controls: np.ndarray,
+    dt_s: float,
+) -> np.ndarray:
+    """controls[T, 3]: roll rate rad/s, load factor g, throttle in [0, 1].
+    bank_rad is from wings level at the start; wings level then turns with the flight path, not the horizon.
+    Returns states[T, 9] = px py pz vx vy vz ax ay az; row t's acceleration carries it to row t + 1."""
+    states = list(fly_steps(envelope, position_m, velocity_m_s, bank_rad, controls, dt_s))
+    return np.array(states).reshape(len(states), 9)

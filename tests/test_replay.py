@@ -16,8 +16,11 @@ from filters.ekf import EKF
 from filters.imm import IMM
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.rkn_network import RKNGainCovNetwork
+from filters.measurement_model import h
 from filters.motion_models import cv_model
 from filters.plot_data import imm_kwargs_from_tuning
+from filters.state import STATE_DIM
+from filters.ukf import UKF
 from scripts import eval as bench_eval
 from scripts.replay import main as replay_main
 
@@ -48,6 +51,9 @@ RECORDED_TRUTH_POS_VEL = {
           108.89319763088594, 164.39841185829255, -0.6585178415275652],
 }
 CROSS_PLATFORM_ATOL = 1e-6
+UNINFORMATIVE_R = np.diag([1e6, 1e6, 1e12])
+INIT_OFFSET_EAST_SOUTH_M = [2.0, -1.0, 0.0]
+START_ATOL_M = 1e-6
 
 
 @pytest.fixture
@@ -251,3 +257,22 @@ def test_ekf_and_imm_position_error_in_the_25_steps_from_the_overhead_crossing_e
     for err, _, _ in runs:
         position_error_m = np.linalg.norm(err[:, :3], axis=1)
         assert position_error_m[crossing : crossing + OVERHEAD_ERROR_WINDOW_STEPS].max() > OVERHEAD_CROSSING_ERROR_BOUND_M
+
+
+@pytest.mark.parametrize(
+    "run, make_filter",
+    [
+        (bench_eval.run_ekf_like, lambda R: EKF(NOMINAL.dt, R)),
+        (bench_eval.run_ekf_like, lambda R: UKF(NOMINAL.dt, R)),
+        (bench_eval.run_imm, lambda R: IMM(NOMINAL.dt, R)),
+    ],
+)
+def test_classical_filters_start_2_m_east_and_1_m_south_of_the_truth(run, make_filter):
+    """MS-8, MS-9: the same start offset as the learned filters. R this loose moves the first update by under
+    1e-9 m (gain ~ 50 m^2 * 1e-3 rad/m / 1e6 rad^2), so atol 1e-6 m reads the start itself."""
+    truth = np.zeros((1, STATE_DIM))
+    truth[0, :3] = [1000.0, 0.0, 100.0]
+
+    err, _, _ = run(make_filter(UNINFORMATIVE_R), truth, h(truth[0])[None])
+
+    np.testing.assert_allclose(err[0, :3], INIT_OFFSET_EAST_SOUTH_M, rtol=0.0, atol=START_ATOL_M)

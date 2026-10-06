@@ -16,13 +16,18 @@ import numpy as np
 from data.trajectory_gen import fly_scenario
 from filters.ekf import EKF
 from filters.imm import IMM
+from filters.knet import numpy_forward
 from filters.metrics import anees_with_bounds, empirical_coverage, fraction_inside_bounds
+from filters.motion_models import cv_model
 from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import POS, STATE_DIM, VEL
 from filters.ukf import UKF
 
 _INIT_OFFSET = np.array([2.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 _P0 = np.diag([50.0, 50.0, 50.0, 5.0, 5.0, 5.0, 1.0, 1.0, 1.0])
+LEARNED_P0_VARIANCE = 100.0
+DIVERGED_ERROR = 1e5
+SINGULAR_P_NEES = 1e10
 _BURN_IN = 20  # steps skipped for RMSE/consistency stats, letting initial-condition error settle
 
 
@@ -31,43 +36,75 @@ def _load(path):
     return d["states"], d["measurements"]
 
 
+def _scored(x, P, y, S, truth):
+    e = x - truth
+    return e, e @ np.linalg.solve(P, e), y @ np.linalg.solve(S, y)
+
+
+def _stacked(steps):
+    err, nees, nis = zip(*steps)
+    return np.array(err), np.array(nees), np.array(nis)
+
+
+def ekf_like_steps(flt, x_true, z):
+    """Yields (err[9], nees, nis) per step as x_true and z yield, live-drivable; see run_ekf_like."""
+    for t, (truth, z_t) in enumerate(zip(x_true, z)):
+        if t == 0:
+            x, P = truth + _INIT_OFFSET, _P0.copy()
+            if isinstance(flt, UKF):
+                pts_pred = flt._sigma_points(x, P)
+                x, P, y, S = flt.update(x, P, pts_pred, z_t)
+            else:
+                x, P, y, S = flt.update(x, P, z_t)
+        else:
+            x, P, y, S = flt.step(x, P, z_t)
+        yield _scored(x, P, y, S, truth)
+
+
 def run_ekf_like(flt, x_true, z):
     """flt: EKF or UKF instance ((x,P,z)->x,P,y,S signature). x_true: [T,9],
     z: [T,3]. Returns (err[T,9], nees[T], nis[T])."""
-    T = x_true.shape[0]
-    err = np.zeros((T, STATE_DIM))
-    nees = np.zeros(T)
-    nis = np.zeros(T)
-    x, P = x_true[0] + _INIT_OFFSET, _P0.copy()
-    for t in range(T):
+    return _stacked(ekf_like_steps(flt, x_true, z))
+
+
+def imm_steps(imm, x_true, z):
+    for t, (truth, z_t) in enumerate(zip(x_true, z)):
         if t == 0:
-            if isinstance(flt, UKF):
-                pts_pred = flt._sigma_points(x, P)
-                x, P, y, S = flt.update(x, P, pts_pred, z[t])
-            else:
-                x, P, y, S = flt.update(x, P, z[t])
-        else:
-            x, P, y, S = flt.step(x, P, z[t])
-        e = x - x_true[t]
-        err[t] = e
-        nees[t] = e @ np.linalg.solve(P, e)
-        nis[t] = y @ np.linalg.solve(S, y)
-    return err, nees, nis
+            state = imm.init_state(truth + _INIT_OFFSET, _P0.copy())
+        x, P, state, y, S = imm.step(state, z_t)
+        yield _scored(x, P, y, S, truth)
 
 
 def run_imm(imm, x_true, z):
-    T = x_true.shape[0]
-    err = np.zeros((T, STATE_DIM))
-    nees = np.zeros(T)
-    nis = np.zeros(T)
-    state = imm.init_state(x_true[0] + _INIT_OFFSET, _P0.copy())
-    for t in range(T):
-        x, P, state, y, S = imm.step(state, z[t])
-        e = x - x_true[t]
-        err[t] = e
-        nees[t] = e @ np.linalg.solve(P, e)
-        nis[t] = y @ np.linalg.solve(S, y)
-    return err, nees, nis
+    return _stacked(imm_steps(imm, x_true, z))
+
+
+def knet_steps(weights, dt, R, x_true, z):
+    """Yields err[9] per step of the numpy KalmanNet, priors as scripts/eval_knet._priors; live-drivable."""
+    _, Q = cv_model(dt)
+    flt = numpy_forward.KalmanNetFilter(numpy_forward.KalmanGainGRU(weights), dt)
+    for t, (truth, z_t) in enumerate(zip(x_true, z)):
+        if t == 0:
+            flt.init_sequence(truth + _INIT_OFFSET, Q, np.eye(STATE_DIM) * LEARNED_P0_VARIANCE, R)
+        yield flt.step(z_t) - truth
+
+
+def error_and_nees(x, P, truth):
+    """Same divergence and singular-P stand-ins as scripts/eval_rkn.evaluate_dataset."""
+    e = np.nan_to_num(x - truth, nan=DIVERGED_ERROR, posinf=DIVERGED_ERROR, neginf=-DIVERGED_ERROR)
+    try:
+        return e, e @ np.linalg.solve(P, e)
+    except np.linalg.LinAlgError:
+        return e, SINGULAR_P_NEES
+
+
+def rkn_steps(weights, dt, x_true, z):
+    """Yields (err[9], nees) per step of the numpy RKN; live-drivable."""
+    flt = numpy_forward.RKNFilter(numpy_forward.RKNGainCovNetwork(weights), dt)
+    for t, (truth, z_t) in enumerate(zip(x_true, z)):
+        if t == 0:
+            flt.init_sequence(truth + _INIT_OFFSET, np.eye(STATE_DIM) * LEARNED_P0_VARIANCE)
+        yield error_and_nees(*flt.step(z_t), truth)
 
 
 def evaluate_dataset(filter_factory, run_fn, states, measurements):
