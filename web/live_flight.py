@@ -83,21 +83,9 @@ def _readout(truth, err, nees=None, nis=None, *, snapshot):
 
 def diverged(position_error_m):
     """Diverged once any position error so far is non-finite or above DIVERGED_POSITION_ERROR_M, whatever the
-    raw-error threshold; the page keeps a diverged filter out of its plot scales and 3D framing."""
+    raw-error threshold; the page keeps a diverged filter out of its plot scales."""
     return bool(
         not np.isfinite(position_error_m).all() or position_error_m.max() > DIVERGED_POSITION_ERROR_M
-    )
-
-
-def framing_radius_m(readouts):
-    """Farthest reach from truth of any non-diverged estimate or its 95% ellipsoid, for the 3D view to frame."""
-    return max(
-        (
-            readout["error_m"] + (max(readout["ellipsoid"]["semi_axes_m"]) if readout["ellipsoid"] else 0.0)
-            for readout in readouts.values()
-            if not readout["diverged"]
-        ),
-        default=0.0,
     )
 
 
@@ -171,7 +159,6 @@ class LiveFlight:
             "truth_m": self._truth[POS].tolist(),
             "truth_velocity_m_s": self._truth[VEL].tolist(),
             "filters": readouts,
-            "framing_radius_m": framing_radius_m(readouts),
             "trips": trips,
             "flags": {
                 name: flags[name] if name in flags else _unavailable_flags(name) for name in FILTER_NAMES
