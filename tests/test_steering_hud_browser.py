@@ -30,6 +30,7 @@ def flying_page(context):
     page.wait_for_function("document.getElementById('status').textContent.startsWith('paused')", polling=200, timeout=BOOT_TIMEOUT_MS)
     page.click("#start")
     page.wait_for_function("document.getElementById('status').textContent.startsWith('flying')", polling=200, timeout=BOOT_TIMEOUT_MS)
+    page.bring_to_front()
     page.clock.pause_at(page.evaluate("Date.now()") + FRAME_MS)
     return page
 
