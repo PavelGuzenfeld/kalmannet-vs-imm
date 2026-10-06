@@ -24,7 +24,7 @@ CASE_NAMES = sorted(path.name.removesuffix(".expected.json") for path in CASES_D
 assert CASE_NAMES, f"no cases in {CASES_DIR}; run scripts/page_parity.py cases first"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def browser_context():
     with sync_api.sync_playwright() as playwright:
         browser = playwright.chromium.launch()
