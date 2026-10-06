@@ -20,6 +20,7 @@ from filters.knet.rkn_filter import RKNFilter
 from filters.knet.rkn_network import RKNGainCovNetwork
 from filters.metrics import anees_with_bounds, empirical_coverage, fraction_inside_bounds
 from filters.state import POS, STATE_DIM, VEL
+from scripts.eval import error_and_nees
 
 _INIT_OFFSET = torch.tensor([2.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=torch.float64)
 _BURN_IN = 20
@@ -45,15 +46,10 @@ def evaluate_dataset(net, dt, states, measurements):
                 P0 = torch.eye(STATE_DIM, dtype=torch.float64).unsqueeze(0) * 100.0
                 flt.init_sequence(x0, P0)
                 for t in range(T):
-                    x_upd, P_upd = flt.step(z[:, t, :])
-                    e = (x_upd[0] - x_true[0, t]).numpy()
-                    e = np.nan_to_num(e, nan=1e5, posinf=1e5, neginf=-1e5)
-                    err[i, m, t] = e
-                    P_np = P_upd[0].numpy()
-                    try:
-                        nees[i, m, t] = e @ np.linalg.solve(P_np, e)
-                    except np.linalg.LinAlgError:
-                        nees[i, m, t] = 1e10
+                    x_upd, _ = flt.step(z[:, t, :])
+                    err[i, m, t], nees[i, m, t] = error_and_nees(
+                        x_upd[0].numpy(), flt.S[0].numpy(), x_true[0, t].numpy()
+                    )
     return {"err": err, "nees": nees}
 
 
