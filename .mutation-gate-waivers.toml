@@ -31,13 +31,13 @@ filters/knet/, which is gated."""
 
 [[waiver]]
 file = "scripts/train_rkn.py"
-line = 38
+line = 37
 old = "-1"
 new = "1"
 reason = """`.sum(dim=-1)` over the [batch, m] result of `torch.diagonal`: dim=-1 and dim=1 are
 the same axis, so this mutant is equivalent (bitwise-equal sums on a 64x9 factor, rebuilt and
-diffed). Line 38 carries a second `-1` (`dim2=-1`) which this waiver's shape cannot exclude;
-that one is killed by the NLL tests, which fail when the diagonal is taken over the wrong axis."""
+diffed). It is the only `-1` on line 37; the diagonal's own dim1/dim2 sit on line 36, where the
+NLL tests kill them."""
 
 [[waiver]]
 file = "scripts/make_animation.py"
@@ -68,3 +68,13 @@ file = "tests/test_eval_learned_scenarios.py"
 test = "test_diverged_knet_estimate_is_clipped_to_1e5_per_component_so_the_rmse_stays_finite"
 reason = """The 1e5 clip is an evaluation-harness guard so one diverged run reports a large
 finite RMSE instead of NaN; it is not model behaviour, so no MS-n line states it."""
+
+[[waiver]]
+file = "filters/knet/rkn_filter.py"
+line = 54
+old = """torch.diagonal(R, dim1=-2, dim2=-1) < 0.0"""
+new = """torch.diagonal(R, dim1=-2, dim2=-1) <= 0.0"""
+reason = """Equivalent: the two differ only when R_jj is exactly 0.0, and flipping
+that row's sign leaves S S^T, the returned P and the zero diagonal the NLL
+guards on unchanged. Rerun by hand on tests/test_rkn.py and test_train_rkn.py:
+19 passed under the mutant, while < 1 and dropping the flip each fail."""

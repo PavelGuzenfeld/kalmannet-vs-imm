@@ -127,7 +127,7 @@ class RKNGainCovNetwork:
         C, h_cov = self.rnn_cov.forward(features, h_cov)
         L = np.zeros((self.m, self.m))
         L[self._tril] = C
-        return K_flat.reshape(self.m, self.n), L @ L.T, (h_K, h_cov)
+        return K_flat.reshape(self.m, self.n), L, (h_K, h_cov)
 
 
 class RKNFilter:
@@ -138,7 +138,7 @@ class RKNFilter:
     def init_sequence(self, x0, P0):
         self.hidden = self.net.init_hidden()
         self.x = x0
-        self.P = P0
+        self.S = np.linalg.cholesky(P0)
         self.x_prior_previous = self.F @ x0
         self.z_previous = h(x0)
 
@@ -154,10 +154,10 @@ class RKNFilter:
         self.x_prior_previous = x_prior
 
         features = np.concatenate([y, z_diff, H_t.flatten(), correction]) ** 2
-        K, B, self.hidden = self.net.forward(features, self.hidden)
+        K, L, self.hidden = self.net.forward(features, self.hidden)
 
         x_upd = x_prior + K @ y
         IKH = np.eye(STATE_DIM) - K @ H_t
-        self.P = IKH @ self.F @ self.P @ self.F.T @ IKH.T + B
+        self.S = np.linalg.qr(np.vstack([(IKH @ self.F @ self.S).T, L.T]), mode="r").T
         self.x = x_upd
-        return x_upd, self.P
+        return x_upd, self.S @ self.S.T

@@ -29,15 +29,13 @@ def _load_split(path):
     return d["states"], d["measurements"]
 
 
-def _gaussian_nll(e, P):
-    """e: [batch, m], P: [batch, m, m]. Batch-averaged NLL; +inf, still on the graph, when any P is not
-    numerically positive definite (a diverged filter's P spans more decades than float64 holds, #28),
-    so the skip-guard drops the chunk."""
-    L, info = torch.linalg.cholesky_ex(P)
-    quad = torch.linalg.solve_triangular(L, e.unsqueeze(-1), upper=False).square().sum(dim=(1, 2))
-    logdet = 2.0 * torch.log(torch.diagonal(L, dim1=-2, dim2=-1)).sum(dim=-1)
-    nll = torch.mean(quad + logdet)
-    return torch.where(torch.all(info == 0), nll, torch.full_like(nll, float("inf")))
+def _gaussian_nll(e, S):
+    """e: [batch, m], S: [batch, m, m] lower-triangular with P = S S^T. Batch-averaged NLL; +inf, still on
+    the graph, when any diagonal of S is not positive, so the skip-guard drops the chunk."""
+    quad = torch.linalg.solve_triangular(S, e.unsqueeze(-1), upper=False).square().sum(dim=(1, 2))
+    diagonal = torch.diagonal(S, dim1=-2, dim2=-1)
+    nll = torch.mean(quad + 2.0 * torch.log(diagonal).sum(dim=-1))
+    return torch.where(torch.all(diagonal > 0.0), nll, torch.full_like(nll, float("inf")))
 
 
 def run_epoch(net, dt, states, measurements, batch_size, trunc_len, rng, optimizer=None):
@@ -71,9 +69,9 @@ def run_epoch(net, dt, states, measurements, batch_size, trunc_len, rng, optimiz
         loss_accum = torch.zeros((), dtype=torch.float64)
         chunk_steps = 0
         for t in range(T):
-            x_upd, P_upd = flt.step(z[:, t, :])
+            x_upd, _ = flt.step(z[:, t, :])
             e = x_upd - x_true[:, t, :]
-            loss_accum = loss_accum + _gaussian_nll(e, P_upd)
+            loss_accum = loss_accum + _gaussian_nll(e, flt.S)
             chunk_steps += 1
 
             if chunk_steps == trunc_len or t == T - 1:

@@ -6,6 +6,9 @@ from filters.knet.rkn_filter import RKNFilter
 from filters.torch_ops import CVMotionModel, H_jacobian_torch, h_torch
 from filters.measurement_model import h
 from filters.state import STATE_DIM
+from scripts.train_rkn import _gaussian_nll
+
+DIVERGED_POSITION_VARIANCE = 1e32
 
 
 def _p0(batch):
@@ -108,17 +111,17 @@ def test_rkn_survives_azimuth_wrap_boundary():
 
 
 class _FixedGain:
-    """Network stub returning a prescribed K and B, so the covariance recursion
-    can be checked against a closed-form oracle instead of an untrained net."""
+    """Network stub returning a prescribed K and factor L of B = L L^T, so the covariance
+    recursion can be checked against a closed-form oracle instead of an untrained net."""
 
-    def __init__(self, K, B):
-        self.K, self.B = K, B
+    def __init__(self, K, L):
+        self.K, self.L = K, L
 
     def init_hidden(self, batch, device):
         return (torch.zeros(1, dtype=torch.float64),)
 
     def __call__(self, features, hidden):
-        return self.K, self.B, hidden
+        return self.K, self.L, hidden
 
 
 class _CaptureFeatures(_FixedGain):
@@ -146,7 +149,7 @@ def _state_at_azimuth(az, r=800.0):
 
 
 def test_optimal_gain_joseph_update_shrinks_covariance_to_simple_form():
-    """Joseph form with the *optimal* Kalman gain must collapse to the simple
+    """MS-10: Joseph form with the *optimal* Kalman gain must collapse to the simple
     form (I - KH)P-, the identity that makes a measurement shrink uncertainty.
     Flip the sign in the (I - KH) factor and the update inflates it instead.
     """
@@ -165,23 +168,23 @@ def test_optimal_gain_joseph_update_shrinks_covariance_to_simple_form():
 
     S = H @ P_minus @ H.transpose(1, 2) + R
     K = P_minus @ H.transpose(1, 2) @ torch.linalg.inv(S)
-    B = K @ R @ K.transpose(1, 2)
+    L = K @ torch.sqrt(R)
 
-    flt = RKNFilter(_FixedGain(K, B), dt=dt)
+    flt = RKNFilter(_FixedGain(K, L), dt=dt)
     flt.init_sequence(x0, P0)
     _, P_upd = flt.step(torch.tensor(h(x0[0].numpy()), dtype=torch.float64).unsqueeze(0))
 
     eye = torch.eye(STATE_DIM, dtype=torch.float64).unsqueeze(0)
     expected = (eye - K @ H) @ P_minus
 
-    # Exact algebra in float64: measured residual is 7e-15 on entries of order
-    # 1e2. 1e-12 is two decades of headroom for a different BLAS, no more.
+    # Exact algebra in float64: measured residual is 7e-14 on entries of order
+    # 1e2 through the QR factor. 1e-12 is ~14x headroom for a different BLAS.
     assert torch.allclose(P_upd, expected, rtol=0, atol=1e-12)
     assert torch.trace(P_upd[0]) < torch.trace(P_minus[0])
 
 
 def test_joseph_form_holds_for_a_suboptimal_gain():
-    """The gain is learned, so it is not the optimal one -- and under the optimal
+    """MS-10: the gain is learned, so it is not the optimal one -- and under the optimal
     gain Joseph and the simple form (I-KH)P- coincide by identity, which makes
     the requirement vacuous there. Pin it where the two actually differ.
     """
@@ -198,9 +201,10 @@ def test_joseph_form_holds_for_a_suboptimal_gain():
 
     torch.manual_seed(7)
     K = torch.randn(1, STATE_DIM, 3, dtype=torch.float64) * 5.0
-    B = torch.eye(STATE_DIM, dtype=torch.float64).unsqueeze(0) * 0.75
+    L = torch.eye(STATE_DIM, dtype=torch.float64).unsqueeze(0) * 0.75 ** 0.5
+    B = L @ L.transpose(1, 2)
 
-    flt = RKNFilter(_FixedGain(K, B), dt=dt)
+    flt = RKNFilter(_FixedGain(K, L), dt=dt)
     flt.init_sequence(x0, P0)
     _, P_upd = flt.step(torch.tensor(h(x0[0].numpy()), dtype=torch.float64).unsqueeze(0))
 
@@ -217,11 +221,9 @@ def test_joseph_form_holds_for_a_suboptimal_gain():
     assert torch.linalg.eigvalsh(P_upd[0]).min() > 0.0
 
 
-def test_additive_covariance_term_B_is_added_not_transposed():
-    """P+ = A + B, not A + B.T or the symmetrized (B + B.T)/2. The trained
-    network always emits a symmetric B = L L^T, but RKNFilter itself treats B
-    as opaque, so only a manifestly asymmetric B separates the three here.
-    """
+def test_learned_factor_adds_L_L_transpose_not_L_transpose_L():
+    """MS-10: P+ = A + L L^T, the network's B (#14 sec. 2); a non-normal L separates it from L^T L,
+    579 apart. The QR factor reproduces it to 2.3e-13 at |P| <= 7e2; atol 1e-11 is ~40x headroom."""
     dt = 0.02
     x0 = torch.zeros(1, STATE_DIM, dtype=torch.float64)
     x0[0, :3] = torch.tensor([300.0, -600.0, 40.0], dtype=torch.float64)
@@ -234,20 +236,62 @@ def test_additive_covariance_term_B_is_added_not_transposed():
 
     K = torch.zeros(1, STATE_DIM, 3, dtype=torch.float64)
     idx = torch.arange(STATE_DIM, dtype=torch.float64)
-    B = (idx.unsqueeze(1) * STATE_DIM + idx.unsqueeze(0)).unsqueeze(0)
+    L = torch.tril(idx.unsqueeze(1) * STATE_DIM + idx.unsqueeze(0) + 1.0).unsqueeze(0) / STATE_DIM
 
-    flt = RKNFilter(_FixedGain(K, B), dt=dt)
+    flt = RKNFilter(_FixedGain(K, L), dt=dt)
     flt.init_sequence(x0, P0)
     _, P_upd = flt.step(torch.tensor(h(x0[0].numpy()), dtype=torch.float64).unsqueeze(0))
 
-    assert torch.allclose(P_upd, A_expected + B, rtol=0, atol=1e-12)
-    # Without these, a transposed or symmetrized B would pass too.
-    assert not torch.allclose(P_upd, A_expected + B.transpose(1, 2), rtol=0, atol=1.0)
-    assert not torch.allclose(P_upd, A_expected + (B + B.transpose(1, 2)) / 2, rtol=0, atol=1.0)
+    assert torch.allclose(P_upd, A_expected + L @ L.transpose(1, 2), rtol=0, atol=1e-11)
+    assert not torch.allclose(P_upd, A_expected + L.transpose(1, 2) @ L, rtol=0, atol=1.0)
+
+
+def test_covariance_factor_stays_positive_definite_where_the_closed_form_goes_indefinite():
+    """MS-10: a diverged run's 1e32 m^2 position variance next to unit ones (#62). B = I bounds lambda_min(P)
+    by 1, yet float64 rounds the closed-form A + B indefinite. Triangular S has S_jj >= sigma_min(S) =
+    sqrt(lambda_min(P)) >= 1 in exact arithmetic; measured min 1.21."""
+    dt = 0.02
+    x0 = torch.zeros(1, STATE_DIM, dtype=torch.float64)
+    x0[0, :3] = torch.tensor([640.0, 410.0, -95.0], dtype=torch.float64)
+    P0 = torch.diag(torch.tensor([DIVERGED_POSITION_VARIANCE] * 3 + [1.0] * 6, dtype=torch.float64)).unsqueeze(0)
+    torch.manual_seed(7)
+    K = torch.randn(1, STATE_DIM, 3, dtype=torch.float64) * 5.0
+    L = torch.eye(STATE_DIM, dtype=torch.float64).unsqueeze(0)
+    f = CVMotionModel(dt)
+    F = f.F.unsqueeze(0)
+    IKH = torch.eye(STATE_DIM, dtype=torch.float64) - K @ H_jacobian_torch(f(x0))
+    closed_form = IKH @ F @ P0 @ F.transpose(1, 2) @ IKH.transpose(1, 2) + L @ L.transpose(1, 2)
+
+    flt = RKNFilter(_FixedGain(K, L), dt=dt)
+    flt.init_sequence(x0, P0)
+    flt.step(h_torch(f(x0)))
+
+    assert torch.linalg.cholesky_ex(closed_form).info.item() != 0
+    S_diagonal = torch.diagonal(flt.S, dim1=-2, dim2=-1)
+    assert torch.all(torch.isfinite(S_diagonal)) and torch.all(S_diagonal >= 1.0)
+    assert torch.isfinite(_gaussian_nll(torch.ones(1, STATE_DIM, dtype=torch.float64), flt.S))
+
+
+def test_covariance_factor_is_lower_triangular_with_a_positive_diagonal():
+    """MS-10: the NLL reads S as a Cholesky factor, triangular solve and log of its diagonal. Householder
+    QR leaves 8 of R's 9 diagonal entries negative here, all of magnitude below 1 (P0 = 1e-4 I)."""
+    dt = 0.02
+    x0 = torch.zeros(1, STATE_DIM, dtype=torch.float64)
+    x0[0, :3] = torch.tensor([640.0, 410.0, -95.0], dtype=torch.float64)
+    torch.manual_seed(7)
+    K = torch.randn(1, STATE_DIM, 3, dtype=torch.float64) * 5.0
+    L = torch.eye(STATE_DIM, dtype=torch.float64).unsqueeze(0) * 1e-3
+
+    flt = RKNFilter(_FixedGain(K, L), dt=dt)
+    flt.init_sequence(x0, _p0(1) * 1e-6)
+    flt.step(h_torch(CVMotionModel(dt)(x0)))
+
+    assert torch.equal(flt.S, torch.tril(flt.S))
+    assert torch.all(torch.diagonal(flt.S, dim1=-2, dim2=-1) > 0.0)
 
 
 def test_state_update_adds_the_gain_weighted_innovation():
-    """x+ = x- + K(z - h(x-)). Both signs are load-bearing: flipping the
+    """MS-10: x+ = x- + K(z - h(x-)). Both signs are load-bearing: flipping the
     innovation or the correction still yields a finite, plausible state, so
     only an exact oracle separates them. z is chosen off the wrap boundary so
     the expected innovation is a plain subtraction.
@@ -263,13 +307,13 @@ def test_state_update_adds_the_gain_weighted_innovation():
     # component must receive its own row of K, not a shared correction.
     torch.manual_seed(11)
     K = torch.randn(1, STATE_DIM, 3, dtype=torch.float64) * 4.0
-    B = torch.zeros(1, STATE_DIM, STATE_DIM, dtype=torch.float64)
+    L = torch.zeros(1, STATE_DIM, STATE_DIM, dtype=torch.float64)
 
     z = h_torch(x_prior) + torch.tensor([0.01, -0.02, 12.0], dtype=torch.float64)
     y = z - h_torch(x_prior)
     expected = x_prior + torch.bmm(K, y.unsqueeze(-1)).squeeze(-1)
 
-    flt = RKNFilter(_FixedGain(K, B), dt=dt)
+    flt = RKNFilter(_FixedGain(K, L), dt=dt)
     flt.init_sequence(x0, _p0(1))
     x_upd, _ = flt.step(z)
 
@@ -402,7 +446,7 @@ def test_z_diff_feature_wraps_independently_of_the_innovation():
 
 
 def test_hidden_state_is_threaded_between_steps():
-    """"Recursive" is the requirement: step t must receive the hidden state step
+    """MS-10: "Recursive" is the requirement: step t must receive the hidden state step
     t-1 returned, not a freshly initialized one. Re-initializing every step
     leaves every other assertion in this file satisfied.
     """
@@ -422,7 +466,7 @@ def test_hidden_state_is_threaded_between_steps():
             self.received.append(hidden)
             nxt = (hidden[0] + 1.0,)
             self.returned.append(nxt)
-            return self.K, self.B, nxt
+            return self.K, self.L, nxt
 
     dt = 0.02
     x0 = _state_at_azimuth(0.4)
