@@ -6,7 +6,7 @@ import torch
 from filters.knet.rkn_network import RKNGainCovNetwork, normalise_groups
 from filters.knet.rkn_filter import RKNFilter
 from filters.torch_ops import CVMotionModel, H_jacobian_torch, h_torch
-from filters.measurement_model import h, wrap_angle
+from filters.measurement_model import HORIZONTAL_RANGE_FLOOR_M, h, wrap_angle
 from filters.state import STATE_DIM
 from scripts.train_rkn import _gaussian_nll
 
@@ -495,6 +495,9 @@ FAR_RANGE_M = 2.0**20
 LEVEL_POSITION_M = (700.0, -120.0, 60.0)
 ELEVATED_POSITION_M = (300.0, -400.0, 1200.0)
 LOOP_GAIN_ATOL = 4e-14
+UNDER_FLOOR_RHO_M = 5e-4
+ABOVE_FLOOR_RHO_M = 2.0**-9
+ABOVE_FLOOR_RTOL = 1e-14
 
 
 def _exact_raw_features():
@@ -676,12 +679,35 @@ def test_identity_los_gain_fully_corrects_position_whatever_the_range_and_bearin
         assert torch.equal(_gain_for_los_output(los_gain, features) @ H, expected)
 
 
-def test_target_directly_overhead_takes_no_azimuth_correction_and_stays_finite():
-    """MS-37, #85: overhead, H's azimuth row is zero and so is u_az; the azimuth column must be zero, not 0 x inf."""
+def test_target_within_the_horizontal_range_floor_takes_no_angle_correction_and_stays_finite():
+    """MS-37, #85: below rho = 1 mm H floors rho, u_el collapses onto u_r and r²/1e-3 would scale the elevation
+    column (5e10 here). Both angles are undefined there, so both columns are exactly 0, overhead and at 0.5 mm."""
     los_gain = torch.arange(1.0, STATE_DIM * 3 + 1.0, dtype=torch.float64).view(STATE_DIM, 3)
-    K = _gain_for_los_output(los_gain, _features_at([0.0, 0.0, LOS_TEST_RANGE_M]))
-    assert torch.all(torch.isfinite(K))
-    assert torch.equal(K[:, 0], torch.zeros(STATE_DIM, dtype=torch.float64))
+    for position in ([0.0, 0.0, LOS_TEST_RANGE_M], [UNDER_FLOOR_RHO_M, 0.0, LOS_TEST_RANGE_M]):
+        K = _gain_for_los_output(los_gain, _features_at(position))
+        assert torch.all(torch.isfinite(K))
+        assert torch.equal(K[:, :2], torch.zeros(STATE_DIM, 2, dtype=torch.float64))
+
+
+def test_angle_columns_at_and_above_the_horizontal_range_floor_scale_by_horizontal_and_slant_range():
+    """MS-37, #85: at rho = 1 mm H's floor is not yet active (azimuth row norm exactly 1000), and at 2 mm R is a
+    rotation; each 3-block of K's angle columns has N's block norm times rho and r. Measured 0, rtol 1e-14."""
+    los_gain = torch.arange(1.0, STATE_DIM * 3 + 1.0, dtype=torch.float64).view(STATE_DIM, 3)
+    for rho in (HORIZONTAL_RANGE_FLOOR_M, ABOVE_FLOOR_RHO_M):
+        K = _gain_for_los_output(los_gain, _features_at([rho, 0.0, LOS_TEST_RANGE_M]))
+        scale = torch.tensor([rho, math.hypot(rho, LOS_TEST_RANGE_M)], dtype=torch.float64)
+        block_norms = K[:, :2].reshape(3, 3, 2).norm(dim=1)
+        expected = los_gain[:, :2].reshape(3, 3, 2).norm(dim=1) * scale
+        assert torch.allclose(block_norms, expected, rtol=ABOVE_FLOOR_RTOL, atol=0)
+
+
+def test_gain_gradients_stay_finite_for_a_target_directly_overhead():
+    """MS-37, #85: the zero azimuth row must not reach 1/norm on the backward pass either."""
+    net = RKNGainCovNetwork(fc1_mult=1, hidden_mult=1, fc2_mult=1).double()
+    features = _features_at([0.0, 0.0, LOS_TEST_RANGE_M]).requires_grad_()
+    net(features, net.init_hidden(1, "cpu"))[0].sum().backward()
+    assert torch.all(torch.isfinite(features.grad))
+    assert all(torch.all(torch.isfinite(p.grad)) for p in net.rnn_K.parameters())
 
 
 def test_non_identity_los_gain_closes_the_position_loop_as_rotated_n_at_an_elevated_off_axis_target():

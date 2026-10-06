@@ -4,7 +4,7 @@ state_dict as arrays keyed by its own names, read by load_weights from torch_ops
 
 import numpy as np
 
-from filters.measurement_model import H_jacobian, h, innovation, wrap_angle
+from filters.measurement_model import HORIZONTAL_RANGE_FLOOR_M, H_jacobian, h, innovation, wrap_angle
 from filters.motion_models import cv_model
 from filters.state import ACC, AZIMUTH, MEAS_DIM, POS, STATE_DIM, VEL
 
@@ -56,7 +56,9 @@ def normalise_rkn_groups(features):
 def los_frame(H):
     position_rows = H[:, POS]
     norms = np.linalg.norm(position_rows, axis=1)
-    metres_per_unit = np.divide(1.0, norms, out=np.zeros_like(norms), where=norms > 0.0)
+    angles_defined = 0.0 < norms[AZIMUTH] <= 1.0 / HORIZONTAL_RANGE_FLOOR_M
+    measured = np.array([angles_defined, angles_defined, True])
+    metres_per_unit = np.divide(1.0, norms, out=np.zeros_like(norms), where=measured)
     rotation = np.array([normalize(row) for row in position_rows])
     return np.kron(np.eye(KINEMATIC_BLOCKS), rotation), metres_per_unit
 

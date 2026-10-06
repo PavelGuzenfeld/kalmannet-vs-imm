@@ -14,6 +14,7 @@ from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.knet_filter import KalmanNetFilter
 from filters.knet.rkn_filter import RKNFilter
 from filters.knet.rkn_network import RKNGainCovNetwork, normalise_groups
+from filters.measurement_model import H_jacobian
 from filters.motion_models import cv_model
 from filters.state import STATE_DIM
 from scripts.eval import error_and_nees
@@ -296,3 +297,20 @@ def test_sigmoid_matches_torch_across_the_active_range():
 def test_sigmoid_at_zero_is_one_half():
     """MS-10, #87: the sign split joins at zero."""
     assert numpy_forward.sigmoid(np.array([0.0]))[0] == 0.5
+
+
+@pytest.mark.parametrize("rho", [0.0, 5e-4])
+def test_numpy_gain_within_the_horizontal_range_floor_has_zero_angle_columns_and_is_finite(rho):
+    """MS-37, #85: overhead and at 0.5 mm H floors rho, so azimuth and elevation are undefined; same as torch."""
+    net = RKNGainCovNetwork(fc1_mult=1, hidden_mult=1, fc2_mult=1).double()
+    with torch.no_grad():
+        net.rnn_K.fc2[-1].weight.zero_()
+        net.rnn_K.fc2[-1].bias.copy_(torch.arange(1.0, STATE_DIM * 3 + 1.0, dtype=torch.float64))
+    mirror = numpy_forward.RKNGainCovNetwork({name: t.detach().numpy() for name, t in net.state_dict().items()})
+    x = np.zeros(STATE_DIM)
+    x[:3] = [rho, 0.0, 1024.0]
+    features = np.zeros(RKN_FEATURE_DIM)
+    features[6:33] = H_jacobian(x).reshape(-1)
+    K = mirror.forward(features, mirror.init_hidden())[0]
+    assert np.all(np.isfinite(K))
+    assert np.array_equal(K[:, :2], np.zeros((STATE_DIM, 2)))

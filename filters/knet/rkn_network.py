@@ -26,7 +26,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from filters.state import ACC, MEAS_DIM, POS, STATE_DIM, VEL
+from filters.measurement_model import HORIZONTAL_RANGE_FLOOR_M
+from filters.state import ACC, AZIMUTH, MEAS_DIM, POS, STATE_DIM, VEL
 
 _M, _N = STATE_DIM, MEAS_DIM
 _FEATURE_GROUPS = (_N, _N, _M * _N, _M)
@@ -44,12 +45,15 @@ def normalise_groups(features):
 
 
 def los_frame(H):
-    """MS-37: H's position rows are u_az/ρ, u_el/r and u_r, ρ floored as H floors it. Returns blockdiag(R, R, R)
-    with R's rows those directions, and the metres per unit of each measurement, 0 where a row is 0 (overhead)."""
+    """MS-37: H's position rows are u_az/ρ, u_el/r and u_r. Returns blockdiag(R, R, R), R's rows those directions,
+    and each measurement's metres per unit; both angles' are 0 where H floors ρ (ρ < 1 mm), read off the azimuth
+    row (0 overhead, else 1/max(ρ, 2⁻¹⁰ m)): there u_el collapses onto u_r and the angles are undefined (#85)."""
     position_rows = H[:, :, POS]
     norms = position_rows.norm(dim=-1)
-    nonzero = norms > 0.0
-    metres_per_unit = torch.where(nonzero, 1.0 / torch.where(nonzero, norms, torch.ones_like(norms)), 0.0)
+    azimuth_norm = norms[:, [AZIMUTH]]
+    angles_defined = (azimuth_norm > 0.0) & (azimuth_norm <= 1.0 / HORIZONTAL_RANGE_FLOOR_M)
+    measured = torch.cat([angles_defined, angles_defined, torch.ones_like(angles_defined)], dim=-1)
+    metres_per_unit = torch.where(measured, 1.0 / torch.where(measured, norms, torch.ones_like(norms)), 0.0)
     rotation = F.normalize(position_rows, dim=-1)
     identity = torch.eye(_KINEMATIC_BLOCKS, dtype=H.dtype, device=H.device).unsqueeze(0)
     return torch.kron(identity, rotation), metres_per_unit

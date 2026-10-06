@@ -14,6 +14,7 @@ from filters.state import PX, PY, PZ, STATE_DIM
 # the sensor) -- both are measure-zero in practice but would otherwise divide
 # by zero and NaN the whole filter.
 _EPS = 1e-6
+HORIZONTAL_RANGE_FLOOR_M = np.sqrt(_EPS)
 AZIMUTH_ROW_FLOOR_M = 2.0**-10
 
 
