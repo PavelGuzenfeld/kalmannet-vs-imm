@@ -14,6 +14,10 @@ CASES_DIR = Path(os.environ.get("PAGE_CASES_DIR", "build/browser"))
 CASES_URL_PATH = "/build/browser"
 FLIGHT_TIMEOUT_MS = 240_000
 LEARNED_FILTERS = ("KalmanNet", "RKN")
+LARGE_RADIUS_CASE = "break_turn_9g"
+LARGE_RADIUS_CASE_STEPS = 296
+FRAMING_DISTANCE_PER_RADIUS = 2.5
+DEFAULT_CAMERA_DISTANCE_M = 180.0
 UNAVAILABLE_PREFIXES = ("not available", "n/a")
 CASE_NAMES = sorted(path.name.removesuffix(".expected.json") for path in CASES_DIR.glob("*.expected.json"))
 
@@ -60,3 +64,27 @@ def test_page_flags_at_the_end_of_the_script_equal_native_replay(browser_context
     assert {name: flags[name] for name in expected["flags"]} == expected["flags"]
     for name in LEARNED_FILTERS:
         assert all(text.startswith(UNAVAILABLE_PREFIXES) for text in flags[name].values())
+
+
+def camera_state(page):
+    dataset = page.locator("#scene").evaluate("element => ({...element.dataset})")
+    return float(dataset["cameraDistance"]), float(dataset["framingRadius"])
+
+
+def test_chase_camera_backs_off_to_the_framing_distance_when_the_ellipsoid_is_large(browser_context):
+    page = finished_page(browser_context, LARGE_RADIUS_CASE, LARGE_RADIUS_CASE_STEPS)
+
+    distance, framing_radius = camera_state(page)
+
+    assert framing_radius * FRAMING_DISTANCE_PER_RADIUS > DEFAULT_CAMERA_DISTANCE_M
+    assert distance == framing_radius * FRAMING_DISTANCE_PER_RADIUS
+
+
+def test_orbit_camera_keeps_the_user_distance_when_the_ellipsoid_is_large(browser_context):
+    page = finished_page(browser_context, LARGE_RADIUS_CASE, LARGE_RADIUS_CASE_STEPS)
+
+    page.select_option("#view_mode", "orbit")
+
+    distance, framing_radius = camera_state(page)
+    assert framing_radius * FRAMING_DISTANCE_PER_RADIUS > DEFAULT_CAMERA_DISTANCE_M
+    assert distance == DEFAULT_CAMERA_DISTANCE_M
