@@ -51,6 +51,9 @@ def test_heavy_tailed_regime_has_larger_measurement_spread():
     assert np.std(resid_heavy) > np.std(resid_gauss)
 
 
+START_SPEED_SEED_3_M_S = 153.89726829480458
+
+
 def level_scenario(seed=3, noise_regime="nominal", steps=50):
     return {
         "seed": seed,
@@ -104,3 +107,32 @@ def test_scenario_flies_its_recorded_envelope_so_a_9_g_command_pulls_that_envelo
     specific_force = states[0, 6:9] + np.array([0.0, 0.0, STANDARD_GRAVITY_M_S2])
     lift = specific_force - (specific_force @ unit_velocity) * unit_velocity
     np.testing.assert_allclose(np.linalg.norm(lift), 3.0 * STANDARD_GRAVITY_M_S2, rtol=1e-9)
+
+
+def test_small_aerial_object_starts_inside_its_own_speed_envelope():
+    """MS-19: the start speed is drawn inside the chosen envelope, not the regime's speed0."""
+    envelope = PRESETS["small aerial object"]
+    speeds = []
+    for seed in range(20):
+        scenario = level_scenario(seed=seed, steps=1) | {"envelope": asdict(envelope)}
+        states, _ = fly_scenario(scenario)
+        speeds.append(np.linalg.norm(states[0, 3:6]))
+        assert envelope.min_speed_m_s <= np.linalg.norm(states[0, 3:6]) <= envelope.max_speed_m_s
+    assert max(speeds) - min(speeds) > 1.0
+
+
+def test_benchmark_envelope_start_speed_is_the_seed_draw_it_always_was():
+    """MS-19. rtol 1e-12: norm of the stored velocity components, roundoff only."""
+    states, _ = fly_scenario(level_scenario(seed=3, steps=1))
+    np.testing.assert_allclose(np.linalg.norm(states[0, 3:6]), START_SPEED_SEED_3_M_S, rtol=1e-12, atol=0)
+
+
+def test_envelope_disjoint_from_the_regime_speed_range_starts_inside_the_envelope():
+    """MS-19: no overlap with speed0 (20-250 m/s), so the whole envelope is the draw range."""
+    envelope = asdict(PRESETS["jet"]) | {"min_speed_m_s": 300.0, "max_speed_m_s": 400.0}
+    speeds = []
+    for seed in range(20):
+        states, _ = fly_scenario(level_scenario(seed=seed, steps=1) | {"envelope": envelope})
+        speeds.append(np.linalg.norm(states[0, 3:6]))
+        assert 300.0 <= speeds[-1] <= 400.0
+    assert max(speeds) - min(speeds) > 1.0

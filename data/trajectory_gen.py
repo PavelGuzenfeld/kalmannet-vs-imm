@@ -14,7 +14,7 @@ from filters.motion_models import MOTION_LABELS, ca_model, ct_model, cv_model, s
 from filters.state import POS, PX, PY, PZ, STATE_DIM, VEL, VX, VY, VZ
 
 
-def _sample_initial_state(rng, regime):
+def _sample_initial_state(rng, regime, speed_range=None):
     r0 = rng.uniform(*regime.range0)
     az0 = rng.uniform(-np.pi, np.pi)
     el0 = rng.uniform(np.deg2rad(-10), np.deg2rad(60))
@@ -22,7 +22,7 @@ def _sample_initial_state(rng, regime):
     py = r0 * np.cos(el0) * np.sin(az0)
     pz = r0 * np.sin(el0)
 
-    speed = rng.uniform(*regime.speed0)
+    speed = rng.uniform(*(speed_range or regime.speed0))
     heading = rng.uniform(-np.pi, np.pi)
     climb = rng.uniform(np.deg2rad(-10), np.deg2rad(10))
     vx = speed * np.cos(climb) * np.cos(heading)
@@ -107,11 +107,18 @@ def measure(rng, states, regime):
     return z
 
 
+def _start_speed_range(envelope, regime):
+    """regime.speed0 clipped to the envelope (MS-19); a disjoint pair falls back to the whole envelope."""
+    low = max(regime.speed0[0], envelope["min_speed_m_s"])
+    high = min(regime.speed0[1], envelope["max_speed_m_s"])
+    return (low, high) if low <= high else (envelope["min_speed_m_s"], envelope["max_speed_m_s"])
+
+
 def scenario_start(scenario, rng, regime):
     """The scenario's recorded "start", or else one drawn from rng, drawn before any measurement noise."""
     start = scenario.get("start")
     if start is None:
-        x0 = _sample_initial_state(rng, regime)
+        x0 = _sample_initial_state(rng, regime, _start_speed_range(scenario["envelope"], regime))
         start = {"position": x0[POS], "velocity": x0[VEL]}
     return start
 
