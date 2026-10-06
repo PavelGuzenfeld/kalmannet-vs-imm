@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from filters.knet.rkn_network import RKNGainCovNetwork, gain_features
+from filters.knet.rkn_network import RKNGainCovNetwork, normalise_groups
 from filters.knet.rkn_filter import RKNFilter
 from filters.torch_ops import CVMotionModel, H_jacobian_torch, h_torch
 from filters.measurement_model import h, wrap_angle
@@ -486,6 +486,7 @@ FEATURE_SLICES = {"H": slice(6, 33), "correction": slice(33, 42)}
 MIRROR_ROUNDING_ATOL = 1e-15
 MIRROR_GAIN_FLOOR = 1e-6
 MIRROR_WEIGHT_SCALE = 0.1
+RUNAWAY_FEATURE_SCALE = 1e17
 
 
 def _exact_raw_features():
@@ -526,7 +527,7 @@ def _branch_inputs(raw):
 def test_gain_features_unit_normalise_each_group_keeping_signs_and_leave_a_zero_group_zero():
     """MS-10, #70: per-group L2 like KalmanNet's features, so groups 1e3 apart in scale both reach unit norm.
     Inputs are exact in float64 (3-4-5 triangles), so equality is exact; z_diff = 0 pins the eps guard."""
-    assert torch.equal(gain_features(_exact_raw_features()), _exact_gain_features())
+    assert torch.equal(normalise_groups(_exact_raw_features()), _exact_gain_features())
 
 
 def test_gain_network_reads_the_signed_normalised_features():
@@ -534,10 +535,35 @@ def test_gain_network_reads_the_signed_normalised_features():
     assert torch.equal(_branch_inputs(_exact_raw_features())["K"], _exact_gain_features())
 
 
-def test_covariance_network_keeps_the_squared_features():
-    """MS-36: rnn_cov's B = L Lᵀ is second order, so its input stays the reference's squared features."""
+def _feature_groups(features):
+    return features[0].split((3, 3, 27, 9))
+
+
+def test_covariance_network_reads_squares_normalised_per_group():
+    """MS-36, #86: square first, then normalise, so 3 : -4 reaches rnn_cov as 9 : 16 on the unit sphere.
+    atol 1e-16 is one rounding of an entry below 1."""
     raw = _exact_raw_features()
-    assert torch.equal(_branch_inputs(raw)["cov"], raw ** 2)
+    squares = _feature_groups(raw ** 2)
+    expected = torch.cat([group / max(group.norm().item(), 1e-12) for group in squares]).unsqueeze(0)
+    assert torch.allclose(_branch_inputs(raw)["cov"], expected, rtol=0, atol=1e-16)
+
+
+def test_covariance_features_stay_on_the_unit_sphere_for_a_runaway_state_at_1e17():
+    """MS-36, #86: a runaway state fed rnn_cov features of 1e6-1e17 (#70). Each nonzero group must reach it with norm 1
+    and no negative entry; atol 1e-15 is a few roundings of a unit-norm sum of 27 squares."""
+    raw = _exact_raw_features() * RUNAWAY_FEATURE_SCALE
+    groups = _feature_groups(_branch_inputs(raw)["cov"])
+    assert all(torch.all(group >= 0.0) for group in groups)
+    norms = torch.stack([group.norm() for group in groups])
+    assert torch.allclose(norms, torch.tensor([1.0, 0.0, 1.0, 1.0], dtype=torch.float64), rtol=0, atol=1e-15)
+
+
+def test_runaway_state_reaches_rnn_cov_with_the_ratios_of_the_same_state_at_unit_scale():
+    """MS-36, #86: only the direction of each group may survive, so 1e17 x the features reads as 1 x them.
+    1e17 is not a power of two, so the squares round differently: atol 1e-16 is one rounding of an entry below 1."""
+    raw = _exact_raw_features()
+    runaway = _branch_inputs(raw * RUNAWAY_FEATURE_SCALE)["cov"]
+    assert torch.allclose(runaway, _branch_inputs(raw)["cov"], rtol=0, atol=1e-16)
 
 
 def _mirror_step(mirror):

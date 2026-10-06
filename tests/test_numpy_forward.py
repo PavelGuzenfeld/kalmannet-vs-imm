@@ -13,7 +13,7 @@ from filters.knet import numpy_forward
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.knet_filter import KalmanNetFilter
 from filters.knet.rkn_filter import RKNFilter
-from filters.knet.rkn_network import RKNGainCovNetwork, gain_features
+from filters.knet.rkn_network import RKNGainCovNetwork, normalise_groups
 from filters.motion_models import cv_model
 from filters.state import STATE_DIM
 from scripts.eval import error_and_nees
@@ -39,7 +39,7 @@ P0_VARIANCE = 100.0
 SINGLE_STEP_ATOL = 1e-15
 SEQUENCE_ATOL_STATE = 1e-10
 SEQUENCE_ATOL_P = 5e-8
-SEQUENCE_RTOL_NEES = 1e-10
+SEQUENCE_RTOL_NEES = 1e-9
 GAIN_EFFECT_FLOOR_M = 1.0
 RKN_FEATURE_DIM = 42
 
@@ -94,7 +94,7 @@ def test_numpy_gain_features_floor_a_near_zero_group_at_torchs_eps():
     raw[3:5] = [3e-13, 4e-13]
     raw[6] = 1.0
 
-    np.testing.assert_array_equal(numpy_forward.rkn_gain_features(raw), gain_features(torch.tensor(raw[None]))[0])
+    np.testing.assert_array_equal(numpy_forward.normalise_rkn_groups(raw), normalise_groups(torch.tensor(raw[None]))[0])
 
 
 def test_numpy_kalmannet_matches_torch_at_every_step_of_the_committed_scenario(flight, tmp_path):
@@ -188,7 +188,7 @@ def test_numpy_normalize_scales_a_sub_eps_feature_by_one_over_eps_like_torch():
 
 def test_replay_numpy_rkn_errors_and_nees_match_the_torch_backend_from_the_same_start(flight, tmp_path):
     """MS-10: the overconfidence flag reads NEES, so both backends start from x0 + offset and P0 = 100 I.
-    NEES spans 4e-2..1e6 and drifts by 6.6e-12 relative in float64, so rtol 1e-10 is ~15x headroom."""
+    NEES spans 4e-2..3e6 and drifts 3.2e-10 relative; one ulp on z_0 moves torch alone 2.6e-10, so rtol 1e-9."""
     states, z = flight
     checkpoint = tmp_path / "rkn.pt"
     torch.save(rkn_stand_in().state_dict(), checkpoint)
