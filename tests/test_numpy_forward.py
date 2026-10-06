@@ -211,6 +211,18 @@ def test_diverged_rkn_estimate_reads_a_signed_bounded_error_and_singular_p_a_hug
     assert nees == 1e10
 
 
+def test_rkn_nees_from_a_covariance_factor_too_ill_conditioned_to_square_is_the_whitened_error_norm():
+    """MS-36, MS-25: P = S S^T at cond(P) ~ 2^132 loses its sign under a full solve (RKN NEES read -508 at
+    break-turn step 296); whitening through S keeps NEES a squared norm."""
+    S = np.eye(STATE_DIM)
+    S[1, 0] = S[4, 3] = 2.0**33
+    whitened = np.array([1.0, -2.0, 3.0, 1.0, -1.0, 2.0, 0.0, 1.0, -3.0])
+
+    _, nees = error_and_nees(S @ whitened, S, np.zeros(STATE_DIM))
+
+    assert nees == whitened @ whitened
+
+
 def test_replay_numpy_kalmannet_errors_match_the_torch_backend_from_the_same_start(flight, tmp_path):
     """MS-10: both backends start KalmanNet from x0 + offset and the same Q, Sigma, S hidden priors.
     Same float64 drift budget as the filter-level comparison: atol 1e-10."""

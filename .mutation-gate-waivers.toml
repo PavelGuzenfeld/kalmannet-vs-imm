@@ -144,3 +144,45 @@ check = "no-citation"
 file = "tests/test_live_flight.py"
 test = "test_frame_reports_the_framing_radius_of_its_filter_readouts"
 reason = "Live-page camera framing is presentation, not model behaviour; its requirement is ticket #81, not an MS line."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_filter_whose_error_peaks_exactly_at_the_divergence_limit_has_not_diverged"
+reason = "Divergence is a page display rule over position error that decides plot scale and 3D framing; it is not model behaviour, so no MS-n line states it; its requirement is ticket #91."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_filter_whose_error_once_passed_the_divergence_limit_stays_diverged_after_it_recovers"
+reason = "Divergence is a page display rule over position error that decides plot scale and 3D framing; it is not model behaviour, so no MS-n line states it; its requirement is ticket #91."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_filter_with_a_non_finite_error_has_diverged"
+reason = "Divergence is a page display rule over position error that decides plot scale and 3D framing; it is not model behaviour, so no MS-n line states it; its requirement is ticket #91."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_divergence_limit_is_one_hundred_raw_error_thresholds"
+reason = "The 100x raw-error limit is a page display constant, not a model parameter; no MS-n line states it; its requirement is ticket #91."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_framing_radius_leaves_out_a_diverged_filter"
+reason = "Framing radius is camera geometry over readouts handed in; plot behaviour, not a model line; its requirement is ticket #91."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_framing_radius_with_every_filter_diverged_frames_the_truth_alone"
+reason = "Framing radius is camera geometry over readouts handed in; plot behaviour, not a model line; its requirement is ticket #91."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_frame_marks_the_filters_past_the_divergence_limit_of_the_flight_thresholds"
+reason = "Divergence is a page display rule over position error that decides plot scale and 3D framing; it is not model behaviour, so no MS-n line states it; its requirement is ticket #91."

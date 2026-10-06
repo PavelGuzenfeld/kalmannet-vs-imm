@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 import numpy as np
+from scipy.linalg import solve_triangular
 
 from data.trajectory_gen import fly_scenario
 from filters.ekf import EKF
@@ -97,11 +98,13 @@ def knet_steps(weights, dt, R, x_true, z):
         yield flt.step(z_t) - truth
 
 
-def error_and_nees(x, P, truth):
-    """Same divergence and singular-P stand-ins as scripts/eval_rkn.evaluate_dataset."""
+def error_and_nees(x, P_factor, truth):
+    """NEES whitened through the lower-triangular factor of P = P_factor P_factor^T: never negative, unlike a
+    solve against the squared P once cond(P) passes 1/eps. Divergence stand-ins as scripts/eval_rkn."""
     e = np.nan_to_num(x - truth, nan=DIVERGED_ERROR, posinf=DIVERGED_ERROR, neginf=-DIVERGED_ERROR)
     try:
-        return e, e @ np.linalg.solve(P, e)
+        whitened = solve_triangular(P_factor, e, lower=True, check_finite=False)
+        return e, whitened @ whitened
     except np.linalg.LinAlgError:
         return e, SINGULAR_P_NEES
 
@@ -114,7 +117,7 @@ def rkn_steps(weights, dt, x_true, z, snapshot=None):
             flt.init_sequence(truth + _INIT_OFFSET, np.eye(STATE_DIM) * LEARNED_P0_VARIANCE)
         x, P = flt.step(z_t)
         _remember(snapshot, P=P)
-        yield error_and_nees(x, P, truth)
+        yield error_and_nees(x, flt.S, truth)
 
 
 def evaluate_dataset(filter_factory, run_fn, states, measurements):

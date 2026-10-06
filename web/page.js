@@ -1,5 +1,5 @@
 import { toWorker } from "./protocol.js";
-import { FILTER_COLORS, TRUTH_COLOR, renderTimePlots } from "./plots.js";
+import { DIVERGED_LABEL, FILTER_COLORS, TRUTH_COLOR, planExtent, readoutText, renderTimePlots } from "./plots.js";
 import { createScene } from "./scene.js";
 
 const FLAGS = ["track_loss", "overconfidence", "raw_error"];
@@ -22,14 +22,12 @@ const STANDARD_RIGHT_TRIGGER = 7;
 const STEP_COST_WINDOW = 100;
 const STEP_BUDGET_MS = 20;
 const TRAIL_LENGTH = 3000;
-const PLAN_MARGIN = 0.1;
-const MIN_PLAN_SPAN_M = 200;
 const TRAIL_COLORS = { truth: TRUTH_COLOR, ...FILTER_COLORS };
 
 const byId = (id) => document.getElementById(id);
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
-const fixed = (value, digits) => (value === null || value === undefined ? "—" : value.toFixed(digits));
+const divergedFilters = (frame) => new Set(Object.keys(frame.filters).filter((name) => frame.filters[name].diverged));
 
 const worker = new Worker(new URL("worker.js", import.meta.url), { type: "module" });
 const heldKeys = new Set();
@@ -39,6 +37,7 @@ let flightSetup = null;
 let script = null;
 let stepsSent = 0;
 let speed = 0;
+let flying = false;
 let owedSteps = 0;
 let awaitingWorker = true;
 let lastTick = performance.now();
@@ -104,14 +103,15 @@ function startFlight(scriptControls, recordedStart) {
   history = [];
   scene?.reset();
   stepCosts = [];
-  speed = script ? 1 : 0;
+  speed = 1;
+  flying = true;
   awaitingWorker = true;
   worker.postMessage(toWorker.start(flightSetup));
 }
 
 async function startFromUrlOrUi() {
   const scenarioUrl = new URLSearchParams(location.search).get("scenario");
-  if (!scenarioUrl) return startFlight(null);
+  if (!scenarioUrl) return setStatus("paused: set the parameters and press Start");
   const scenario = await (await fetch(scenarioUrl)).json();
   applyScenarioToUi(scenario);
   startFlight(scenario.controls, scenario.start);
@@ -156,7 +156,7 @@ function tick(now) {
     const [rollRate, loadFactor, throttleNow] = latestControl;
     byId("controls").textContent =
       `roll rate ${((rollRate * 180) / Math.PI).toFixed(0)} °/s, load factor ${loadFactor.toFixed(2)} g, throttle ${throttleNow.toFixed(2)}`;
-    owedSteps = speed > 0 ? Math.min(owedSteps + (elapsedS * speed) / options.dt_s, MAX_STEPS_PER_MESSAGE) : 0;
+    owedSteps = flying && speed > 0 ? Math.min(owedSteps + (elapsedS * speed) / options.dt_s, MAX_STEPS_PER_MESSAGE) : 0;
     const steps = Math.floor(owedSteps);
     if (steps > 0 && !awaitingWorker) {
       owedSteps -= steps;
@@ -171,11 +171,12 @@ function renderReadouts(frame) {
     ...Object.entries(frame.flags).map(([name, flags]) => {
       const row = document.createElement("tr");
       const readout = frame.filters[name] ?? {};
-      const cells = [name, fixed(readout.error_m, 1), fixed(readout.nees, 2), fixed(readout.nis, 2), ...FLAGS.map((flag) => flags[flag])];
+      const cells = [name, readoutText(readout.error_m, 1), readoutText(readout.nees, 2), readoutText(readout.nis, 2), ...FLAGS.map((flag) => flags[flag])];
       row.replaceChildren(
         ...cells.map((text, column) => {
           const cell = document.createElement("td");
           cell.textContent = text;
+          if (column === 0 && readout.diverged) cell.append(divergedBadge(name));
           if (column >= 4) Object.assign(cell.dataset, { filter: name, flag: FLAGS[column - 4] });
           return cell;
         }),
@@ -185,16 +186,32 @@ function renderReadouts(frame) {
   );
 }
 
+function divergedBadge(name) {
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  badge.dataset.divergedFilter = name;
+  badge.textContent = DIVERGED_LABEL;
+  return badge;
+}
+
+function renderLegend(frame) {
+  byId("legend").replaceChildren(
+    ...["truth", ...Object.keys(frame.filters)].map((name) => {
+      const entry = document.createElement("span");
+      entry.style.color = TRAIL_COLORS[name];
+      entry.textContent = name;
+      if (frame.filters[name]?.diverged) entry.append(divergedBadge(name));
+      return entry;
+    }),
+  );
+}
+
 function renderPlan(frame) {
   const positions = { truth: frame.truth_m, ...Object.fromEntries(Object.entries(frame.filters).map(([name, readout]) => [name, readout.estimate_m])) };
   for (const [name, [x, y]] of Object.entries(positions)) {
-    trails[name] = [...(trails[name] ?? []).slice(1 - TRAIL_LENGTH), [x, y]];
+    if (Number.isFinite(x) && Number.isFinite(y)) trails[name] = [...(trails[name] ?? []).slice(1 - TRAIL_LENGTH), [x, y]];
   }
-  const points = Object.values(trails).flat();
-  const xs = points.map(([x]) => x);
-  const ys = points.map(([, y]) => y);
-  const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), MIN_PLAN_SPAN_M) * (1 + 2 * PLAN_MARGIN);
-  const centre = [(Math.max(...xs) + Math.min(...xs)) / 2, (Math.max(...ys) + Math.min(...ys)) / 2];
+  const { centre, span } = planExtent(trails, divergedFilters(frame));
   const canvas = byId("plan");
   const context = canvas.getContext("2d");
   const toCanvas = ([x, y]) => [((x - centre[0]) / span + 0.5) * canvas.width, (0.5 - (y - centre[1]) / span) * canvas.height];
@@ -223,7 +240,7 @@ function renderViews(frame) {
       ]),
     ),
   });
-  renderTimePlots(history, frame.trips, [options.nees_lower, thresholds().nees_upper]);
+  renderTimePlots(history, frame.trips, [options.nees_lower, thresholds().nees_upper], divergedFilters(frame));
   scene?.update(frame);
 }
 
@@ -240,13 +257,14 @@ const replies = {
   },
   started() {
     awaitingWorker = false;
-    setStatus(script ? `flying the scripted ${script.length} steps` : "ready: pick a speed to fly");
+    setStatus(script ? `flying the scripted ${script.length} steps` : "flying: steer with the keyboard or a gamepad");
   },
   frame({ frame, stepCostMs }) {
     awaitingWorker = false;
     if (stepCostMs !== null) stepCosts = [...stepCosts.slice(1 - STEP_COST_WINDOW), stepCostMs];
     if (script && stepsSent === script.length) setStatus(`script finished at step ${stepsSent}`);
     renderReadouts(frame);
+    renderLegend(frame);
     renderPlan(frame);
     renderViews(frame);
     renderClock(frame);
@@ -291,9 +309,23 @@ for (const button of document.querySelectorAll("[data-speed]")) {
 }
 byId("single_step").addEventListener("click", () => {
   speed = 0;
-  if (!awaitingWorker) advance(1);
+  if (flying && !awaitingWorker) advance(1);
 });
-byId("new_flight").addEventListener("click", () => startFlight(null));
+byId("start").addEventListener("click", () => options && startFlight(null));
+byId("stop").addEventListener("click", () => {
+  if (!flying) return;
+  flying = false;
+  speed = 0;
+  setStatus(`stopped at step ${stepsSent}: press Start for a new flight`);
+});
+for (const tab of document.querySelectorAll("[data-tab]")) {
+  tab.addEventListener("click", () => {
+    for (const other of document.querySelectorAll("[data-tab]")) {
+      other.setAttribute("aria-selected", String(other === tab));
+      byId(`tab-${other.dataset.tab}`).hidden = other !== tab;
+    }
+  });
+}
 byId("export").addEventListener("click", () => stepsSent && worker.postMessage(toWorker.exportScenario()));
 addEventListener("keydown", (event) => {
   if (!STEERING_KEYS.has(event.code) || event.target.matches("input, select")) return;

@@ -1,8 +1,8 @@
 import { FILTER_COLORS, TRUTH_COLOR } from "./plots.js";
 
 const THREE_URL = "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js";
-const VIEW_WIDTH = 640;
-const VIEW_HEIGHT = 420;
+const VIEW_WIDTH = 960;
+const VIEW_HEIGHT = 600;
 const FIELD_OF_VIEW_DEG = 55;
 const NEAR_M = 1;
 const FAR_M = 40000;
@@ -135,7 +135,7 @@ export async function createScene(container) {
         if (!markers[name]) markerFor(name);
         const centre = new THREE.Vector3(...toThree(readout.estimate_m));
         markers[name].estimate.position.copy(centre);
-        placeEllipsoid(markers[name], readout.ellipsoid, centre);
+        placeEllipsoid(markers[name], readout.diverged ? null : readout.ellipsoid, centre);
         pushTrail(name, centre);
       }
       grid.position.set(Math.round(truthPosition.x / GRID_CELL_M) * GRID_CELL_M, 0, Math.round(truthPosition.z / GRID_CELL_M) * GRID_CELL_M);
