@@ -47,7 +47,7 @@ def _stacked(steps):
 
 
 def ekf_like_steps(flt, x_true, z):
-    """Yields (err[9], nees, nis) per step as x_true and z yield, so a live flight can drive it; see run_ekf_like."""
+    """Yields (err[9], nees, nis) per step as x_true and z yield, live-drivable; see run_ekf_like."""
     for t, (truth, z_t) in enumerate(zip(x_true, z)):
         if t == 0:
             x, P = truth + _INIT_OFFSET, _P0.copy()

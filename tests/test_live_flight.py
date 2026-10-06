@@ -23,6 +23,7 @@ from web.live_flight import FILTER_NAMES, LEARNED_WEIGHTS, LiveFlight, page_opti
 
 REPO = Path(__file__).resolve().parents[1]
 SEED_SCENARIO = REPO / "data" / "scenarios" / "break_turn_9g.json"
+OVERHEAD_SCENARIO = REPO / "data" / "scenarios" / "overhead_pass.json"
 PAGE_IMM_TUNING = REPO / "web" / "imm_tuning.json"
 LOOSE_RAW_ERROR_M = 50.0
 KNET_INIT_OFFSET = np.array([2.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
@@ -57,9 +58,20 @@ def page_flight(weights_root, noise_regime="nominal", thresholds=DEFAULT_THRESHO
 
 def replay_lines(scenario_path, checkpoints):
     result = subprocess.run(
-        [sys.executable, "scripts/replay.py", str(scenario_path), "--imm-tuning", str(PAGE_IMM_TUNING),
-         "--knet-checkpoint", str(checkpoints["KalmanNet"]), "--rkn-checkpoint", str(checkpoints["RKN"])],
-        cwd=REPO, capture_output=True, text=True,
+        [
+            sys.executable,
+            "scripts/replay.py",
+            str(scenario_path),
+            "--imm-tuning",
+            str(PAGE_IMM_TUNING),
+            "--knet-checkpoint",
+            str(checkpoints["KalmanNet"]),
+            "--rkn-checkpoint",
+            str(checkpoints["RKN"]),
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, result.stderr
     return [line for line in result.stdout.splitlines() if ":" in line]
@@ -71,7 +83,7 @@ def preview_lines(flight):
 
 
 def test_exported_break_turn_replays_to_the_page_preview_flags(learned, tmp_path):
-    """MS-10, MS-11, MS-12: page and replay fly the same seed and controls under nominal R, the benchmarked IMM,
+    """MS-10, MS-11, MS-12: page and replay fly one seed and controls under nominal R, the benchmarked IMM,
     and the learned filters' numpy forward on the weights replay runs through torch."""
     weights_root, checkpoints = learned
     flight = page_flight(weights_root)
@@ -90,7 +102,7 @@ def test_exported_break_turn_replays_to_the_page_preview_flags(learned, tmp_path
 def test_exported_regime_envelope_and_thresholds_replay_to_the_page_preview_flags(
     noise_regime, preset, learned, tmp_path
 ):
-    """MS-11: the scenario's regime draws the noise, the filters still assume nominal R; replay reads the recorded
+    """MS-11: the scenario's regime draws the noise, filters still assume nominal R; replay reads the recorded
     envelope and thresholds."""
     weights_root, checkpoints = learned
     thresholds = {**DEFAULT_THRESHOLDS, "raw_error_m": LOOSE_RAW_ERROR_M}
@@ -103,7 +115,9 @@ def test_exported_regime_envelope_and_thresholds_replay_to_the_page_preview_flag
     assert lines == preview_lines(flight)
     recorded = json.loads(exported.read_text())
     assert (recorded["noise_regime"], recorded["envelope"], recorded["thresholds"]) == (
-        noise_regime, asdict(PRESETS[preset]), thresholds
+        noise_regime,
+        asdict(PRESETS[preset]),
+        thresholds,
     )
 
 
@@ -118,7 +132,9 @@ def test_learned_filter_without_exported_weights_reads_unavailable_and_is_left_o
 
     flags = flight.frame()["flags"]
 
-    assert flags["KalmanNet"] == dict.fromkeys(FLAGS, "not available (no weights at results/knet_vanilla/best.npz)")
+    assert flags["KalmanNet"] == dict.fromkeys(
+        FLAGS, "not available (no weights at results/knet_vanilla/best.npz)"
+    )
     assert flags["RKN"] == {
         "track_loss": "n/a (RKN defines no innovation covariance)",
         "overconfidence": "not available (no weights at results/rkn/best.npz)",
@@ -143,7 +159,7 @@ def test_export_weights_writes_the_npz_the_page_loads_beside_each_checkpoint(tmp
 
 
 def test_plotted_zero_gain_kalmannet_estimate_is_open_loop_cv_from_the_start_offset(tmp_path):
-    """MS-10: KalmanNet keeps the CV f and learns only the gain, so zero gain dead-reckons. The page plots truth plus
+    """MS-10: KalmanNet keeps CV f and learns only the gain, so zero gain dead-reckons. The page plots truth +
     error; at km positions that round trip loses ~1e-13 m, so atol 1e-9 m."""
     net = KalmanGainGRU().double()
     for parameter in net.parameters():
@@ -160,3 +176,22 @@ def test_plotted_zero_gain_kalmannet_estimate_is_open_loop_cv_from_the_start_off
     plotted = page_flight(tmp_path).frame()["filters"]["KalmanNet"]["estimate_m"]
 
     np.testing.assert_allclose(plotted, dead_reckoned[:3], rtol=0.0, atol=ESTIMATE_ROUND_TRIP_ATOL_M)
+
+
+def test_scenario_with_a_recorded_start_flies_from_it_and_replays_to_the_page_preview_flags(
+    learned, tmp_path
+):
+    """MS-35: the overhead pass starts at its recorded state, not a seeded draw; the page keeps that start."""
+    weights_root, checkpoints = learned
+    scenario = json.loads(OVERHEAD_SCENARIO.read_text())
+    flight = LiveFlight(scenario, json.loads(PAGE_IMM_TUNING.read_text())["best"], weights_root)
+    for control in scenario["controls"]:
+        flight.advance(control)
+    exported = tmp_path / "flight.json"
+    exported.write_text(flight.scenario_json())
+
+    lines = replay_lines(exported, checkpoints)
+
+    assert lines == preview_lines(flight)
+    assert json.loads(exported.read_text())["start"] == scenario["start"]
+    assert flight.frame()["truth_m"] == fly_scenario(scenario)[0][-1, :3].tolist()

@@ -5,20 +5,20 @@ import numpy as np
 
 from data.config import NOMINAL, REGIMES
 from data.fixed_wing import DEFAULT_PRESET, PRESETS, Envelope, fly_steps
-from data.trajectory_gen import _sample_initial_state, measure
+from data.trajectory_gen import measure, scenario_start
 from filters.ekf import EKF
 from filters.flags import DEFAULT_THRESHOLDS, FLAGS, UNGATED_REASONS, first_trips, shown
 from filters.imm import IMM
 from filters.knet.numpy_forward import load_weights
 from filters.plot_data import imm_kwargs_from_tuning
-from filters.state import POS, VEL
+from filters.state import POS
 from filters.ukf import UKF
 from scripts.eval import ekf_like_steps, imm_steps, knet_steps, rkn_steps
 
 NOISE_REGIMES = ["nominal", "high_noise", "low_noise", "heavy_tailed"]
 FILTER_NAMES = ("EKF", "UKF", "IMM", "KalmanNet", "RKN")
 LEARNED_WEIGHTS = {"KalmanNet": "results/knet_vanilla/best.npz", "RKN": "results/rkn/best.npz"}
-SETUP_KEYS = ("seed", "envelope", "noise_regime")
+SETUP_KEYS = ("seed", "envelope", "noise_regime", "start")
 UNKNOWN_GIT_TAG = "unknown"
 
 
@@ -57,15 +57,19 @@ class LiveFlight:
     A learned filter runs when weights_root holds its LEARNED_WEIGHTS .npz."""
 
     def __init__(self, setup, imm_best, weights_root):
-        self.setup = {key: setup[key] for key in SETUP_KEYS}
+        self.setup = {key: setup[key] for key in SETUP_KEYS if key in setup}
         self.thresholds = dict(setup["thresholds"])
         self.controls = []
         self._regime = REGIMES[setup["noise_regime"]]
         self._rng = np.random.default_rng(setup["seed"])
-        start = _sample_initial_state(self._rng, self._regime)
+        start = scenario_start(setup, self._rng, self._regime)
         envelope = Envelope(**setup["envelope"])
-        latest_control = _latest(lambda: self.controls[-1])
-        self._flight = fly_steps(envelope, start[POS], start[VEL], 0.0, latest_control, self._regime.dt)
+        position, velocity, latest_control = (
+            start["position"],
+            start["velocity"],
+            _latest(lambda: self.controls[-1]),
+        )
+        self._flight = fly_steps(envelope, position, velocity, 0.0, latest_control, self._regime.dt)
         self._truth, self._z = None, None
         truth, z = _latest(lambda: self._truth), _latest(lambda: self._z)
         R, dt = NOMINAL.R(), NOMINAL.dt
@@ -74,7 +78,11 @@ class LiveFlight:
             "UKF": ekf_like_steps(UKF(dt, R), truth, z),
             "IMM": imm_steps(IMM(dt, R, **imm_kwargs_from_tuning(imm_best)), truth, z),
         }
-        weights = {name: weights_root / path for name, path in LEARNED_WEIGHTS.items() if (weights_root / path).exists()}
+        weights = {
+            name: weights_root / path
+            for name, path in LEARNED_WEIGHTS.items()
+            if (weights_root / path).exists()
+        }
         if "KalmanNet" in weights:
             knet = knet_steps(load_weights(weights["KalmanNet"]), dt, R, truth, z)
             self._filters["KalmanNet"] = ((err,) for err in knet)
@@ -93,17 +101,28 @@ class LiveFlight:
         return {name: self._trips(*zip(*scores)) for name, scores in self._scores.items()}
 
     def _trips(self, err, *nees_and_nis):
-        return first_trips(np.linalg.norm(np.array(err)[:, POS], axis=1), *nees_and_nis, thresholds=self.thresholds)
+        return first_trips(
+            np.linalg.norm(np.array(err)[:, POS], axis=1), *nees_and_nis, thresholds=self.thresholds
+        )
 
     def frame(self):
-        flags = {name: {flag: shown(name, trips, flag) for flag in FLAGS} for name, trips in self.trips().items()}
+        flags = {
+            name: {flag: shown(name, trips, flag) for flag in FLAGS} for name, trips in self.trips().items()
+        }
         return {
             "step": len(self.controls),
             "truth_m": self._truth[POS].tolist(),
             "filters": {name: _readout(self._truth, *scores[-1]) for name, scores in self._scores.items()},
-            "flags": {name: flags[name] if name in flags else _unavailable_flags(name) for name in FILTER_NAMES},
+            "flags": {
+                name: flags[name] if name in flags else _unavailable_flags(name) for name in FILTER_NAMES
+            },
         }
 
     def scenario_json(self, git_tag=UNKNOWN_GIT_TAG):
-        scenario = {**self.setup, "thresholds": self.thresholds, "git_tag": git_tag, "controls": self.controls}
+        scenario = {
+            **self.setup,
+            "thresholds": self.thresholds,
+            "git_tag": git_tag,
+            "controls": self.controls,
+        }
         return json.dumps({**scenario, "tripped": self.trips()}) + "\n"
