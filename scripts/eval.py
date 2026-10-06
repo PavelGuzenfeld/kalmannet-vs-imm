@@ -100,7 +100,7 @@ def knet_steps(weights, dt, R, x_true, z):
 
 def error_and_nees(x, P_factor, truth):
     """NEES whitened through the lower-triangular factor of P = P_factor P_factor^T: never negative, unlike a
-    solve against the squared P once cond(P) passes 1/eps. Divergence stand-ins as scripts/eval_rkn."""
+    solve against the squared P once cond(P) passes 1/eps. Also used by scripts/eval_rkn."""
     e = np.nan_to_num(x - truth, nan=DIVERGED_ERROR, posinf=DIVERGED_ERROR, neginf=-DIVERGED_ERROR)
     try:
         whitened = solve_triangular(P_factor, e, lower=True, check_finite=False)
