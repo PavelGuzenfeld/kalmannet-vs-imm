@@ -11,6 +11,7 @@ ENV PIP_NO_CACHE_DIR=1
 # Entrypoints live at the repo root and import `data.` / `filters.` packages;
 # running one as `python data/make_dataset.py` otherwise puts only its own dir on sys.path.
 ENV PYTHONPATH=/work
+ENV OMP_NUM_THREADS=1
 
 # ffmpeg: matplotlib needs it to write mp4 animations (make_animation.py). The
 # pillow writer (already bundled) covers GIF; ffmpeg is only for the mp4 path.
