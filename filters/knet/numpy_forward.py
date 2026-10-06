@@ -9,6 +9,7 @@ from filters.motion_models import cv_model
 from filters.state import AZIMUTH, MEAS_DIM, STATE_DIM
 
 GRU_GATES = 3
+RKN_FEATURE_SPLITS = np.cumsum([MEAS_DIM, MEAS_DIM, STATE_DIM * MEAS_DIM])
 
 
 def load_weights(npz):
@@ -44,6 +45,10 @@ def gru_cell(weights, prefix, x, hidden):
 def normalize(v):
     torch_normalize_eps = 1e-12
     return v / max(np.linalg.norm(v), torch_normalize_eps)
+
+
+def rkn_gain_features(features):
+    return np.concatenate([normalize(group) for group in np.split(features, RKN_FEATURE_SPLITS)])
 
 
 def wrap_measurement_diff(diff):
@@ -123,8 +128,8 @@ class RKNGainCovNetwork:
 
     def forward(self, features, hidden):
         h_K, h_cov = hidden
-        K_flat, h_K = self.rnn_K.forward(features, h_K)
-        C, h_cov = self.rnn_cov.forward(features, h_cov)
+        K_flat, h_K = self.rnn_K.forward(rkn_gain_features(features), h_K)
+        C, h_cov = self.rnn_cov.forward(features**2, h_cov)
         L = np.zeros((self.m, self.m))
         L[self._tril] = C
         return K_flat.reshape(self.m, self.n), L, (h_K, h_cov)
@@ -153,7 +158,7 @@ class RKNFilter:
         self.z_previous = z
         self.x_prior_previous = x_prior
 
-        features = np.concatenate([y, z_diff, H_t.flatten(), correction]) ** 2
+        features = np.concatenate([y, z_diff, H_t.flatten(), correction])
         K, L, self.hidden = self.net.forward(features, self.hidden)
 
         x_upd = x_prior + K @ y

@@ -14,19 +14,30 @@ independent GRU networks, matching the reference's `GRUNetwork` structure
              #2) -- this is what distinguishes RKN
              from vanilla KalmanNet, Split-KalmanNet, and Cholesky-KalmanNet.
 
-Both networks share the same 4 input features (innovation, observation
-difference, Jacobian H_t, state correction), squared elementwise -- per the
-reference and issue #14's extraction ("covariance is a second-order/quadratic
-quantity").
+Both networks read the same 4 input features (innovation, observation
+difference, Jacobian H_t, state correction). rnn_cov squares them elementwise --
+per the reference and issue #14's extraction ("covariance is a second-order/
+quadratic quantity"); rnn_K reads them signed (decision 55 in #2, #70).
 """
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from filters.state import MEAS_DIM, STATE_DIM
 
 _M, _N = STATE_DIM, MEAS_DIM
-_FEATURE_DIM = 2 * _N + _M * _N + _M  # y, z_diff, H_t (flattened), correction
+_FEATURE_GROUPS = (_N, _N, _M * _N, _M)
+_FEATURE_DIM = sum(_FEATURE_GROUPS)
+_FEATURE_AXIS = 1
+
+
+def gain_features(features):
+    """MS-10, #70: each group L2-normalised as KalmanNet's features are, so signs survive (squared, a mirror
+    through the z axis gave the same K) and a runaway state cannot saturate the GRU."""
+    groups = features.split(_FEATURE_GROUPS, dim=_FEATURE_AXIS)
+    normalised = [F.normalize(group, dim=_FEATURE_AXIS) for group in groups]
+    return torch.cat(normalised, dim=_FEATURE_AXIS)
 
 
 class GRUNetwork(nn.Module):
@@ -90,8 +101,8 @@ class RKNGainCovNetwork(nn.Module):
 
     def forward(self, features, hidden):
         h_K, h_cov = hidden
-        K_flat, h_K = self.rnn_K(features, h_K)
-        C, h_cov = self.rnn_cov(features, h_cov)
+        K_flat, h_K = self.rnn_K(gain_features(features), h_K)
+        C, h_cov = self.rnn_cov(features**2, h_cov)
 
         batch = features.shape[0]
         K = K_flat.view(batch, self.m, self.n)

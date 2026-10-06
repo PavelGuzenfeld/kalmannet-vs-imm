@@ -41,7 +41,6 @@ class RKNFilter:
         self.x_prior_previous = x_prior
 
         features = torch.cat([y, z_diff, H_t.reshape(H_t.shape[0], -1), correction], dim=-1)
-        features = features ** 2
 
         K, L, self.hidden = self.net(features, self.hidden)
 

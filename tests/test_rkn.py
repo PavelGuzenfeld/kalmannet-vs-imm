@@ -1,10 +1,10 @@
 import numpy as np
 import torch
 
-from filters.knet.rkn_network import RKNGainCovNetwork
+from filters.knet.rkn_network import RKNGainCovNetwork, gain_features
 from filters.knet.rkn_filter import RKNFilter
 from filters.torch_ops import CVMotionModel, H_jacobian_torch, h_torch
-from filters.measurement_model import h
+from filters.measurement_model import h, wrap_angle
 from filters.state import STATE_DIM
 from scripts.train_rkn import _gaussian_nll
 
@@ -321,13 +321,10 @@ def test_state_update_adds_the_gain_weighted_innovation():
     assert not torch.allclose(x_upd, x_prior, rtol=0, atol=1e-6)
 
 
-def test_feature_vector_is_the_specified_squared_quadruple():
-    """RKN's network input is [innovation, z_diff, vec(H), correction], squared
-    (reference Algo/RecursiveKalmanNet.py get_features). Nothing downstream of
-    a learned net can observe a wrong feature, so assert the vector itself.
-    Squaring hides a sign only when the two operands are equal, so the states
-    below are chosen to make every difference non-degenerate.
-    """
+def test_feature_vector_is_the_specified_signed_quadruple():
+    """MS-10: the network input is [innovation, z_diff, vec(H), correction] (reference get_features), signed:
+    each branch encodes it its own way (#70). Nothing downstream of a learned net can observe a wrong
+    feature, so assert the vector itself."""
     dt = 0.02
     x0 = torch.zeros(1, STATE_DIM, dtype=torch.float64)
     x0[0, :3] = torch.tensor([700.0, -120.0, 60.0], dtype=torch.float64)
@@ -342,7 +339,7 @@ def test_feature_vector_is_the_specified_squared_quadruple():
         z - h_torch(x0),
         H_jacobian_torch(x_prior).reshape(1, -1),
         x0 - f(x0),
-    ], dim=-1) ** 2
+    ], dim=-1)
 
     net = _CaptureFeatures()
     flt = RKNFilter(net, dt=dt)
@@ -354,7 +351,7 @@ def test_feature_vector_is_the_specified_squared_quadruple():
 
 
 def test_feature_correction_is_recursive_at_the_second_step():
-    """correction = self.x - self.x_prior_previous must carry the prior saved
+    """MS-10: correction = self.x - self.x_prior_previous must carry the prior saved
     from the *previous* step, not the prior just recomputed this step. At
     t=1 those coincide (x_prior_previous is seeded from x0 at init), so an
     implementation that stores this step's own state instead of its prior
@@ -381,7 +378,7 @@ def test_feature_correction_is_recursive_at_the_second_step():
     correction2 = x_upd1 - x_prior1
     expected2 = torch.cat(
         [y2, z_diff2, H_jacobian_torch(x_prior2).reshape(1, -1), correction2], dim=-1
-    ) ** 2
+    )
 
     net = _CaptureFeatures(K=K)
     flt = RKNFilter(net, dt=dt)
@@ -395,15 +392,15 @@ def test_feature_correction_is_recursive_at_the_second_step():
     wrong_correction2 = x_upd1 - x_prior2
     wrong_expected2 = torch.cat(
         [y2, z_diff2, H_jacobian_torch(x_prior2).reshape(1, -1), wrong_correction2], dim=-1
-    ) ** 2
+    )
     assert not torch.allclose(net.seen[1], wrong_expected2, rtol=0, atol=1.0)
 
 
 def test_innovation_wraps_across_the_azimuth_boundary():
-    """A target at az = pi - e measured at az = -pi + e is 2e away, not 2pi - 2e.
+    """MS-34: a target at az = pi - e measured at az = -pi + e is 2e away, not 2pi - 2e.
     The reference port never wraps, so without the wrap the innovation feature
-    is (2pi - 2e)^2 ~ 39 instead of (2e)^2 ~ 4e-4 -- five orders out, yet still
-    finite and symmetric, which is all the older tests check.
+    is 2e - 2pi instead of 2e, yet still finite and symmetric, which is all the
+    older tests check.
     """
     eps = 0.01
     dt = 0.02
@@ -416,12 +413,12 @@ def test_innovation_wraps_across_the_azimuth_boundary():
     flt.step(z)
 
     innovation_az = net.seen[0][0, 0]
-    assert torch.allclose(innovation_az, torch.tensor((2 * eps) ** 2, dtype=torch.float64),
+    assert torch.allclose(innovation_az, torch.tensor(2 * eps, dtype=torch.float64),
                           rtol=0, atol=1e-9)
 
 
 def test_z_diff_feature_wraps_independently_of_the_innovation():
-    """z_diff = z_t - z_{t-1} carries azimuth too and needs its own wrap. Here
+    """MS-34: z_diff = z_t - z_{t-1} carries azimuth too and needs its own wrap. Here
     step 2's innovation is exactly zero -- the measurement matches the prior --
     so only z_diff crosses the boundary, and an implementation that wraps the
     innovation but not z_diff is separated from a correct one.
@@ -441,7 +438,7 @@ def test_z_diff_feature_wraps_independently_of_the_innovation():
     innovation_az, z_diff_az = net.seen[1][0, 0], net.seen[1][0, 3]
     assert torch.allclose(innovation_az, torch.zeros((), dtype=torch.float64),
                           rtol=0, atol=1e-18)
-    assert torch.allclose(z_diff_az, torch.tensor((2 * eps) ** 2, dtype=torch.float64),
+    assert torch.allclose(z_diff_az, torch.tensor(-2 * eps, dtype=torch.float64),
                           rtol=0, atol=1e-9)
 
 
@@ -480,3 +477,103 @@ def test_hidden_state_is_threaded_between_steps():
     assert net.received[0][0].item() == 0.0
     for t in range(1, 3):
         assert net.received[t][0] is net.returned[t - 1][0]
+
+
+MIRROR_X_Y = torch.tensor([-1.0, -1.0, 1.0] * 3, dtype=torch.float64)
+MIRROR_H_COLUMNS = MIRROR_X_Y.repeat(3)
+FEATURE_DIM = 42
+FEATURE_SLICES = {"H": slice(6, 33), "correction": slice(33, 42)}
+MIRROR_ROUNDING_ATOL = 1e-15
+MIRROR_GAIN_FLOOR = 1e-6
+MIRROR_WEIGHT_SCALE = 0.1
+
+
+def _exact_raw_features():
+    raw = torch.zeros(1, FEATURE_DIM, dtype=torch.float64)
+    raw[0, 0:2] = torch.tensor([3.0, -4.0], dtype=torch.float64)
+    raw[0, 6] = -600.0
+    raw[0, 20] = 800.0
+    raw[0, 35] = -0.5
+    return raw
+
+
+def _exact_gain_features():
+    expected = torch.zeros(1, FEATURE_DIM, dtype=torch.float64)
+    expected[0, 0:2] = torch.tensor([0.6, -0.8], dtype=torch.float64)
+    expected[0, 6] = -0.6
+    expected[0, 20] = 0.8
+    expected[0, 35] = -1.0
+    return expected
+
+
+def _record_input(seen, key):
+    def hook(_, args):
+        seen[key] = args[0]
+
+    return hook
+
+
+def _branch_inputs(raw):
+    net = RKNGainCovNetwork(fc1_mult=1, hidden_mult=1, fc2_mult=1).double()
+    seen = {}
+    net.rnn_K.register_forward_pre_hook(_record_input(seen, "K"))
+    net.rnn_cov.register_forward_pre_hook(_record_input(seen, "cov"))
+    with torch.no_grad():
+        net(raw, net.init_hidden(1, "cpu"))
+    return seen
+
+
+def test_gain_features_unit_normalise_each_group_keeping_signs_and_leave_a_zero_group_zero():
+    """MS-10, #70: per-group L2 like KalmanNet's features, so groups 1e3 apart in scale both reach unit norm.
+    Inputs are exact in float64 (3-4-5 triangles), so equality is exact; z_diff = 0 pins the eps guard."""
+    assert torch.equal(gain_features(_exact_raw_features()), _exact_gain_features())
+
+
+def test_gain_network_reads_the_signed_normalised_features():
+    """MS-10, #70: rnn_K must see the sign of each feature, or a mirrored geometry gets the same gain."""
+    assert torch.equal(_branch_inputs(_exact_raw_features())["K"], _exact_gain_features())
+
+
+def test_covariance_network_keeps_the_squared_features():
+    """MS-36: rnn_cov's B = L Lᵀ is second order, so its input stays the reference's squared features."""
+    raw = _exact_raw_features()
+    assert torch.equal(_branch_inputs(raw)["cov"], raw ** 2)
+
+
+def _mirror_step(mirror):
+    """One step on a geometry, or its mirror through the z axis: x,y negated, azimuth shifted by pi."""
+    x0 = torch.zeros(1, STATE_DIM, dtype=torch.float64)
+    x0[0, :3] = torch.tensor([700.0, -120.0, 60.0], dtype=torch.float64)
+    x0[0, 3:6] = torch.tensor([25.0, -40.0, 8.0], dtype=torch.float64)
+    z = h_torch(CVMotionModel(0.02)(x0)) + torch.tensor([0.003, 0.004, 9.0], dtype=torch.float64)
+    if mirror:
+        x0 = x0 * MIRROR_X_Y
+        z[0, 0] = wrap_angle(z[0, 0] + torch.pi)
+    torch.manual_seed(5)
+    net = RKNGainCovNetwork(fc1_mult=1, hidden_mult=1, fc2_mult=1).double()
+    for parameter in net.parameters():
+        torch.nn.init.uniform_(parameter, -MIRROR_WEIGHT_SCALE, MIRROR_WEIGHT_SCALE)
+    seen = {}
+    net.rnn_K.register_forward_pre_hook(_record_input(seen, "features"))
+    net.register_forward_hook(lambda _, args, out: seen.update(K=out[0]))
+    flt = RKNFilter(net, dt=0.02)
+    flt.init_sequence(x0, _p0(1))
+    with torch.no_grad():
+        flt.step(z)
+    return seen
+
+
+def test_mirrored_geometry_flips_the_x_y_signs_of_the_gain_input():
+    """MS-10, #70: a mirror through the z axis negates H's x,y columns and the correction's x,y entries.
+    Squared, both geometries fed rnn_K the same vector. az + pi rounds h(): measured 4.9e-17, atol ~20x."""
+    flipped = _mirror_step(False)["features"].clone()
+    flipped[0, FEATURE_SLICES["H"]] *= MIRROR_H_COLUMNS
+    flipped[0, FEATURE_SLICES["correction"]] *= MIRROR_X_Y
+    assert torch.allclose(_mirror_step(True)["features"], flipped, rtol=0, atol=MIRROR_ROUNDING_ATOL)
+
+
+def test_mirrored_geometry_gets_a_different_gain():
+    """MS-10, #70: squared features gave both the same K to rounding (0 here); signed, they differ by 1.3e-3.
+    Equivariance K' = diag(mirror) K is a training outcome, not a property of untrained weights."""
+    K, K_mirror = _mirror_step(False)["K"], _mirror_step(True)["K"]
+    assert (K - K_mirror).abs().max() > MIRROR_GAIN_FLOOR

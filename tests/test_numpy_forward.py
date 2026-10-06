@@ -13,7 +13,7 @@ from filters.knet import numpy_forward
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.knet_filter import KalmanNetFilter
 from filters.knet.rkn_filter import RKNFilter
-from filters.knet.rkn_network import RKNGainCovNetwork
+from filters.knet.rkn_network import RKNGainCovNetwork, gain_features
 from filters.motion_models import cv_model
 from filters.state import STATE_DIM
 from scripts.eval import error_and_nees
@@ -38,9 +38,10 @@ GRU_INPUT, GRU_HIDDEN = 5, 4
 P0_VARIANCE = 100.0
 SINGLE_STEP_ATOL = 1e-15
 SEQUENCE_ATOL_STATE = 1e-10
-SEQUENCE_ATOL_P = 5e-9
+SEQUENCE_ATOL_P = 5e-8
 SEQUENCE_RTOL_NEES = 1e-10
 GAIN_EFFECT_FLOOR_M = 1.0
+RKN_FEATURE_DIM = 42
 
 
 def stand_in(net, scale):
@@ -86,6 +87,16 @@ def test_numpy_gru_cell_steps_like_torch_gru_with_seeded_weights(tmp_path):
     np.testing.assert_allclose(h_numpy, h_torch[0, 0].numpy(), rtol=0.0, atol=SINGLE_STEP_ATOL)
 
 
+def test_numpy_gain_features_floor_a_near_zero_group_at_torchs_eps():
+    """MS-10, #70: z_diff of a still target can sit below the 1e-12 floor; both backends must divide by the
+    floor, not the norm. 3-4-5 inputs over a power of ten keep the quotients identical."""
+    raw = np.zeros(RKN_FEATURE_DIM)
+    raw[3:5] = [3e-13, 4e-13]
+    raw[6] = 1.0
+
+    np.testing.assert_array_equal(numpy_forward.rkn_gain_features(raw), gain_features(torch.tensor(raw[None]))[0])
+
+
 def test_numpy_kalmannet_matches_torch_at_every_step_of_the_committed_scenario(flight, tmp_path):
     """MS-10: same CV f, h and learned gain. Checkpoints are float64 (both trainers call .double()); summation
     order drifts x by 3.6e-12 over the 296 steps at |x| <= 3.4e3, so atol 1e-10 is ~30x headroom."""
@@ -111,8 +122,8 @@ def test_numpy_kalmannet_matches_torch_at_every_step_of_the_committed_scenario(f
 
 
 def test_numpy_rkn_matches_torch_state_and_covariance_at_every_step_of_the_committed_scenario(flight, tmp_path):
-    """MS-10: same CV f, h and H, learned K and B. float64 summation order over the 296 steps drifts x by 9.3e-12
-    (atol 1e-10, ~10x) and P by 3.6e-10 at |P| <= 4e4 (atol 5e-9, ~10x)."""
+    """MS-10: same CV f, h and H, learned K and B. float64 summation order over the 296 steps drifts x by 1.1e-11
+    (atol 1e-10, ~9x) and P by 6.5e-9 at |P| <= 5.8e5 (atol 5e-8, ~8x)."""
     states, z = flight
     net = rkn_stand_in()
     x0, P0 = states[0] + _INIT_OFFSET.numpy(), np.eye(STATE_DIM) * P0_VARIANCE
