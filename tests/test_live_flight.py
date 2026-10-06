@@ -22,14 +22,15 @@ from filters.torch_ops import export_npz
 from scripts.export_weights import main as export_weights_main
 from scripts.replay import SEED_SCENARIO_SEED, break_turn_controls, numpy_weights
 from tests.test_numpy_forward import knet_stand_in, rkn_stand_in
-from scripts.eval import ekf_like_steps, imm_steps
+from filters.state import POS
+from scripts.eval import ekf_like_steps, imm_steps, run_ekf_like
 from web.live_flight import FILTER_NAMES, LEARNED_WEIGHTS, LiveFlight, _ellipsoid, framing_radius_m, page_options
 
 REPO = Path(__file__).resolve().parents[1]
 SEED_SCENARIO = REPO / "data" / "scenarios" / "break_turn_9g.json"
 OVERHEAD_SCENARIO = REPO / "data" / "scenarios" / "overhead_pass.json"
 PAGE_IMM_TUNING = REPO / "web" / "imm_tuning.json"
-LOOSE_RAW_ERROR_M = 50.0
+RAW_ERROR_LIMIT_OFFSET_M = {"just_below_peak": 0.0, "just_above_peak": 1.0}
 KNET_INIT_OFFSET = np.array([2.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 ESTIMATE_ROUND_TRIP_ATOL_M = 1e-9
 
@@ -86,6 +87,12 @@ def replay_lines(scenario_path, checkpoints):
     return [line for line in result.stdout.splitlines() if ":" in line]
 
 
+def ekf_position_errors_m(flight):
+    states, z = fly_scenario(json.loads(flight.scenario_json()))
+    err, _, _ = run_ekf_like(EKF(NOMINAL.dt, NOMINAL.R()), states, z)
+    return np.linalg.norm(err[:, POS], axis=1)
+
+
 def preview_lines(flight):
     flags = flight.frame()["flags"]
     return [f"{name}: " + " ".join(f"{flag}={flags[name][flag]}" for flag in FLAGS) for name in FILTER_NAMES]
@@ -107,21 +114,30 @@ def test_exported_break_turn_replays_to_the_page_preview_flags(learned, tmp_path
     assert flight.trips()["EKF"] == committed["tripped"]["EKF"]
 
 
+@pytest.mark.parametrize("raw_error_side", RAW_ERROR_LIMIT_OFFSET_M)
 @pytest.mark.parametrize("noise_regime, preset", zip(page_options()["noise_regimes"], reversed(PRESETS)))
 def test_exported_regime_envelope_and_thresholds_replay_to_the_page_preview_flags(
-    noise_regime, preset, learned, tmp_path
+    noise_regime, preset, raw_error_side, learned, tmp_path
 ):
     """MS-11: the scenario's regime draws the noise, filters still assume nominal R; replay reads the recorded
-    envelope and thresholds."""
+    envelope and thresholds. The raw-error limit is the whole metre at or above the EKF's peak error, so the
+    flag trips at the first step past it, or never."""
     weights_root, checkpoints = learned
-    thresholds = {**DEFAULT_THRESHOLDS, "raw_error_m": LOOSE_RAW_ERROR_M}
+    peak_m = ekf_position_errors_m(page_flight(tmp_path / "probe", noise_regime, preset=preset)).max()
+    assert peak_m != np.floor(peak_m)
+    limit_m = float(np.floor(peak_m)) + RAW_ERROR_LIMIT_OFFSET_M[raw_error_side]
+    thresholds = {**DEFAULT_THRESHOLDS, "raw_error_m": limit_m}
     flight = page_flight(weights_root, noise_regime, thresholds, preset)
+    errors_m = ekf_position_errors_m(flight)
+    expected_step = int(np.argmax(errors_m > limit_m)) if raw_error_side == "just_below_peak" else None
     exported = tmp_path / "flight.json"
     exported.write_text(flight.scenario_json())
 
     lines = replay_lines(exported, checkpoints)
 
     assert lines == preview_lines(flight)
+    assert lines[0].endswith(f"raw_error={'-' if expected_step is None else expected_step}")
+    assert flight.trips()["EKF"]["raw_error"] == expected_step
     recorded = json.loads(exported.read_text())
     assert (recorded["noise_regime"], recorded["envelope"], recorded["thresholds"]) == (
         noise_regime,
