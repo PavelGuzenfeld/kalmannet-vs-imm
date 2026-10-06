@@ -16,7 +16,6 @@ FLIGHT_TIMEOUT_MS = 240_000
 LEARNED_FILTERS = ("KalmanNet", "RKN")
 LARGE_RADIUS_CASE = "break_turn_9g"
 LARGE_RADIUS_CASE_STEPS = 296
-FRAMING_DISTANCE_PER_RADIUS = 2.5
 DEFAULT_CAMERA_DISTANCE_M = 180.0
 UNAVAILABLE_PREFIXES = ("not available", "n/a")
 CASE_NAMES = sorted(path.name.removesuffix(".expected.json") for path in CASES_DIR.glob("*.expected.json"))
@@ -66,18 +65,31 @@ def test_page_flags_at_the_end_of_the_script_equal_native_replay(browser_context
         assert all(text.startswith(UNAVAILABLE_PREFIXES) for text in flags[name].values())
 
 
-def camera_state(page):
-    dataset = page.locator("#scene").evaluate("element => ({...element.dataset})")
-    return float(dataset["cameraDistance"]), float(dataset["framingRadius"])
+def camera_distance(page):
+    return float(page.locator("#scene").get_attribute("data-camera-distance"))
 
 
-def test_chase_camera_backs_off_to_the_framing_distance_when_the_ellipsoid_is_large(browser_context):
+def test_chase_camera_keeps_the_user_distance_when_the_ellipsoid_is_large(browser_context):
     page = finished_page(browser_context, LARGE_RADIUS_CASE, LARGE_RADIUS_CASE_STEPS)
 
-    distance, framing_radius = camera_state(page)
+    assert camera_distance(page) == DEFAULT_CAMERA_DISTANCE_M
 
-    assert framing_radius * FRAMING_DISTANCE_PER_RADIUS > DEFAULT_CAMERA_DISTANCE_M
-    assert distance == framing_radius * FRAMING_DISTANCE_PER_RADIUS
+
+def test_chase_camera_sits_behind_the_truth_along_its_velocity(browser_context):
+    page = module_page(browser_context)
+
+    offset = page.evaluate(
+        """async () => {
+          const container = document.createElement("div");
+          document.body.append(container);
+          const scene = await (await import("/web/scene.js")).createScene(container);
+          scene.update({ truth_m: [0, 0, 400], truth_velocity_m_s: [100, 0, 0], filters: {} });
+          return container.dataset.cameraOffset.split(" ").map(Number);
+        }"""
+    )
+
+    assert offset[0] < 0
+    assert offset[2] == 0
 
 
 def test_orbit_camera_keeps_the_user_distance_when_the_ellipsoid_is_large(browser_context):
@@ -85,9 +97,7 @@ def test_orbit_camera_keeps_the_user_distance_when_the_ellipsoid_is_large(browse
 
     page.select_option("#view_mode", "orbit")
 
-    distance, framing_radius = camera_state(page)
-    assert framing_radius * FRAMING_DISTANCE_PER_RADIUS > DEFAULT_CAMERA_DISTANCE_M
-    assert distance == DEFAULT_CAMERA_DISTANCE_M
+    assert camera_distance(page) == DEFAULT_CAMERA_DISTANCE_M
 
 
 BOOT_TIMEOUT_MS = 240_000
@@ -209,7 +219,6 @@ def test_scene_hides_the_ellipsoid_of_a_diverged_filter(browser_context):
           scene.update({
             truth_m: [0, 0, 400],
             truth_velocity_m_s: [100, 0, 0],
-            framing_radius_m: 15,
             filters: { EKF: readout(false), UKF: readout(true) },
           });
           return container.dataset.shownEllipsoids;
@@ -233,7 +242,7 @@ def test_stop_halts_the_flight_clock(browser_context):
     assert page.locator("#clock").text_content() == stopped_at
 
 
-def test_diverged_filter_gets_a_badge_and_leaves_the_plot_scales_plan_extent_and_framing(browser_context):
+def test_diverged_filter_gets_a_badge_and_leaves_the_plot_scales_and_plan_extent(browser_context):
     """KalmanNet on the diverging weights passes 1e5 m near step 60 and ends past 1e30 m. Kept estimates sit within
     1e5 m of truth, whose break-turn altitude spans under 100 m, so a kept-only scale spans under 3e5 m."""
     page = browser_context.new_page()
@@ -248,9 +257,7 @@ def test_diverged_filter_gets_a_badge_and_leaves_the_plot_scales_plan_extent_and
     badges = page.eval_on_selector_all("#readouts [data-diverged-filter]", "spans => spans.map(s => s.dataset.divergedFilter)")
     altitude_axis = page.locator('svg[data-panel="altitude"]').evaluate("svg => [Number(svg.dataset.axisLow), Number(svg.dataset.axisHigh)]")
     plan_span = float(page.locator("#plan").get_attribute("data-span-m"))
-    _, framing_radius = camera_state(page)
 
     assert badges == ["KalmanNet"]
     assert 0 < altitude_axis[1] - altitude_axis[0] < 3 * DIVERGED_POSITION_ERROR_M
     assert plan_span < 3 * DIVERGED_POSITION_ERROR_M
-    assert framing_radius < DIVERGED_POSITION_ERROR_M

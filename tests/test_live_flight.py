@@ -31,7 +31,6 @@ from web.live_flight import (
     LiveFlight,
     _ellipsoid,
     diverged,
-    framing_radius_m,
     page_options,
     trace,
 )
@@ -327,24 +326,6 @@ def test_page_options_offer_the_nees_lower_bound():
     assert page_options()["nees_lower"] == NEES_LOWER_025_DOF9
 
 
-def test_framing_radius_reaches_the_far_edge_of_the_largest_ellipsoid_from_truth():
-    readouts = {
-        "EKF": {"error_m": 300.0, "ellipsoid": {"semi_axes_m": [50.0, 1.0, 2.0]}, "diverged": False},
-        "UKF": {"error_m": 10.0, "ellipsoid": {"semi_axes_m": [4.0, 200.0, 2.0]}, "diverged": False},
-        "KalmanNet": {"error_m": 340.0, "ellipsoid": None, "diverged": False},
-    }
-    assert framing_radius_m(readouts) == 350.0
-
-
-def test_framing_radius_counts_an_estimate_without_an_ellipsoid_by_its_error_alone():
-    readouts = {"KalmanNet": {"error_m": 120.0, "ellipsoid": None, "diverged": False}}
-    assert framing_radius_m(readouts) == 120.0
-
-
-def test_frame_reports_the_framing_radius_of_its_filter_readouts(seed_frame):
-    assert seed_frame["framing_radius_m"] == framing_radius_m(seed_frame["filters"])
-
-
 def test_filter_whose_error_peaks_just_under_one_hundred_km_has_not_diverged():
     assert not diverged(np.array([1.0, 99_999.5, 3.0]))
 
@@ -360,19 +341,6 @@ def test_filter_whose_error_once_passed_one_hundred_km_stays_diverged_after_it_r
 @pytest.mark.parametrize("bad", [np.nan, np.inf])
 def test_filter_with_a_non_finite_error_has_diverged(bad):
     assert diverged(np.array([1.0, bad, 3.0]))
-
-
-def test_framing_radius_leaves_out_a_diverged_filter():
-    readouts = {
-        "IMM": {"error_m": 3.0, "ellipsoid": {"semi_axes_m": [4.0, 1.0, 2.0]}, "diverged": False},
-        "RKN": {"error_m": 2.2e8, "ellipsoid": {"semi_axes_m": [1e9, 1.0, 2.0]}, "diverged": True},
-    }
-    assert framing_radius_m(readouts) == 7.0
-
-
-def test_framing_radius_with_every_filter_diverged_frames_the_truth_alone():
-    readouts = {"RKN": {"error_m": 2.2e8, "ellipsoid": None, "diverged": True}}
-    assert framing_radius_m(readouts) == 0.0
 
 
 def test_a_raw_error_threshold_far_under_the_peak_errors_diverges_no_filter(tmp_path):

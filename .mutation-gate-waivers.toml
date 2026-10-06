@@ -130,24 +130,6 @@ reason = "The band edge is a pinned chi-square quantile of the Layer 5 harness, 
 [[waiver]]
 check = "no-citation"
 file = "tests/test_live_flight.py"
-test = "test_framing_radius_reaches_the_far_edge_of_the_largest_ellipsoid_from_truth"
-reason = "Live-page camera framing is presentation, not model behaviour; its requirement is ticket #81, not an MS line."
-
-[[waiver]]
-check = "no-citation"
-file = "tests/test_live_flight.py"
-test = "test_framing_radius_counts_an_estimate_without_an_ellipsoid_by_its_error_alone"
-reason = "Live-page camera framing is presentation, not model behaviour; its requirement is ticket #81, not an MS line."
-
-[[waiver]]
-check = "no-citation"
-file = "tests/test_live_flight.py"
-test = "test_frame_reports_the_framing_radius_of_its_filter_readouts"
-reason = "Live-page camera framing is presentation, not model behaviour; its requirement is ticket #81, not an MS line."
-
-[[waiver]]
-check = "no-citation"
-file = "tests/test_live_flight.py"
 test = "test_filter_whose_error_peaks_exactly_at_one_hundred_km_has_not_diverged"
 reason = "Divergence is a page display rule over position error that decides plot scale and 3D framing; it is not model behaviour, so no MS-n line states it; its requirement is ticket #91."
 
@@ -174,18 +156,6 @@ check = "no-citation"
 file = "tests/test_live_flight.py"
 test = "test_flight_keeps_a_filter_diverged_after_its_error_falls_back_under_the_limit"
 reason = "Divergence is a page display rule over position error that decides plot scale and 3D framing; it is not model behaviour, so no MS-n line states it; its requirement is ticket #91."
-
-[[waiver]]
-check = "no-citation"
-file = "tests/test_live_flight.py"
-test = "test_framing_radius_leaves_out_a_diverged_filter"
-reason = "Framing radius is camera geometry over readouts handed in; plot behaviour, not a model line; its requirement is ticket #91."
-
-[[waiver]]
-check = "no-citation"
-file = "tests/test_live_flight.py"
-test = "test_framing_radius_with_every_filter_diverged_frames_the_truth_alone"
-reason = "Framing radius is camera geometry over readouts handed in; plot behaviour, not a model line; its requirement is ticket #91."
 
 [[waiver]]
 check = "no-citation"
