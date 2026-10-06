@@ -85,12 +85,13 @@ function thresholds() {
   );
 }
 
-function startFlight(scriptControls) {
+function startFlight(scriptControls, recordedStart) {
   flightSetup = {
     seed: parseInt(byId("seed").value, 10),
     envelope: { ...envelope },
     noise_regime: byId("noise_regime").value,
     thresholds: thresholds(),
+    ...(recordedStart && { start: recordedStart }),
   };
   script = scriptControls;
   stepsSent = 0;
@@ -107,7 +108,7 @@ async function startFromUrlOrUi() {
   if (!scenarioUrl) return startFlight(null);
   const scenario = await (await fetch(scenarioUrl)).json();
   applyScenarioToUi(scenario);
-  startFlight(scenario.controls);
+  startFlight(scenario.controls, scenario.start);
 }
 
 function stickInput() {
