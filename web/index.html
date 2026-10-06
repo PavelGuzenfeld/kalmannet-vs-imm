@@ -22,6 +22,11 @@
   #tabs button[aria-selected=true] { background: #fff; border-bottom-color: #fff; font-weight: 600; }
   #analysis-views { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
   #scene { min-width: 320px; min-height: 120px; }
+  #scene-view { position: relative; }
+  #steering-hud { position: absolute; top: 8px; right: 8px; padding: 6px 8px; background: rgba(255, 255, 255, 0.8); border: 1px solid #ccc; border-radius: 4px; font: 12px monospace; pointer-events: none; }
+  #hud-keys span { display: inline-block; width: 1.6em; margin-right: 2px; text-align: center; border: 1px solid #999; border-radius: 3px; }
+  #hud-keys span[data-held=true] { background: #2a7d2e; color: #fff; }
+  #steering-hud output { display: inline-block; width: 4em; text-align: right; }
   #status, #clock { font-family: monospace; }
   .badge { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 8px; background: #b00020; color: #fff; font-size: 11px; }
   #legend span { margin-right: 12px; }
@@ -88,7 +93,22 @@
     <label>camera <select id="view_mode"><option value="chase">chase</option><option value="orbit">orbit</option></select></label>
     <span>drag to orbit, wheel to zoom; ellipsoids are 95% position covariance</span>
     <p id="legend"></p>
-    <div id="scene"></div>
+    <div id="scene-view">
+      <div id="scene"></div>
+      <div id="steering-hud">
+        <div id="hud-keys">
+          <span data-hud-key="ArrowUp" data-held="false">↑</span>
+          <span data-hud-key="ArrowLeft" data-held="false">←</span>
+          <span data-hud-key="ArrowDown" data-held="false">↓</span>
+          <span data-hud-key="ArrowRight" data-held="false">→</span>
+          <span data-hud-key="KeyW" data-held="false">W</span>
+          <span data-hud-key="KeyS" data-held="false">S</span>
+        </div>
+        <div data-hud-axis="roll" data-percent="0">roll <meter min="-100" max="100" value="0"></meter> <output>0%</output></div>
+        <div data-hud-axis="pull" data-percent="0">pull <meter min="-100" max="100" value="0"></meter> <output>0%</output></div>
+        <div data-hud-axis="throttle" data-percent="0">throttle <meter min="0" max="100" value="0"></meter> <output>0%</output></div>
+      </div>
+    </div>
   </section>
 
   <section id="tab-analysis" role="tabpanel" hidden>
