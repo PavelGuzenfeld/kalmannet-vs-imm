@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import torch
 
@@ -490,6 +492,9 @@ MIRROR_NOISE = torch.tensor([0.003, 0.004, 9.0], dtype=torch.float64)
 RUNAWAY_FEATURE_SCALE = 1e17
 LOS_TEST_RANGE_M = 1024.0
 FAR_RANGE_M = 2.0**20
+LEVEL_POSITION_M = (700.0, -120.0, 60.0)
+ELEVATED_POSITION_M = (300.0, -400.0, 1200.0)
+LOOP_GAIN_ATOL = 4e-14
 
 
 def _exact_raw_features():
@@ -564,10 +569,10 @@ def test_runaway_state_reaches_rnn_cov_with_the_ratios_of_the_same_state_at_unit
     assert torch.allclose(runaway, _branch_inputs(raw)["cov"], rtol=0, atol=1e-16)
 
 
-def _mirror_run(mirror):
+def _mirror_run(mirror, position=LEVEL_POSITION_M):
     """MIRROR_STEPS steps on a geometry, or its mirror through the z axis: x,y negated, azimuth shifted by pi."""
     x0 = torch.zeros(1, STATE_DIM, dtype=torch.float64)
-    x0[0, :3] = torch.tensor([700.0, -120.0, 60.0], dtype=torch.float64)
+    x0[0, :3] = torch.tensor(position, dtype=torch.float64)
     x0[0, 3:6] = torch.tensor([25.0, -40.0, 8.0], dtype=torch.float64)
     f = CVMotionModel(0.02)
     truth, measurements = x0, []
@@ -606,6 +611,16 @@ def test_mirrored_geometry_gets_the_mirrored_gain_at_every_step():
     """MS-37, #85: K' = diag(mirror) K by construction, untrained weights included (#84 trained: |K' - MK|/|K|
     median 1.0). Only az + pi rounding separates the runs: measured 2.7e-16 of max|K| by step 4, rtol 2e-15 ~7x."""
     original, mirrored = _mirror_run(False)["K"], _mirror_run(True)["K"]
+    for step in range(MIRROR_STEPS):
+        expected = MIRROR_X_Y.view(1, STATE_DIM, 1) * original[step]
+        assert (mirrored[step] - expected).abs().max() <= MIRROR_GAIN_RTOL * original[step].abs().max()
+
+
+def test_mirrored_elevated_geometry_gets_the_mirrored_gain_at_every_step():
+    """MS-37, #85: 67 deg up, horizontal and slant range differ (500 m vs 1300 m) and u_el leans on x,y; the
+    mirror still gives K' = diag(mirror) K. Measured 1.4e-16 of max|K| by step 4, rtol 2e-15 as on the level run."""
+    original = _mirror_run(False, ELEVATED_POSITION_M)["K"]
+    mirrored = _mirror_run(True, ELEVATED_POSITION_M)["K"]
     for step in range(MIRROR_STEPS):
         expected = MIRROR_X_Y.view(1, STATE_DIM, 1) * original[step]
         assert (mirrored[step] - expected).abs().max() <= MIRROR_GAIN_RTOL * original[step].abs().max()
@@ -667,3 +682,20 @@ def test_target_directly_overhead_takes_no_azimuth_correction_and_stays_finite()
     K = _gain_for_los_output(los_gain, _features_at([0.0, 0.0, LOS_TEST_RANGE_M]))
     assert torch.all(torch.isfinite(K))
     assert torch.equal(K[:, 0], torch.zeros(STATE_DIM, dtype=torch.float64))
+
+
+def test_non_identity_los_gain_closes_the_position_loop_as_rotated_n_at_an_elevated_off_axis_target():
+    """MS-37, #85: K H = blockdiag(Rᵀ) N R on position and 0 elsewhere, R's rows u_az, u_el, u_r built here
+    from the position, not from H. Entries reach 44; measured 3.6e-15, atol 4e-14 is ~10x."""
+    px, py, pz = ELEVATED_POSITION_M
+    rho, r = math.hypot(px, py), math.hypot(px, py, pz)
+    rotation = torch.tensor(
+        [[-py / rho, px / rho, 0.0], [-pz * px / (rho * r), -pz * py / (rho * r), rho / r], [px / r, py / r, pz / r]],
+        dtype=torch.float64,
+    )
+    los_gain = torch.arange(1.0, STATE_DIM * 3 + 1.0, dtype=torch.float64).view(STATE_DIM, 3)
+    features = _features_at(list(ELEVATED_POSITION_M))
+    H = features[0, FEATURE_SLICES["H"]].view(3, STATE_DIM)
+    expected = torch.zeros(STATE_DIM, STATE_DIM, dtype=torch.float64)
+    expected[:, :3] = torch.kron(torch.eye(3, dtype=torch.float64), rotation).T @ los_gain @ rotation
+    assert torch.allclose(_gain_for_los_output(los_gain, features) @ H, expected, rtol=0, atol=LOOP_GAIN_ATOL)
