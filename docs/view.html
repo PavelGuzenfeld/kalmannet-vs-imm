@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KalmanNet vs IMM</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 0 auto; padding: 16px; max-width: 60rem; color: #1d1d1f; background: #fafafa; }
+  table { border-collapse: collapse; display: block; overflow-x: auto; }
+  th, td { border: 1px solid #ccc; padding: 2px 8px; }
+  pre { overflow-x: auto; background: #eee; padding: 8px; }
+  code { background: #eee; }
+  img { max-width: 100%; }
+</style>
+</head>
+<body>
+<p><a href="../">Home</a></p>
+<main id="doc">Loading...</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+<script type="module">
+  const DOC_NAME = /^[\w-]+\.md$/;
+  const name = new URLSearchParams(location.search).get("doc");
+  const main = document.getElementById("doc");
+  if (!DOC_NAME.test(name)) {
+    main.textContent = "Unknown document.";
+  } else {
+    const response = await fetch(name);
+    main.innerHTML = response.ok ? marked.parse(await response.text()) : "Document not found.";
+    for (const link of main.querySelectorAll('a[href$=".md"]')) {
+      link.href = `view.html?doc=${link.getAttribute("href")}`;
+    }
+    renderMathInElement(main, { delimiters: [{ left: "$", right: "$", display: false }] });
+  }
+</script>
+</body>
+</html>

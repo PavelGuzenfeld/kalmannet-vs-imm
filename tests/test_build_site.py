@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -61,8 +62,35 @@ def test_page_reads_the_tag_stamp(site):
     assert 'fetch("version.json")' in (site / "web" / "index.html").read_text()
 
 
-def test_site_root_sends_visitors_to_the_page(site):
-    assert '<meta http-equiv="refresh" content="0; url=web/">' in (site / "index.html").read_text()
+def landing_links(site):
+    return re.findall(r'href="([^"]+)"', (site / "index.html").read_text())
+
+
+@pytest.mark.parametrize("target", ["web/", "docs/view.html?doc=write-up.md", "docs/view.html?doc=source-notes.md"])
+def test_landing_page_links_the_test_ground_and_both_docs(site, target):
+    assert target in landing_links(site)
+
+
+def test_landing_page_does_not_redirect(site):
+    assert "http-equiv" not in (site / "index.html").read_text()
+
+
+def test_landing_page_shows_the_tag(site):
+    assert f"built from {TAG}" in (site / "index.html").read_text()
+
+
+@pytest.mark.parametrize("doc", ["write-up.md", "source-notes.md"])
+def test_site_serves_the_commits_own_copy_of_each_doc(site, doc):
+    assert (site / "docs" / doc).read_bytes() == (REPO / "docs" / doc).read_bytes()
+
+
+@pytest.mark.parametrize("doc", ["write-up.md", "source-notes.md"])
+def test_docs_do_not_cross_reference_by_issue_number(doc):
+    assert not re.search(r"(?<![\w\[])#1[45]\b", (REPO / "docs" / doc).read_text())
+
+
+def test_write_up_links_the_source_notes_by_relative_path():
+    assert "[#14](source-notes.md)" in (REPO / "docs" / "write-up.md").read_text()
 
 
 def test_site_excludes_python_bytecode(site):
