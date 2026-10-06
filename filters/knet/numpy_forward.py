@@ -27,7 +27,8 @@ def relu(x):
 
 
 def sigmoid(x):
-    return 1.0 / (1.0 + np.exp(-x))
+    decay = np.exp(-np.abs(x))
+    return np.where(x >= 0.0, 1.0, decay) / (1.0 + decay)
 
 
 def gru_cell(weights, prefix, x, hidden):
