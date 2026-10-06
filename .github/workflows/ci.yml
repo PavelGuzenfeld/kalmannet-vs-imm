@@ -123,7 +123,7 @@ jobs:
           mkdir -p build
           docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/w -w /w "$NODE_IMAGE" sh -c "
             npm install --no-audit --no-fund --prefix .cache/pyodide-npm pyodide@$PYODIDE_VERSION
-            node scripts/pyodide_trace.mjs .cache/pyodide-npm/node_modules/pyodide/pyodide.mjs \
+            node scripts/pyodide_trace.mjs /w/.cache/pyodide-npm/node_modules/pyodide/pyodide.mjs \
               build/pyodide_trace.json data/scenarios/*.json"
 
       - name: Report drift against native
