@@ -1,5 +1,6 @@
 import json
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -175,3 +176,19 @@ def test_every_axis_left_on_an_edge_is_named_not_only_the_first():
         "ca_tau",
         "p_stay",
     ]
+
+
+def test_web_imm_tuning_json_holds_the_ms12_selected_values():
+    """MS-12: spec #1 selection (CV sigma_a pinned at 0.05); the Pyodide page must fly the benchmarked IMM."""
+    committed = json.loads((Path(__file__).resolve().parents[1] / "web" / "imm_tuning.json").read_text())
+
+    assert committed == {
+        "best": {
+            "p_stay": 0.99,
+            "omega_ct_deg": 25.0,
+            "ca_sigma_a": 2.0,
+            "ca_tau": 2.0,
+            "ct_sigma_a": 0.3,
+            "cv_sigma_a": 0.05,
+        }
+    }

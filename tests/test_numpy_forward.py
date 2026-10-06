@@ -18,6 +18,7 @@ from filters.motion_models import cv_model
 from filters.state import STATE_DIM
 from scripts.eval import error_and_nees
 from scripts.eval_knet import _INIT_OFFSET, _priors
+from scripts import replay as replay_script
 from scripts.replay import (
     RKN_LAYER_MULTS,
     knet_errors,
@@ -220,3 +221,20 @@ def test_numpy_wrap_measurement_diff_matches_torch_on_azimuth_and_elevation_at_p
     diff = np.array([np.pi, np.pi, 5.0])
     expected = wrap_measurement_diff_torch(torch.tensor(diff)).numpy()
     assert np.array_equal(numpy_forward.wrap_measurement_diff(diff), expected)
+
+
+def test_replay_numpy_backend_never_builds_a_torch_network(monkeypatch, tmp_path):
+    """MS-10: --learned-backend numpy runs both learned filters with the torch modules out of the loop."""
+    knet, rkn, missing = tmp_path / "knet.pt", tmp_path / "rkn.pt", tmp_path / "missing"
+    torch.save(knet_stand_in().state_dict(), knet)
+    torch.save(rkn_stand_in().state_dict(), rkn)
+
+    def torch_network(*_, **__):
+        raise AssertionError("the numpy backend built a torch network")
+
+    monkeypatch.setattr(replay_script, "KalmanGainGRU", torch_network)
+    monkeypatch.setattr(replay_script, "RKNGainCovNetwork", torch_network)
+
+    results = replay_script.replay(json.loads(SEED_SCENARIO.read_text()), missing, knet, rkn, "numpy")
+
+    assert isinstance(results["KalmanNet"], dict) and isinstance(results["RKN"], dict)
