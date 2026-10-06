@@ -78,3 +78,51 @@ reason = """Equivalent: the two differ only when R_jj is exactly 0.0, and flippi
 that row's sign leaves S S^T, the returned P and the zero diagonal the NLL
 guards on unchanged. Rerun by hand on tests/test_rkn.py and test_train_rkn.py:
 19 passed under the mutant, while < 1 and dropping the flip each fail."""
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_ellipsoid_of_an_axis_aligned_position_covariance_has_the_95_percent_semi_axes_and_identity_axes"
+reason = "The ellipsoid is plot geometry over a covariance matrix handed in; the 95% scaling is the pinned chi-square quantile, not a model line."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_ellipsoid_axis_rows_point_along_the_long_direction_of_a_rotated_covariance"
+reason = "The ellipsoid is plot geometry over a covariance matrix handed in; no model line states it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_ellipsoid_of_a_covariance_with_a_negative_variance_has_a_zero_semi_axis"
+reason = "Clipping is a drawing guard for a covariance that left positive-definiteness; the model lines say nothing about plotting it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_ellipsoid_of_a_non_finite_covariance_is_absent"
+reason = "A diverged filter has no ellipsoid to draw; plot behaviour, not a model line."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_frame_trips_are_the_numeric_steps_the_flag_cells_show"
+reason = "Flag steps come from filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the page payload carries them as numbers."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_frame_truth_velocity_is_the_flown_state_velocity"
+reason = "Truth comes from the fixed-wing generator, which is excluded from the model scope (MS-27); the page only forwards its velocity."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_ekf_snapshot_holds_the_covariance_the_last_nees_was_scored_with"
+reason = "The snapshot is the page's tap on the covariance the scoring harness already uses; it adds no model behaviour."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_page_options_offer_the_nees_lower_bound"
+reason = "The band edge is a pinned chi-square quantile of the Layer 5 harness, forwarded to the page; no model line states it."

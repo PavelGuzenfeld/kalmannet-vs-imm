@@ -3,7 +3,9 @@ from scipy.stats import chi2
 
 from filters.flags import (
     DEFAULT_THRESHOLDS,
+    ELLIPSOID_95_DOF3,
     INNOVATION_GATE_NIS_99_DOF3,
+    NEES_LOWER_025_DOF9,
     NEES_UPPER_975_DOF9,
     OVERCONFIDENT_STEPS,
     RAW_ERROR_M,
@@ -111,3 +113,8 @@ def test_shown_reads_a_flag_that_never_tripped_as_a_dash_and_a_tripped_one_as_it
     trips = {"track_loss": None, "raw_error": 0}
 
     assert [shown("EKF", trips, flag) for flag in ("track_loss", "raw_error")] == ["-", "0"]
+
+
+def test_band_and_ellipsoid_quantiles_are_the_scipy_values_for_the_pinned_scipy():
+    assert NEES_LOWER_025_DOF9 == chi2.ppf(0.025, df=9)
+    assert ELLIPSOID_95_DOF3 == chi2.ppf(0.95, df=3)

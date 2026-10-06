@@ -1,4 +1,5 @@
 import json
+from collections import defaultdict
 from dataclasses import asdict
 
 import numpy as np
@@ -7,11 +8,19 @@ from data.config import NOMINAL, REGIMES
 from data.fixed_wing import DEFAULT_PRESET, PRESETS, Envelope, fly_steps
 from data.trajectory_gen import measure, scenario_start
 from filters.ekf import EKF
-from filters.flags import DEFAULT_THRESHOLDS, FLAGS, UNGATED_REASONS, first_trips, shown
+from filters.flags import (
+    DEFAULT_THRESHOLDS,
+    ELLIPSOID_95_DOF3,
+    FLAGS,
+    NEES_LOWER_025_DOF9,
+    UNGATED_REASONS,
+    first_trips,
+    shown,
+)
 from filters.imm import IMM
 from filters.knet.numpy_forward import load_weights
 from filters.plot_data import imm_kwargs_from_tuning
-from filters.state import POS
+from filters.state import POS, VEL
 from filters.ukf import UKF
 from scripts.eval import ekf_like_steps, imm_steps, knet_steps, rkn_steps
 
@@ -28,6 +37,7 @@ def page_options():
         "default_preset": DEFAULT_PRESET,
         "noise_regimes": NOISE_REGIMES,
         "default_thresholds": DEFAULT_THRESHOLDS,
+        "nees_lower": NEES_LOWER_025_DOF9,
         "dt_s": NOMINAL.dt,
         "learned_weights": LEARNED_WEIGHTS,
     }
@@ -43,8 +53,22 @@ def _unavailable_flags(name):
     return {flag: shown(name, {}, flag) if (name, flag) in UNGATED_REASONS else missing for flag in FLAGS}
 
 
-def _readout(truth, err, nees=None, nis=None):
+def _ellipsoid(P):
+    """95% position ellipsoid: semi-axes in m, unit axis directions as rows."""
+    position_P = P[POS, POS]
+    if not np.isfinite(position_P).all():
+        return None
+    variances, directions = np.linalg.eigh((position_P + position_P.T) / 2)
     return {
+        "semi_axes_m": np.sqrt(np.clip(variances, 0.0, None) * ELLIPSOID_95_DOF3).tolist(),
+        "axes": directions.T.tolist(),
+    }
+
+
+def _readout(truth, err, nees=None, nis=None, *, snapshot):
+    return {
+        "ellipsoid": _ellipsoid(snapshot["P"]) if "P" in snapshot else None,
+        "mode_probabilities": snapshot["mu"].tolist() if "mu" in snapshot else None,
         "estimate_m": (truth[POS] + err[POS]).tolist(),
         "error_m": float(np.linalg.norm(err[POS])),
         "nees": None if nees is None else float(nees),
@@ -73,10 +97,11 @@ class LiveFlight:
         self._truth, self._z = None, None
         truth, z = _latest(lambda: self._truth), _latest(lambda: self._z)
         R, dt = NOMINAL.R(), NOMINAL.dt
+        snapshots = self._snapshots = defaultdict(dict)
         self._filters = {
-            "EKF": ekf_like_steps(EKF(dt, R), truth, z),
-            "UKF": ekf_like_steps(UKF(dt, R), truth, z),
-            "IMM": imm_steps(IMM(dt, R, **imm_kwargs_from_tuning(imm_best)), truth, z),
+            "EKF": ekf_like_steps(EKF(dt, R), truth, z, snapshots["EKF"]),
+            "UKF": ekf_like_steps(UKF(dt, R), truth, z, snapshots["UKF"]),
+            "IMM": imm_steps(IMM(dt, R, **imm_kwargs_from_tuning(imm_best)), truth, z, snapshots["IMM"]),
         }
         weights = {
             name: weights_root / path
@@ -87,7 +112,7 @@ class LiveFlight:
             knet = knet_steps(load_weights(weights["KalmanNet"]), dt, R, truth, z)
             self._filters["KalmanNet"] = ((err,) for err in knet)
         if "RKN" in weights:
-            self._filters["RKN"] = rkn_steps(load_weights(weights["RKN"]), dt, truth, z)
+            self._filters["RKN"] = rkn_steps(load_weights(weights["RKN"]), dt, truth, z, snapshots["RKN"])
         self._scores = {name: [] for name in self._filters}
 
     def advance(self, control):
@@ -106,13 +131,17 @@ class LiveFlight:
         )
 
     def frame(self):
-        flags = {
-            name: {flag: shown(name, trips, flag) for flag in FLAGS} for name, trips in self.trips().items()
-        }
+        trips = self.trips()
+        flags = {name: {flag: shown(name, found, flag) for flag in FLAGS} for name, found in trips.items()}
         return {
             "step": len(self.controls),
             "truth_m": self._truth[POS].tolist(),
-            "filters": {name: _readout(self._truth, *scores[-1]) for name, scores in self._scores.items()},
+            "truth_velocity_m_s": self._truth[VEL].tolist(),
+            "filters": {
+                name: _readout(self._truth, *scores[-1], snapshot=self._snapshots[name])
+                for name, scores in self._scores.items()
+            },
+            "trips": trips,
             "flags": {
                 name: flags[name] if name in flags else _unavailable_flags(name) for name in FILTER_NAMES
             },

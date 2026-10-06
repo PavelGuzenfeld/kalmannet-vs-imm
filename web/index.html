@@ -11,7 +11,9 @@
   input[type=number] { width: 7em; }
   table { border-collapse: collapse; margin: 8px 0; }
   td, th { border: 1px solid #ccc; padding: 2px 6px; text-align: right; }
-  canvas { border: 1px solid #ccc; background: #fff; max-width: 100%; }
+  canvas, svg { border: 1px solid #ccc; background: #fff; max-width: 100%; }
+  #views, #plots { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+  #scene { min-width: 320px; min-height: 120px; }
   #status { font-family: monospace; }
 </style>
 </head>
@@ -64,7 +66,21 @@
   <tbody id="readouts"></tbody>
 </table>
 
-<canvas id="plan" width="640" height="640"></canvas>
+<div id="views">
+  <div>
+    <label>3D view <select id="view_mode"><option value="chase">chase</option><option value="orbit">orbit</option></select></label>
+    <span>drag to orbit, wheel to zoom; ellipsoids are 95% position covariance</span>
+    <div id="scene"></div>
+  </div>
+  <canvas id="plan" width="420" height="420"></canvas>
+</div>
+
+<div id="plots">
+  <svg data-panel="altitude" viewBox="0 0 640 220" width="640"></svg>
+  <svg data-panel="error" viewBox="0 0 640 220" width="640"></svg>
+  <svg data-panel="nees" viewBox="0 0 640 220" width="640"></svg>
+  <svg data-panel="modes" viewBox="0 0 640 220" width="640"></svg>
+</div>
 
 <script type="module" src="page.js"></script>
 <script type="module">

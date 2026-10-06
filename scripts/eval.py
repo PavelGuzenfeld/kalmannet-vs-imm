@@ -41,13 +41,19 @@ def _scored(x, P, y, S, truth):
     return e, e @ np.linalg.solve(P, e), y @ np.linalg.solve(S, y)
 
 
+def _remember(snapshot, **fields):
+    if snapshot is not None:
+        snapshot.update(fields)
+
+
 def _stacked(steps):
     err, nees, nis = zip(*steps)
     return np.array(err), np.array(nees), np.array(nis)
 
 
-def ekf_like_steps(flt, x_true, z):
-    """Yields (err[9], nees, nis) per step as x_true and z yield, live-drivable; see run_ekf_like."""
+def ekf_like_steps(flt, x_true, z, snapshot=None):
+    """Yields (err[9], nees, nis) per step as x_true and z yield, live-drivable; see run_ekf_like.
+    snapshot, if given, is overwritten each step with the latest P (imm_steps adds mu, rkn_steps P)."""
     for t, (truth, z_t) in enumerate(zip(x_true, z)):
         if t == 0:
             x, P = truth + _INIT_OFFSET, _P0.copy()
@@ -58,6 +64,7 @@ def ekf_like_steps(flt, x_true, z):
                 x, P, y, S = flt.update(x, P, z_t)
         else:
             x, P, y, S = flt.step(x, P, z_t)
+        _remember(snapshot, P=P)
         yield _scored(x, P, y, S, truth)
 
 
@@ -67,11 +74,12 @@ def run_ekf_like(flt, x_true, z):
     return _stacked(ekf_like_steps(flt, x_true, z))
 
 
-def imm_steps(imm, x_true, z):
+def imm_steps(imm, x_true, z, snapshot=None):
     for t, (truth, z_t) in enumerate(zip(x_true, z)):
         if t == 0:
             state = imm.init_state(truth + _INIT_OFFSET, _P0.copy())
         x, P, state, y, S = imm.step(state, z_t)
+        _remember(snapshot, P=P, mu=state["mu"])
         yield _scored(x, P, y, S, truth)
 
 
@@ -98,13 +106,15 @@ def error_and_nees(x, P, truth):
         return e, SINGULAR_P_NEES
 
 
-def rkn_steps(weights, dt, x_true, z):
+def rkn_steps(weights, dt, x_true, z, snapshot=None):
     """Yields (err[9], nees) per step of the numpy RKN; live-drivable."""
     flt = numpy_forward.RKNFilter(numpy_forward.RKNGainCovNetwork(weights), dt)
     for t, (truth, z_t) in enumerate(zip(x_true, z)):
         if t == 0:
             flt.init_sequence(truth + _INIT_OFFSET, np.eye(STATE_DIM) * LEARNED_P0_VARIANCE)
-        yield error_and_nees(*flt.step(z_t), truth)
+        x, P = flt.step(z_t)
+        _remember(snapshot, P=P)
+        yield error_and_nees(x, P, truth)
 
 
 def evaluate_dataset(filter_factory, run_fn, states, measurements):

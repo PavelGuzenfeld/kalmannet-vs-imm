@@ -1,4 +1,6 @@
 import { toWorker } from "./protocol.js";
+import { FILTER_COLORS, TRUTH_COLOR, renderTimePlots } from "./plots.js";
+import { createScene } from "./scene.js";
 
 const FLAGS = ["track_loss", "overconfidence", "raw_error"];
 const THRESHOLD_INPUTS = ["innovation_gate_nis", "nees_upper", "overconfident_steps", "raw_error_m"];
@@ -22,7 +24,7 @@ const STEP_BUDGET_MS = 20;
 const TRAIL_LENGTH = 3000;
 const PLAN_MARGIN = 0.1;
 const MIN_PLAN_SPAN_M = 200;
-const TRAIL_COLORS = { truth: "#000000", EKF: "#d62728", UKF: "#ff7f0e", IMM: "#2ca02c", KalmanNet: "#1f77b4", RKN: "#9467bd" };
+const TRAIL_COLORS = { truth: TRUTH_COLOR, ...FILTER_COLORS };
 
 const byId = (id) => document.getElementById(id);
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
@@ -44,6 +46,8 @@ let throttle = CRUISE_THROTTLE;
 let latestControl = [0, 1, CRUISE_THROTTLE];
 let trails = {};
 let stepCosts = [];
+let history = [];
+let scene = null;
 
 const setStatus = (text) => (byId("status").textContent = text);
 
@@ -97,6 +101,8 @@ function startFlight(scriptControls, recordedStart) {
   stepsSent = 0;
   owedSteps = 0;
   trails = {};
+  history = [];
+  scene?.reset();
   stepCosts = [];
   speed = script ? 1 : 0;
   awaitingWorker = true;
@@ -205,6 +211,22 @@ function renderPlan(frame) {
   context.fillText(`plan view, x east, y north, ${span.toFixed(0)} m across`, 8, canvas.height - 8);
 }
 
+function renderViews(frame) {
+  history = history.filter((entry) => entry.t < frame.step - 1);
+  history.push({
+    t: frame.step - 1,
+    truthAltitude: frame.truth_m[2],
+    filters: Object.fromEntries(
+      Object.entries(frame.filters).map(([name, readout]) => [
+        name,
+        { error: readout.error_m, nees: readout.nees, altitude: readout.estimate_m[2], modes: readout.mode_probabilities },
+      ]),
+    ),
+  });
+  renderTimePlots(history, frame.trips, [options.nees_lower, thresholds().nees_upper]);
+  scene?.update(frame);
+}
+
 function renderClock(frame) {
   const cost = stepCosts.length ? `${median(stepCosts).toFixed(2)} ms per step (budget ${STEP_BUDGET_MS} ms)` : "";
   byId("clock").textContent = `step ${frame.step}, t = ${(frame.step * options.dt_s).toFixed(2)} s, ${speed}×, ${cost}`;
@@ -226,6 +248,7 @@ const replies = {
     if (script && stepsSent === script.length) setStatus(`script finished at step ${stepsSent}`);
     renderReadouts(frame);
     renderPlan(frame);
+    renderViews(frame);
     renderClock(frame);
   },
   scenario({ json }) {
@@ -244,6 +267,11 @@ const replies = {
 
 worker.onmessage = ({ data }) => replies[data.kind](data);
 worker.postMessage(toWorker.load());
+createScene(byId("scene")).then(
+  (created) => (scene = created),
+  (error) => (byId("scene").textContent = `3D view unavailable: ${error.message}`),
+);
+byId("view_mode").addEventListener("change", (event) => scene?.setMode(event.target.value));
 
 byId("preset").addEventListener("change", () => {
   envelope = { ...options.presets[byId("preset").value] };
