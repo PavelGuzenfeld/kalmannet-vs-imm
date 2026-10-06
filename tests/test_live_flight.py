@@ -297,6 +297,45 @@ def test_frame_truth_velocity_is_the_flown_state_velocity(seed_frame):
     assert seed_frame["truth_velocity_m_s"] == states[-1, 3:6].tolist()
 
 
+def lift_frame(roll_rate_rad_s, steps):
+    setup = {
+        "seed": SEED_SCENARIO_SEED,
+        "envelope": asdict(PRESETS[DEFAULT_PRESET]),
+        "noise_regime": "nominal",
+        "thresholds": DEFAULT_THRESHOLDS,
+    }
+    flight = LiveFlight(setup, json.loads(PAGE_IMM_TUNING.read_text())["best"], REPO / "no_weights")
+    for _ in range(steps):
+        flight.advance([roll_rate_rad_s, 0.0, 1.0])
+    return flight.frame()
+
+
+def test_frame_lift_direction_is_a_unit_vector_perpendicular_to_the_velocity_and_level_flight_has_horizontal_wings():
+    """MS-38: unit lift, perpendicular to the velocity; wings along velocity x lift are horizontal at zero bank."""
+    frame = lift_frame(0.0, 20)
+    lift, velocity = np.array(frame["truth_lift_direction"]), np.array(frame["truth_velocity_m_s"])
+
+    wing_axis = np.cross(velocity, lift)
+
+    assert np.linalg.norm(lift) == pytest.approx(1.0, abs=1e-12)
+    assert lift @ velocity == pytest.approx(0.0, abs=1e-9)
+    assert wing_axis[2] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_frame_lift_direction_is_rolled_from_the_level_lift_by_the_bank_angle():
+    """MS-38: positive roll banks the lift toward the right wing, velocity x level lift, by the integrated angle."""
+    steps, roll_rate = 20, 0.5
+    bank_rad = roll_rate * NOMINAL.dt * steps
+    level_frame, banked_frame = lift_frame(0.0, steps), lift_frame(roll_rate, steps)
+    level = np.array(level_frame["truth_lift_direction"])
+    velocity = np.array(level_frame["truth_velocity_m_s"])
+    right_wing = np.cross(velocity / np.linalg.norm(velocity), level)
+
+    assert banked_frame["truth_lift_direction"] == pytest.approx(
+        (np.cos(bank_rad) * level + np.sin(bank_rad) * right_wing).tolist(), abs=1e-9
+    )
+
+
 def test_ekf_snapshot_holds_the_covariance_the_last_nees_was_scored_with():
     states, z = fly_scenario(json.loads(SEED_SCENARIO.read_text()))
     snapshot = {}

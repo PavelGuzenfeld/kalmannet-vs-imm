@@ -8,6 +8,9 @@ const NEAR_M = 1;
 const FAR_M = 40000;
 const TRAIL_POINTS = 600;
 const TRUTH_SIZE_M = 6;
+const WING_SPAN_M = TRUTH_SIZE_M * 3;
+const WING_CHORD_M = TRUTH_SIZE_M / 2;
+const WING_THICKNESS_M = TRUTH_SIZE_M / 12;
 const ESTIMATE_RADIUS_M = 2;
 const GRID_SIZE_M = 6000;
 const GRID_CELLS = 60;
@@ -27,6 +30,7 @@ const SCALE_BAR_MARGIN_PX = 8;
 const SCALE_BAR_COLOR = "#1d1d1f";
 
 const toThree = ([east, north, up]) => [east, up, -north];
+const fromThree = ([x, y, z]) => [x, -z, y];
 
 export function scaleBar(metresPerPixel, maxBarPx) {
   const limit = metresPerPixel * maxBarPx;
@@ -57,7 +61,9 @@ export async function createScene(container) {
   const grid = new THREE.GridHelper(GRID_SIZE_M, GRID_CELLS, 0x888888, 0xbbbbbb);
   scene.add(grid);
 
-  const truth = new THREE.Mesh(new THREE.ConeGeometry(TRUTH_SIZE_M / 2, TRUTH_SIZE_M * 2, 12), new THREE.MeshBasicMaterial({ color: TRUTH_COLOR }));
+  const truthMaterial = new THREE.MeshBasicMaterial({ color: TRUTH_COLOR });
+  const truth = new THREE.Mesh(new THREE.ConeGeometry(TRUTH_SIZE_M / 2, TRUTH_SIZE_M * 2, 12), truthMaterial);
+  truth.add(new THREE.Mesh(new THREE.BoxGeometry(WING_SPAN_M, WING_CHORD_M, WING_THICKNESS_M), truthMaterial));
   scene.add(truth);
   const trailOf = (color) => {
     const line = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color }));
@@ -162,7 +168,11 @@ export async function createScene(container) {
       const [east, north, up] = frame.truth_velocity_m_s;
       heading = Math.atan2(north, east);
       truth.position.copy(truthPosition);
-      truth.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...toThree([east, north, up])).normalize());
+      const forward = new THREE.Vector3(...toThree(frame.truth_velocity_m_s)).normalize();
+      const lift = new THREE.Vector3(...toThree(frame.truth_lift_direction));
+      const rightWing = new THREE.Vector3().crossVectors(forward, lift).normalize();
+      truth.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(rightWing, forward, new THREE.Vector3().crossVectors(rightWing, forward)));
+      container.dataset.truthWingAxis = fromThree(rightWing.toArray()).join(" ");
       pushTrail("truth", truthPosition);
       for (const [name, readout] of Object.entries(frame.filters)) {
         if (!markers[name]) markerFor(name);

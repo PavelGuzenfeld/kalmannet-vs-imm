@@ -70,8 +70,8 @@ def fly_steps(
     bank_rad: float,
     controls: Iterable[Sequence[float]],
     dt_s: float,
-) -> Iterator[np.ndarray]:
-    """Yields one state row per control row as `controls` yields it, so a live input can drive it; see fly."""
+) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    """Yields (state row, unit lift direction) per control row as `controls` yields it; see fly."""
     max_thrust_m_s2 = _drag_m_s2(envelope, envelope.max_speed_m_s, 1.0)
     position = np.asarray(position_m, dtype=np.float64)
     velocity = np.asarray(velocity_m_s, dtype=np.float64)
@@ -85,16 +85,17 @@ def fly_steps(
         available_load_factor = min(envelope.max_load_factor, (speed / envelope.min_speed_m_s) ** 2)
         load_factor = np.clip(load_factor_command, -available_load_factor, available_load_factor)
         tangential = np.clip(throttle, 0.0, 1.0) * max_thrust_m_s2 - _drag_m_s2(envelope, speed, load_factor)
+        lift_direction = _lift_direction(unit_velocity, wings_level_up, bank_rad)
         acceleration = (
             tangential * unit_velocity
-            + load_factor * STANDARD_GRAVITY_M_S2 * _lift_direction(unit_velocity, wings_level_up, bank_rad)
+            + load_factor * STANDARD_GRAVITY_M_S2 * lift_direction
             - STANDARD_GRAVITY_M_S2 * UP
         )
         next_velocity = velocity + acceleration * dt_s
         next_speed = np.linalg.norm(next_velocity)
         next_velocity *= max(envelope.min_speed_m_s, next_speed) / next_speed
         acceleration = (next_velocity - velocity) / dt_s
-        yield np.concatenate((position, velocity, acceleration))
+        yield np.concatenate((position, velocity, acceleration)), lift_direction
         position = position + velocity * dt_s + 0.5 * acceleration * dt_s**2
         velocity = next_velocity
 
@@ -110,5 +111,5 @@ def fly(
     """controls[T, 3]: roll rate rad/s, load factor g, throttle in [0, 1].
     bank_rad is from wings level at the start; wings level then turns with the flight path, not the horizon.
     Returns states[T, 9] = px py pz vx vy vz ax ay az; row t's acceleration carries it to row t + 1."""
-    states = list(fly_steps(envelope, position_m, velocity_m_s, bank_rad, controls, dt_s))
+    states = [state for state, _ in fly_steps(envelope, position_m, velocity_m_s, bank_rad, controls, dt_s)]
     return np.array(states).reshape(len(states), 9)
