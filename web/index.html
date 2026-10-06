@@ -17,6 +17,7 @@
 </head>
 <body>
 <h1>Tracking test ground</h1>
+<p id="build"></p>
 <p id="status">loading Pyodide and the repo's filters/ and data/ code</p>
 
 <fieldset>
@@ -66,5 +67,9 @@
 <canvas id="plan" width="640" height="640"></canvas>
 
 <script type="module" src="page.js"></script>
+<script type="module">
+  const response = await fetch("version.json");
+  document.getElementById("build").textContent = response.ok ? `built from ${(await response.json()).tag}` : "local build";
+</script>
 </body>
 </html>
