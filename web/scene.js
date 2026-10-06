@@ -20,15 +20,37 @@ const MAX_ELEVATION_RAD = 1.5;
 const DRAG_RAD_PER_PX = 0.008;
 const ZOOM_PER_WHEEL_UNIT = 0.001;
 const ELLIPSOID_OPACITY = 0.18;
+const SCALE_BAR_MAX_PX = 120;
+const SCALE_BAR_STEPS = [5, 2, 1];
+const KM_IN_M = 1000;
+const SCALE_BAR_MARGIN_PX = 8;
+const SCALE_BAR_COLOR = "#1d1d1f";
 
 const toThree = ([east, north, up]) => [east, up, -north];
+
+export function scaleBar(metresPerPixel, maxBarPx) {
+  const limit = metresPerPixel * maxBarPx;
+  const decade = 10 ** Math.floor(Math.log10(limit));
+  const metres = Number((SCALE_BAR_STEPS.find((step) => step * decade <= limit) * decade).toPrecision(6));
+  const label = metres >= KM_IN_M ? `${metres / KM_IN_M} km` : `${metres} m`;
+  return { metres, pixels: metres / metresPerPixel, label };
+}
 
 export async function createScene(container) {
   const THREE = await import(THREE_URL);
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(VIEW_WIDTH, VIEW_HEIGHT);
   renderer.setClearColor(0xf2f5fa);
-  container.replaceChildren(renderer.domElement);
+  const scaleBarLabel = document.createElement("div");
+  const scaleBarLine = document.createElement("div");
+  const scaleBarBox = document.createElement("div");
+  scaleBarBox.dataset.scaleBar = "";
+  scaleBarBox.style.cssText = `position:absolute;left:${SCALE_BAR_MARGIN_PX}px;bottom:${SCALE_BAR_MARGIN_PX}px;font:11px monospace;color:${SCALE_BAR_COLOR};pointer-events:none`;
+  scaleBarLine.style.cssText = `border:2px solid ${SCALE_BAR_COLOR};border-top:none;height:5px`;
+  scaleBarBox.append(scaleBarLabel, scaleBarLine);
+  container.style.position = "relative";
+  container.style.width = "fit-content";
+  container.replaceChildren(renderer.domElement, scaleBarBox);
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(FIELD_OF_VIEW_DEG, VIEW_WIDTH / VIEW_HEIGHT, NEAR_M, FAR_M);
@@ -76,7 +98,19 @@ export async function createScene(container) {
     container.dataset.cameraOffset = offset.toArray().join(" ");
     camera.position.copy(focus).add(offset);
     camera.lookAt(focus);
+    placeScaleBar();
     renderer.render(scene, camera);
+  }
+
+  function placeScaleBar() {
+    const viewHeightPx = renderer.domElement.clientHeight;
+    if (!viewHeightPx) return;
+    const metresPerPixel = (2 * camera.position.distanceTo(focus) * Math.tan((FIELD_OF_VIEW_DEG * Math.PI) / 360)) / viewHeightPx;
+    const bar = scaleBar(metresPerPixel, SCALE_BAR_MAX_PX);
+    scaleBarLabel.textContent = bar.label;
+    scaleBarLine.style.width = `${bar.pixels}px`;
+    container.dataset.scaleBarLabel = bar.label;
+    container.dataset.scaleBarPx = bar.pixels;
   }
 
   function pushTrail(name, position) {
@@ -114,6 +148,8 @@ export async function createScene(container) {
     },
     { passive: false },
   );
+
+  new ResizeObserver(placeCamera).observe(renderer.domElement);
 
   return {
     setMode(mode) {
