@@ -138,13 +138,16 @@ class LiveFlight:
             np.linalg.norm(np.array(err)[:, POS], axis=1), *nees_and_nis, thresholds=self.thresholds
         )
 
-    def frame(self):
-        trips = self.trips()
-        flags = {name: {flag: shown(name, found, flag) for flag in FLAGS} for name, found in trips.items()}
-        readouts = {
+    def readouts(self):
+        return {
             name: _readout(self._truth, *scores[-1], snapshot=self._snapshots[name])
             for name, scores in self._scores.items()
         }
+
+    def frame(self):
+        trips = self.trips()
+        flags = {name: {flag: shown(name, found, flag) for flag in FLAGS} for name, found in trips.items()}
+        readouts = self.readouts()
         return {
             "step": len(self.controls),
             "truth_m": self._truth[POS].tolist(),
@@ -165,3 +168,12 @@ class LiveFlight:
             "controls": self.controls,
         }
         return json.dumps({**scenario, "tripped": self.trips()}) + "\n"
+
+
+def trace(scenario, imm_best, weights_root):
+    flight = LiveFlight(scenario, imm_best, weights_root)
+    steps = []
+    for control in scenario["controls"]:
+        flight.advance(control)
+        steps.append(flight.readouts())
+    return steps
