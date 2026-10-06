@@ -4,7 +4,8 @@ import numpy as np
 import pytest
 import torch
 
-from scripts.train_rkn import _gaussian_nll, run_epoch
+from filters.torch_ops import CVMotionModel
+from scripts.train_rkn import _INIT_PERTURB_STD, _gaussian_nll, run_epoch
 
 _DIM = 3
 _STATE_DIM = 9
@@ -75,3 +76,42 @@ def test_nll_of_a_cholesky_factor_is_the_batch_mean_of_quadratic_plus_logdet():
     S = torch.tensor([[[2.0, 0.0], [1.0, 2.0]], [[1.0, 0.0], [0.0, 1.0]]], dtype=torch.float64)
     e = torch.tensor([[2.0, 1.0], [0.0, 0.0]], dtype=torch.float64)
     assert _nll_with_grad(e, S) == pytest.approx((1.0 + math.log(16.0)) / 2.0, rel=1e-15)
+
+
+class _ZeroFactorNet(torch.nn.Module):
+    """Zero gain and L = scale * 0, so P_1 = F P0 F^T and the estimate is the CV prediction."""
+
+    def __init__(self):
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.tensor(1.0, dtype=torch.float64))
+
+    def init_hidden(self, batch, device):
+        return (torch.zeros(1, dtype=torch.float64),)
+
+    def forward(self, features, hidden):
+        batch = features.shape[0]
+        K = torch.zeros(batch, _STATE_DIM, _MEAS_DIM, dtype=torch.float64)
+        return K, self.scale * torch.zeros(batch, _STATE_DIM, _STATE_DIM, dtype=torch.float64), hidden
+
+
+def test_training_epoch_reports_the_nll_of_the_propagated_covariance_not_its_negation():
+    """MS-10: one step under zero gain, so e = F x0 - x_1 and P = F P0 F^T, P0 = 100 I as run_epoch seeds it.
+    x0's perturbation is replayed from the same seed; rel 1e-12 covers QR versus Cholesky rounding."""
+    dt, range_m = 0.02, 1000.0
+    states = np.zeros((1, 1, _STATE_DIM))
+    states[..., 0] = range_m
+    measurements = np.zeros((1, 1, 1, _MEAS_DIM))
+    measurements[..., 2] = range_m
+    x_true = torch.tensor(states[0], dtype=torch.float64)
+    torch.manual_seed(0)
+    x0 = x_true + torch.randn(1, _STATE_DIM, dtype=torch.float64) * _INIT_PERTURB_STD
+    F = CVMotionModel(dt).F.unsqueeze(0)
+    S = torch.linalg.cholesky(F @ (100.0 * torch.eye(_STATE_DIM, dtype=torch.float64)) @ F.transpose(1, 2))
+    expected = _gaussian_nll((F @ x0.unsqueeze(-1)).squeeze(-1) - x_true, S).item()
+
+    torch.manual_seed(0)
+    net = _ZeroFactorNet()
+    loss = run_epoch(net, dt, states, measurements, 1, 1, np.random.default_rng(0), torch.optim.SGD(net.parameters(), lr=0.0))
+
+    assert expected > 0.0
+    assert loss == pytest.approx(expected, rel=1e-12)
