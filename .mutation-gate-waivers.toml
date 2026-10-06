@@ -148,13 +148,13 @@ reason = "Live-page camera framing is presentation, not model behaviour; its req
 [[waiver]]
 check = "no-citation"
 file = "tests/test_live_flight.py"
-test = "test_filter_whose_error_peaks_exactly_at_the_divergence_limit_has_not_diverged"
+test = "test_filter_whose_error_peaks_exactly_at_one_hundred_km_has_not_diverged"
 reason = "Divergence is a page display rule over position error that decides plot scale and 3D framing; it is not model behaviour, so no MS-n line states it; its requirement is ticket #91."
 
 [[waiver]]
 check = "no-citation"
 file = "tests/test_live_flight.py"
-test = "test_filter_whose_error_once_passed_the_divergence_limit_stays_diverged_after_it_recovers"
+test = "test_filter_whose_error_once_passed_one_hundred_km_stays_diverged_after_it_recovers"
 reason = "Divergence is a page display rule over position error that decides plot scale and 3D framing; it is not model behaviour, so no MS-n line states it; its requirement is ticket #91."
 
 [[waiver]]
@@ -166,8 +166,14 @@ reason = "Divergence is a page display rule over position error that decides plo
 [[waiver]]
 check = "no-citation"
 file = "tests/test_live_flight.py"
-test = "test_divergence_limit_is_one_hundred_raw_error_thresholds"
-reason = "The 100x raw-error limit is a page display constant, not a model parameter; no MS-n line states it; its requirement is ticket #91."
+test = "test_filter_whose_error_peaks_just_under_one_hundred_km_has_not_diverged"
+reason = "Divergence is a page display rule over position error that decides plot scale and 3D framing; it is not model behaviour, so no MS-n line states it; its requirement is ticket #91."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_flight_keeps_a_filter_diverged_after_its_error_falls_back_under_the_limit"
+reason = "Divergence is a page display rule over position error that decides plot scale and 3D framing; it is not model behaviour, so no MS-n line states it; its requirement is ticket #91."
 
 [[waiver]]
 check = "no-citation"
@@ -184,5 +190,13 @@ reason = "Framing radius is camera geometry over readouts handed in; plot behavi
 [[waiver]]
 check = "no-citation"
 file = "tests/test_live_flight.py"
-test = "test_frame_marks_the_filters_past_the_divergence_limit_of_the_flight_thresholds"
+test = "test_a_raw_error_threshold_far_under_the_peak_errors_diverges_no_filter"
 reason = "Divergence is a page display rule over position error that decides plot scale and 3D framing; it is not model behaviour, so no MS-n line states it; its requirement is ticket #91."
+
+[[waiver]]
+file = "scripts/page_parity.py"
+line = 30
+column = 22
+old = """7"""
+new = """8"""
+reason = "The seed only has to give weights that run KalmanNet away with a finite estimate on break_turn_9g; seed 8 does too, so this mutant meets the same requirement and no test should pin the exact seed."

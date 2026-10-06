@@ -29,7 +29,7 @@ FILTER_NAMES = ("EKF", "UKF", "IMM", "KalmanNet", "RKN")
 LEARNED_WEIGHTS = {"KalmanNet": "results/knet_vanilla/best.npz", "RKN": "results/rkn/best.npz"}
 SETUP_KEYS = ("seed", "envelope", "noise_regime", "start")
 UNKNOWN_GIT_TAG = "unknown"
-DIVERGED_RAW_ERROR_MULTIPLE = 100.0
+DIVERGED_POSITION_ERROR_M = 1e5
 
 
 def page_options():
@@ -81,11 +81,11 @@ def _readout(truth, err, nees=None, nis=None, *, snapshot):
     }
 
 
-def diverged(position_error_m, raw_error_m):
-    """Diverged once any position error so far is non-finite or above DIVERGED_RAW_ERROR_MULTIPLE raw-error
-    thresholds; the page keeps a diverged filter out of its plot scales and 3D framing."""
+def diverged(position_error_m):
+    """Diverged once any position error so far is non-finite or above DIVERGED_POSITION_ERROR_M, whatever the
+    raw-error threshold; the page keeps a diverged filter out of its plot scales and 3D framing."""
     return bool(
-        not np.isfinite(position_error_m).all() or position_error_m.max() > DIVERGED_RAW_ERROR_MULTIPLE * raw_error_m
+        not np.isfinite(position_error_m).all() or position_error_m.max() > DIVERGED_POSITION_ERROR_M
     )
 
 
@@ -157,9 +157,7 @@ class LiveFlight:
         return {
             name: {
                 **_readout(self._truth, *scores[-1], snapshot=self._snapshots[name]),
-                "diverged": diverged(
-                    _position_errors_m([err for err, *_ in scores]), self.thresholds["raw_error_m"]
-                ),
+                "diverged": diverged(_position_errors_m([err for err, *_ in scores])),
             }
             for name, scores in self._scores.items()
         }

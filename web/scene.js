@@ -138,6 +138,7 @@ export async function createScene(container) {
         placeEllipsoid(markers[name], readout.diverged ? null : readout.ellipsoid, centre);
         pushTrail(name, centre);
       }
+      container.dataset.shownEllipsoids = Object.keys(markers).filter((name) => markers[name].ellipsoid.visible).join(" ");
       grid.position.set(Math.round(truthPosition.x / GRID_CELL_M) * GRID_CELL_M, 0, Math.round(truthPosition.z / GRID_CELL_M) * GRID_CELL_M);
       focus = truthPosition;
       framingRadius = frame.framing_radius_m;

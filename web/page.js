@@ -213,6 +213,7 @@ function renderPlan(frame) {
   }
   const { centre, span } = planExtent(trails, divergedFilters(frame));
   const canvas = byId("plan");
+  canvas.dataset.spanM = span;
   const context = canvas.getContext("2d");
   const toCanvas = ([x, y]) => [((x - centre[0]) / span + 0.5) * canvas.width, (0.5 - (y - centre[1]) / span) * canvas.height];
   context.clearRect(0, 0, canvas.width, canvas.height);

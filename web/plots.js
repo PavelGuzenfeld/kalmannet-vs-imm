@@ -52,10 +52,10 @@ function axisFor(values, log, band) {
   if (log) {
     const bottom = Math.log10(Math.max(low, MIN_LOG_VALUE));
     const top = Math.max(Math.log10(Math.max(high, MIN_LOG_VALUE)), bottom + 1);
-    return { toUnit: (value) => (Math.log10(Math.max(value, MIN_LOG_VALUE)) - bottom) / (top - bottom), label: (unit) => (10 ** (bottom + unit * (top - bottom))).toPrecision(2) };
+    return { low: 10 ** bottom, high: 10 ** top, toUnit: (value) => (Math.log10(Math.max(value, MIN_LOG_VALUE)) - bottom) / (top - bottom), label: (unit) => (10 ** (bottom + unit * (top - bottom))).toPrecision(2) };
   }
   const span = high - low || 1;
-  return { toUnit: (value) => (value - low) / span, label: (unit) => (low + unit * span).toPrecision(4) };
+  return { low, high: low + span, toUnit: (value) => (value - low) / span, label: (unit) => (low + unit * span).toPrecision(4) };
 }
 
 function drawPanel(svg, { title, series, log = false, band = null, bounds = null, lastT, markers }) {
@@ -63,6 +63,7 @@ function drawPanel(svg, { title, series, log = false, band = null, bounds = null
   const plotH = HEIGHT - PAD.top - PAD.bottom;
   const scaled = series.filter(({ diverged }) => !diverged);
   const axis = axisFor(bounds ?? scaled.flatMap(({ points }) => points.map(([, y]) => y)), log, band);
+  Object.assign(svg.dataset, { axisLow: axis.low, axisHigh: axis.high });
   const toX = (t) => PAD.left + (t / Math.max(lastT, 1)) * plotW;
   const toY = (value) => PAD.top + (1 - axis.toUnit(value)) * plotH;
   const parts = [

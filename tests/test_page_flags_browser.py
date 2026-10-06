@@ -92,8 +92,10 @@ def test_orbit_camera_keeps_the_user_distance_when_the_ellipsoid_is_large(browse
 
 BOOT_TIMEOUT_MS = 240_000
 PAUSED_WATCH_MS = 1_500
-DIVERGED_CASE_URL_PATH = "/build/browser/diverged-case.json"
-DIVERGING_RAW_ERROR_M = 1.0
+KNET_WEIGHTS_URL_PATH = "/results/knet_vanilla/best.npz"
+DIVERGING_KNET_WEIGHTS = CASES_DIR / "diverging_knet.npz"
+DIVERGED_POSITION_ERROR_M = 1e5
+STOP_SETTLE_MS = 500
 ANALYSIS_PANELS = ("altitude", "error", "nees", "modes")
 
 
@@ -173,20 +175,82 @@ def test_readout_shows_a_negative_or_non_finite_quadratic_form_as_invalid(browse
     assert shown == text
 
 
-def test_diverged_filters_get_a_badge_and_leave_the_chase_camera_framing(browser_context):
-    scenario = json.loads((CASES_DIR / f"{LARGE_RADIUS_CASE}.json").read_text())
-    scenario["thresholds"]["raw_error_m"] = DIVERGING_RAW_ERROR_M
+def test_nees_plot_leaves_out_a_negative_quadratic_form(browser_context):
+    page = module_page(browser_context)
+
+    plotted = page.evaluate(
+        """async (panels) => {
+          document.body.innerHTML = panels.map((panel) => `<svg data-panel="${panel}"></svg>`).join("");
+          const { renderTimePlots } = await import("/web/plots.js");
+          const history = [1.5, -438.12, 2.5].map((nees, t) => ({
+            t,
+            truthAltitude: 400,
+            filters: { EKF: { error: 1, nees, altitude: 400, modes: null } },
+          }));
+          renderTimePlots(history, {}, [0.5, 20], new Set());
+          return document.querySelector('svg[data-panel="nees"] polyline[data-series="EKF"]').getAttribute("points").split(" ");
+        }""",
+        list(ANALYSIS_PANELS),
+    )
+
+    assert len(plotted) == 2
+
+
+def test_scene_hides_the_ellipsoid_of_a_diverged_filter(browser_context):
+    page = module_page(browser_context)
+
+    shown = page.evaluate(
+        """async () => {
+          const container = document.createElement("div");
+          document.body.append(container);
+          const scene = await (await import("/web/scene.js")).createScene(container);
+          const ellipsoid = { semi_axes_m: [5, 4, 3], axes: [[1, 0, 0], [0, 1, 0], [0, 0, 1]] };
+          const readout = (diverged) => ({ estimate_m: [10, 0, 400], ellipsoid, diverged });
+          scene.update({
+            truth_m: [0, 0, 400],
+            truth_velocity_m_s: [100, 0, 0],
+            framing_radius_m: 15,
+            filters: { EKF: readout(false), UKF: readout(true) },
+          });
+          return container.dataset.shownEllipsoids;
+        }"""
+    )
+
+    assert shown == "EKF"
+
+
+def test_stop_halts_the_flight_clock(browser_context):
+    page = loaded_page(browser_context)
+    page.click("#start")
+    page.wait_for_function("() => /^step [1-9]/.test(document.getElementById('clock').textContent)")
+
+    page.click("#stop")
+    page.wait_for_function("() => document.getElementById('status').textContent.startsWith('stopped')")
+    page.wait_for_timeout(STOP_SETTLE_MS)
+    stopped_at = page.locator("#clock").text_content()
+    page.wait_for_timeout(PAUSED_WATCH_MS)
+
+    assert page.locator("#clock").text_content() == stopped_at
+
+
+def test_diverged_filter_gets_a_badge_and_leaves_the_plot_scales_plan_extent_and_framing(browser_context):
+    """KalmanNet on the diverging weights passes 1e5 m near step 60 and ends past 1e30 m. Kept estimates sit within
+    1e5 m of truth, whose break-turn altitude spans under 100 m, so a kept-only scale spans under 3e5 m."""
     page = browser_context.new_page()
-    page.route(f"{PAGE_BASE_URL}{DIVERGED_CASE_URL_PATH}", lambda route: route.fulfill(json=scenario))
-    page.goto(f"{PAGE_BASE_URL}/web/index.html?scenario={DIVERGED_CASE_URL_PATH}")
+    page.route(f"**{KNET_WEIGHTS_URL_PATH}", lambda route: route.fulfill(path=DIVERGING_KNET_WEIGHTS))
+    page.goto(f"{PAGE_BASE_URL}/web/index.html?scenario={CASES_URL_PATH}/{LARGE_RADIUS_CASE}.json")
     page.wait_for_function(
         "() => /^(script finished|worker error)/.test(document.getElementById('status').textContent)",
         timeout=FLIGHT_TIMEOUT_MS,
     )
+    assert page.locator("#status").text_content() == f"script finished at step {LARGE_RADIUS_CASE_STEPS}"
 
     badges = page.eval_on_selector_all("#readouts [data-diverged-filter]", "spans => spans.map(s => s.dataset.divergedFilter)")
-    distance, framing_radius = camera_state(page)
+    altitude_axis = page.locator('svg[data-panel="altitude"]').evaluate("svg => [Number(svg.dataset.axisLow), Number(svg.dataset.axisHigh)]")
+    plan_span = float(page.locator("#plan").get_attribute("data-span-m"))
+    _, framing_radius = camera_state(page)
 
-    assert sorted(badges) == ["EKF", "UKF"]
-    assert framing_radius * FRAMING_DISTANCE_PER_RADIUS < DEFAULT_CAMERA_DISTANCE_M
-    assert distance == DEFAULT_CAMERA_DISTANCE_M
+    assert badges == ["KalmanNet"]
+    assert 0 < altitude_axis[1] - altitude_axis[0] < 3 * DIVERGED_POSITION_ERROR_M
+    assert plan_span < 3 * DIVERGED_POSITION_ERROR_M
+    assert framing_radius < DIVERGED_POSITION_ERROR_M

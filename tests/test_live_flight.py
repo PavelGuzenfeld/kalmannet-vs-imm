@@ -24,8 +24,8 @@ from scripts.replay import SEED_SCENARIO_SEED, break_turn_controls, numpy_weight
 from tests.test_numpy_forward import knet_stand_in, rkn_stand_in
 from filters.state import POS
 from scripts.eval import ekf_like_steps, imm_steps, run_ekf_like
+from web import live_flight
 from web.live_flight import (
-    DIVERGED_RAW_ERROR_MULTIPLE,
     FILTER_NAMES,
     LEARNED_WEIGHTS,
     LiveFlight,
@@ -33,6 +33,7 @@ from web.live_flight import (
     diverged,
     framing_radius_m,
     page_options,
+    trace,
 )
 
 REPO = Path(__file__).resolve().parents[1]
@@ -344,25 +345,21 @@ def test_frame_reports_the_framing_radius_of_its_filter_readouts(seed_frame):
     assert seed_frame["framing_radius_m"] == framing_radius_m(seed_frame["filters"])
 
 
-RAW_ERROR_LIMIT_M = 20.0
-DIVERGENCE_LIMIT_M = DIVERGED_RAW_ERROR_MULTIPLE * RAW_ERROR_LIMIT_M
+def test_filter_whose_error_peaks_just_under_one_hundred_km_has_not_diverged():
+    assert not diverged(np.array([1.0, 99_999.5, 3.0]))
 
 
-def test_filter_whose_error_peaks_exactly_at_the_divergence_limit_has_not_diverged():
-    assert not diverged(np.array([1.0, DIVERGENCE_LIMIT_M, 3.0]), RAW_ERROR_LIMIT_M)
+def test_filter_whose_error_peaks_exactly_at_one_hundred_km_has_not_diverged():
+    assert not diverged(np.array([1.0, 100_000.0, 3.0]))
 
 
-def test_filter_whose_error_once_passed_the_divergence_limit_stays_diverged_after_it_recovers():
-    assert diverged(np.array([1.0, DIVERGENCE_LIMIT_M + 0.5, 3.0]), RAW_ERROR_LIMIT_M)
+def test_filter_whose_error_once_passed_one_hundred_km_stays_diverged_after_it_recovers():
+    assert diverged(np.array([1.0, 100_000.5, 3.0]))
 
 
 @pytest.mark.parametrize("bad", [np.nan, np.inf])
 def test_filter_with_a_non_finite_error_has_diverged(bad):
-    assert diverged(np.array([1.0, bad, 3.0]), RAW_ERROR_LIMIT_M)
-
-
-def test_divergence_limit_is_one_hundred_raw_error_thresholds():
-    assert DIVERGED_RAW_ERROR_MULTIPLE == 100.0
+    assert diverged(np.array([1.0, bad, 3.0]))
 
 
 def test_framing_radius_leaves_out_a_diverged_filter():
@@ -378,14 +375,26 @@ def test_framing_radius_with_every_filter_diverged_frames_the_truth_alone():
     assert framing_radius_m(readouts) == 0.0
 
 
-def test_frame_marks_the_filters_past_the_divergence_limit_of_the_flight_thresholds(tmp_path):
-    """Break-turn peaks: EKF and UKF about 171 m, IMM about 3 m; a 1 m raw-error threshold puts the limit at 100 m."""
+def test_a_raw_error_threshold_far_under_the_peak_errors_diverges_no_filter(tmp_path):
+    """Break-turn peaks: EKF and UKF about 171 m; a 1 m raw-error threshold trips them, yet none is 100 km off."""
     thresholds = {**DEFAULT_THRESHOLDS, "raw_error_m": 1.0}
 
     readouts = page_flight(tmp_path, thresholds=thresholds).frame()["filters"]
 
     assert {name: readout["diverged"] for name, readout in readouts.items()} == {
-        "EKF": True,
-        "UKF": True,
+        "EKF": False,
+        "UKF": False,
         "IMM": False,
     }
+
+
+def test_flight_keeps_a_filter_diverged_after_its_error_falls_back_under_the_limit(tmp_path, monkeypatch):
+    """No committed flight recovers from 100 km, so the limit is moved between IMM's final and peak error."""
+    flight = page_flight(tmp_path)
+    imm_best = json.loads(PAGE_IMM_TUNING.read_text())["best"]
+    errors = [step["IMM"]["error_m"] for step in trace(json.loads(flight.scenario_json()), imm_best, tmp_path)]
+    limit = (errors[-1] + max(errors)) / 2
+    assert errors[-1] < limit < max(errors)
+    monkeypatch.setattr(live_flight, "DIVERGED_POSITION_ERROR_M", limit)
+
+    assert flight.readouts()["IMM"]["diverged"]
