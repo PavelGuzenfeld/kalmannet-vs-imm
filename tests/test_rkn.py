@@ -616,6 +616,7 @@ def test_mirrored_geometry_gets_the_mirrored_gain_at_every_step():
     original, mirrored = _mirror_run(False)["K"], _mirror_run(True)["K"]
     for step in range(MIRROR_STEPS):
         expected = MIRROR_X_Y.view(1, STATE_DIM, 1) * original[step]
+        assert original[step].abs().max() > 0.0
         assert (mirrored[step] - expected).abs().max() <= MIRROR_GAIN_RTOL * original[step].abs().max()
 
 
@@ -626,6 +627,7 @@ def test_mirrored_elevated_geometry_gets_the_mirrored_gain_at_every_step():
     mirrored = _mirror_run(True, ELEVATED_POSITION_M)["K"]
     for step in range(MIRROR_STEPS):
         expected = MIRROR_X_Y.view(1, STATE_DIM, 1) * original[step]
+        assert original[step].abs().max() > 0.0
         assert (mirrored[step] - expected).abs().max() <= MIRROR_GAIN_RTOL * original[step].abs().max()
 
 
@@ -637,6 +639,16 @@ def _features_at(position, correction=None):
     if correction is not None:
         features[0, FEATURE_SLICES["correction"]] = torch.tensor(correction, dtype=torch.float64)
     return features
+
+
+def _los_rotation(position):
+    """Rows u_az, u_el, u_r from the position itself, not from H."""
+    px, py, pz = position
+    rho, r = math.hypot(px, py), math.hypot(px, py, pz)
+    return torch.tensor(
+        [[-py / rho, px / rho, 0.0], [-pz * px / (rho * r), -pz * py / (rho * r), rho / r], [px / r, py / r, pz / r]],
+        dtype=torch.float64,
+    )
 
 
 def _gain_for_los_output(los_gain, features):
@@ -691,14 +703,14 @@ def test_target_within_the_horizontal_range_floor_takes_no_angle_correction_and_
 
 def test_angle_columns_at_and_above_the_horizontal_range_floor_scale_by_horizontal_and_slant_range():
     """MS-37, #85: at rho = 1 mm H's floor is not yet active (azimuth row norm exactly 1000), and at 2 mm R is a
-    rotation; each 3-block of K's angle columns has N's block norm times rho and r. Measured 0, rtol 1e-14."""
+    rotation: K's angle columns are blockdiag(Rᵀ) N's times rho and r. Measured 2.7e-16 of max, rtol 1e-14."""
     los_gain = torch.arange(1.0, STATE_DIM * 3 + 1.0, dtype=torch.float64).view(STATE_DIM, 3)
     for rho in (HORIZONTAL_RANGE_FLOOR_M, ABOVE_FLOOR_RHO_M):
-        K = _gain_for_los_output(los_gain, _features_at([rho, 0.0, LOS_TEST_RANGE_M]))
+        position = (rho, 0.0, LOS_TEST_RANGE_M)
+        K = _gain_for_los_output(los_gain, _features_at(list(position)))
         scale = torch.tensor([rho, math.hypot(rho, LOS_TEST_RANGE_M)], dtype=torch.float64)
-        block_norms = K[:, :2].reshape(3, 3, 2).norm(dim=1)
-        expected = los_gain[:, :2].reshape(3, 3, 2).norm(dim=1) * scale
-        assert torch.allclose(block_norms, expected, rtol=ABOVE_FLOOR_RTOL, atol=0)
+        expected = torch.kron(torch.eye(3, dtype=torch.float64), _los_rotation(position)).T @ los_gain[:, :2] * scale
+        assert torch.allclose(K[:, :2], expected, rtol=ABOVE_FLOOR_RTOL, atol=0)
 
 
 def test_gain_gradients_stay_finite_for_a_target_directly_overhead():
@@ -713,12 +725,7 @@ def test_gain_gradients_stay_finite_for_a_target_directly_overhead():
 def test_non_identity_los_gain_closes_the_position_loop_as_rotated_n_at_an_elevated_off_axis_target():
     """MS-37, #85: K H = blockdiag(Rᵀ) N R on position and 0 elsewhere, R's rows u_az, u_el, u_r built here
     from the position, not from H. Entries reach 44; measured 3.6e-15, atol 4e-14 is ~10x."""
-    px, py, pz = ELEVATED_POSITION_M
-    rho, r = math.hypot(px, py), math.hypot(px, py, pz)
-    rotation = torch.tensor(
-        [[-py / rho, px / rho, 0.0], [-pz * px / (rho * r), -pz * py / (rho * r), rho / r], [px / r, py / r, pz / r]],
-        dtype=torch.float64,
-    )
+    rotation = _los_rotation(ELEVATED_POSITION_M)
     los_gain = torch.arange(1.0, STATE_DIM * 3 + 1.0, dtype=torch.float64).view(STATE_DIM, 3)
     features = _features_at(list(ELEVATED_POSITION_M))
     H = features[0, FEATURE_SLICES["H"]].view(3, STATE_DIM)
