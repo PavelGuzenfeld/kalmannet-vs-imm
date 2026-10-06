@@ -1,9 +1,11 @@
 import json
 import sys
 
+import numpy as np
 import pytest
 
 from scripts.page_parity import (
+    DIVERGING_KNET_NPZ,
     DRIFT_QUANTITIES,
     IMM_TUNING,
     NO_WEIGHTS,
@@ -16,7 +18,7 @@ from scripts.page_parity import (
     max_abs_difference,
     write_cases,
 )
-from web.live_flight import LiveFlight, trace
+from web.live_flight import LEARNED_WEIGHTS, LiveFlight, trace
 
 KILOMETRE_ROUNDING_ATOL_M = 1e-9
 
@@ -159,3 +161,24 @@ def test_main_cases_writes_the_scenario_and_expected_files(tmp_path, monkeypatch
     main()
 
     assert (tmp_path / "overhead_pass.json").exists() and (tmp_path / "overhead_pass.expected.json").exists()
+
+
+def test_diverging_knet_weights_case_runs_kalmannet_alone_away_with_a_finite_estimate(cases, tmp_path):
+    """Finite matters: the plots and plan view drop non-finite points, so only a huge finite estimate shows
+    whether a diverged filter is kept out of their scales."""
+    knet_npz = tmp_path / LEARNED_WEIGHTS["KalmanNet"]
+    knet_npz.parent.mkdir(parents=True)
+    knet_npz.write_bytes((cases / DIVERGING_KNET_NPZ).read_bytes())
+    scenario = json.loads((cases / "break_turn_9g.json").read_text())
+    flight = LiveFlight(scenario, json.loads(IMM_TUNING.read_text())["best"], tmp_path)
+    for control in scenario["controls"]:
+        flight.advance(control)
+    readouts = flight.readouts()
+
+    assert np.isfinite(readouts["KalmanNet"]["estimate_m"]).all()
+    assert {name: readout["diverged"] for name, readout in readouts.items()} == {
+        "EKF": False,
+        "UKF": False,
+        "IMM": False,
+        "KalmanNet": True,
+    }

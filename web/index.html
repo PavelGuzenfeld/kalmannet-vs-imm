@@ -5,82 +5,107 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tracking Test Ground</title>
 <style>
-  body { font: 14px system-ui, sans-serif; margin: 16px; color: #1d1d1f; background: #fafafa; }
-  fieldset { display: inline-block; vertical-align: top; margin: 0 8px 8px 0; border: 1px solid #ccc; }
+  body { font: 14px system-ui, sans-serif; margin: 0; color: #1d1d1f; background: #fafafa; display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 100vh; }
+  aside { padding: 12px 16px; border-right: 1px solid #ddd; background: #fff; overflow-y: auto; }
+  main { padding: 12px 16px; min-width: 0; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  fieldset { margin: 0 0 10px; border: 1px solid #ccc; }
   label { display: block; margin: 2px 0; }
   input[type=number] { width: 7em; }
+  input[type=range] { width: 150px; }
+  #run button { font-size: 15px; padding: 4px 16px; }
+  #start { background: #2a7d2e; color: #fff; border: 1px solid #1f5e22; border-radius: 4px; }
   table { border-collapse: collapse; margin: 8px 0; }
   td, th { border: 1px solid #ccc; padding: 2px 6px; text-align: right; }
-  canvas, svg { border: 1px solid #ccc; background: #fff; max-width: 100%; }
-  #views, #plots { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+  canvas, svg { border: 1px solid #ccc; background: #fff; max-width: 100%; height: auto; }
+  #tabs button { padding: 4px 14px; border: 1px solid #ccc; background: #eee; border-radius: 4px 4px 0 0; }
+  #tabs button[aria-selected=true] { background: #fff; border-bottom-color: #fff; font-weight: 600; }
+  #analysis-views { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
   #scene { min-width: 320px; min-height: 120px; }
-  #status { font-family: monospace; }
+  #status, #clock { font-family: monospace; }
+  .badge { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 8px; background: #b00020; color: #fff; font-size: 11px; }
+  #legend span { margin-right: 12px; }
+  @media (max-width: 800px) { body { grid-template-columns: minmax(0, 1fr); } aside { border-right: none; } }
 </style>
 </head>
 <body>
-<h1>Tracking test ground</h1>
-<p id="build"></p>
-<p id="status">loading Pyodide and the repo's filters/ and data/ code</p>
+<aside>
+  <h1>Tracking test ground</h1>
+  <p id="build"></p>
+  <p id="status">loading Pyodide and the repo's filters/ and data/ code</p>
 
-<fieldset>
-  <legend>Envelope</legend>
-  <label>preset <select id="preset"></select></label>
-  <label>min speed (m/s) <input id="min_speed_m_s" type="range" min="5" max="150" step="1"> <output></output></label>
-  <label>level top speed (m/s) <input id="max_speed_m_s" type="range" min="20" max="400" step="1"> <output></output></label>
-  <label>max load factor (g) <input id="max_load_factor" type="range" min="1" max="12" step="0.1"> <output></output></label>
-  <label>max roll rate (°/s) <input id="max_roll_rate_deg_s" type="range" min="10" max="360" step="1"> <output></output></label>
-</fieldset>
+  <fieldset id="run">
+    <legend>Run</legend>
+    <button id="start">Start</button>
+    <button id="stop">Stop</button>
+    <p id="clock"></p>
+  </fieldset>
 
-<fieldset>
-  <legend>Flight</legend>
-  <label>noise regime <select id="noise_regime"></select></label>
-  <label>seed <input id="seed" type="number" min="0" step="1"></label>
-  <button id="new_flight">new flight</button>
+  <fieldset>
+    <legend>Time</legend>
+    <button data-speed="0">pause</button>
+    <button data-speed="0.25">0.25×</button>
+    <button data-speed="0.5">0.5×</button>
+    <button data-speed="1">1×</button>
+    <button id="single_step">step</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>Envelope</legend>
+    <label>preset <select id="preset"></select></label>
+    <label>min speed (m/s) <input id="min_speed_m_s" type="range" min="5" max="150" step="1"> <output></output></label>
+    <label>level top speed (m/s) <input id="max_speed_m_s" type="range" min="20" max="400" step="1"> <output></output></label>
+    <label>max load factor (g) <input id="max_load_factor" type="range" min="1" max="12" step="0.1"> <output></output></label>
+    <label>max roll rate (°/s) <input id="max_roll_rate_deg_s" type="range" min="10" max="360" step="1"> <output></output></label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Flight</legend>
+    <label>noise regime <select id="noise_regime"></select></label>
+    <label>seed <input id="seed" type="number" min="0" step="1"></label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Flag thresholds</legend>
+    <label>innovation gate, NIS (99%) <input id="innovation_gate_nis" type="number" step="any"></label>
+    <label>NEES upper (97.5%) <input id="nees_upper" type="number" step="any"></label>
+    <label>NEES run length (steps) <input id="overconfident_steps" type="number" min="1" step="1"></label>
+    <label>raw error (m) <input id="raw_error_m" type="number" step="any"></label>
+  </fieldset>
+
   <button id="export">export scenario JSON</button>
-</fieldset>
+  <p>Keyboard: ←/→ roll, ↓ pull, ↑ push, W/S throttle. Gamepad (standard mapping): left stick roll and pitch, triggers throttle.</p>
+  <p id="controls"></p>
+</aside>
 
-<fieldset>
-  <legend>Flag thresholds</legend>
-  <label>innovation gate, NIS (99%) <input id="innovation_gate_nis" type="number" step="any"></label>
-  <label>NEES upper (97.5%) <input id="nees_upper" type="number" step="any"></label>
-  <label>NEES run length (steps) <input id="overconfident_steps" type="number" min="1" step="1"></label>
-  <label>raw error (m) <input id="raw_error_m" type="number" step="any"></label>
-</fieldset>
-
-<fieldset>
-  <legend>Time</legend>
-  <button data-speed="0">pause</button>
-  <button data-speed="0.25">0.25×</button>
-  <button data-speed="0.5">0.5×</button>
-  <button data-speed="1">1×</button>
-  <button id="single_step">step</button>
-  <p id="clock"></p>
-</fieldset>
-
-<p>Keyboard: ←/→ roll, ↓ pull, ↑ push, W/S throttle. Gamepad (standard mapping): left stick roll and pitch, triggers throttle.</p>
-<p id="controls"></p>
-
-<h2>Flags (preview; scripts/replay.py is authoritative)</h2>
-<table>
-  <thead><tr><th>filter</th><th>error (m)</th><th>NEES</th><th>NIS</th><th>track loss</th><th>overconfidence</th><th>raw error</th></tr></thead>
-  <tbody id="readouts"></tbody>
-</table>
-
-<div id="views">
-  <div>
-    <label>3D view <select id="view_mode"><option value="chase">chase</option><option value="orbit">orbit</option></select></label>
-    <span>drag to orbit, wheel to zoom; ellipsoids are 95% position covariance</span>
-    <div id="scene"></div>
+<main>
+  <div id="tabs" role="tablist">
+    <button role="tab" data-tab="scene" aria-selected="true">3D view</button>
+    <button role="tab" data-tab="analysis" aria-selected="false">plan, plots and flags</button>
   </div>
-  <canvas id="plan" width="420" height="420"></canvas>
-</div>
 
-<div id="plots">
-  <svg data-panel="altitude" viewBox="0 0 640 220" width="640"></svg>
-  <svg data-panel="error" viewBox="0 0 640 220" width="640"></svg>
-  <svg data-panel="nees" viewBox="0 0 640 220" width="640"></svg>
-  <svg data-panel="modes" viewBox="0 0 640 220" width="640"></svg>
-</div>
+  <section id="tab-scene" role="tabpanel">
+    <label>camera <select id="view_mode"><option value="chase">chase</option><option value="orbit">orbit</option></select></label>
+    <span>drag to orbit, wheel to zoom; ellipsoids are 95% position covariance</span>
+    <p id="legend"></p>
+    <div id="scene"></div>
+  </section>
+
+  <section id="tab-analysis" role="tabpanel" hidden>
+    <h2>Flags (preview; scripts/replay.py is authoritative)</h2>
+    <table>
+      <thead><tr><th>filter</th><th>error (m)</th><th>NEES</th><th>NIS</th><th>track loss</th><th>overconfidence</th><th>raw error</th></tr></thead>
+      <tbody id="readouts"></tbody>
+    </table>
+    <div id="analysis-views">
+      <canvas id="plan" width="420" height="420"></canvas>
+      <svg data-panel="altitude" viewBox="0 0 640 220" width="640"></svg>
+      <svg data-panel="error" viewBox="0 0 640 220" width="640"></svg>
+      <svg data-panel="nees" viewBox="0 0 640 220" width="640"></svg>
+      <svg data-panel="modes" viewBox="0 0 640 220" width="640"></svg>
+    </div>
+  </section>
+</main>
 
 <script type="module" src="page.js"></script>
 <script type="module">

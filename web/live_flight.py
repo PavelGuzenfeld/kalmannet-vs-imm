@@ -29,6 +29,7 @@ FILTER_NAMES = ("EKF", "UKF", "IMM", "KalmanNet", "RKN")
 LEARNED_WEIGHTS = {"KalmanNet": "results/knet_vanilla/best.npz", "RKN": "results/rkn/best.npz"}
 SETUP_KEYS = ("seed", "envelope", "noise_regime", "start")
 UNKNOWN_GIT_TAG = "unknown"
+DIVERGED_POSITION_ERROR_M = 1e5
 
 
 def page_options():
@@ -51,6 +52,10 @@ def _latest(read):
 def _unavailable_flags(name):
     missing = f"not available (no weights at {LEARNED_WEIGHTS[name]})"
     return {flag: shown(name, {}, flag) if (name, flag) in UNGATED_REASONS else missing for flag in FLAGS}
+
+
+def _position_errors_m(err):
+    return np.linalg.norm(np.array(err)[:, POS], axis=1)
 
 
 def _ellipsoid(P):
@@ -76,11 +81,23 @@ def _readout(truth, err, nees=None, nis=None, *, snapshot):
     }
 
 
+def diverged(position_error_m):
+    """Diverged once any position error so far is non-finite or above DIVERGED_POSITION_ERROR_M, whatever the
+    raw-error threshold; the page keeps a diverged filter out of its plot scales and 3D framing."""
+    return bool(
+        not np.isfinite(position_error_m).all() or position_error_m.max() > DIVERGED_POSITION_ERROR_M
+    )
+
+
 def framing_radius_m(readouts):
-    """Farthest reach from truth of any estimate or its 95% ellipsoid, for the 3D view to frame."""
+    """Farthest reach from truth of any non-diverged estimate or its 95% ellipsoid, for the 3D view to frame."""
     return max(
-        readout["error_m"] + (max(readout["ellipsoid"]["semi_axes_m"]) if readout["ellipsoid"] else 0.0)
-        for readout in readouts.values()
+        (
+            readout["error_m"] + (max(readout["ellipsoid"]["semi_axes_m"]) if readout["ellipsoid"] else 0.0)
+            for readout in readouts.values()
+            if not readout["diverged"]
+        ),
+        default=0.0,
     )
 
 
@@ -134,13 +151,14 @@ class LiveFlight:
         return {name: self._trips(*zip(*scores)) for name, scores in self._scores.items()}
 
     def _trips(self, err, *nees_and_nis):
-        return first_trips(
-            np.linalg.norm(np.array(err)[:, POS], axis=1), *nees_and_nis, thresholds=self.thresholds
-        )
+        return first_trips(_position_errors_m(err), *nees_and_nis, thresholds=self.thresholds)
 
     def readouts(self):
         return {
-            name: _readout(self._truth, *scores[-1], snapshot=self._snapshots[name])
+            name: {
+                **_readout(self._truth, *scores[-1], snapshot=self._snapshots[name]),
+                "diverged": diverged(_position_errors_m([err for err, *_ in scores])),
+            }
             for name, scores in self._scores.items()
         }
 

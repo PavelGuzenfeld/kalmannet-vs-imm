@@ -24,7 +24,17 @@ from scripts.replay import SEED_SCENARIO_SEED, break_turn_controls, numpy_weight
 from tests.test_numpy_forward import knet_stand_in, rkn_stand_in
 from filters.state import POS
 from scripts.eval import ekf_like_steps, imm_steps, run_ekf_like
-from web.live_flight import FILTER_NAMES, LEARNED_WEIGHTS, LiveFlight, _ellipsoid, framing_radius_m, page_options
+from web import live_flight
+from web.live_flight import (
+    FILTER_NAMES,
+    LEARNED_WEIGHTS,
+    LiveFlight,
+    _ellipsoid,
+    diverged,
+    framing_radius_m,
+    page_options,
+    trace,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 SEED_SCENARIO = REPO / "data" / "scenarios" / "break_turn_9g.json"
@@ -319,17 +329,72 @@ def test_page_options_offer_the_nees_lower_bound():
 
 def test_framing_radius_reaches_the_far_edge_of_the_largest_ellipsoid_from_truth():
     readouts = {
-        "EKF": {"error_m": 300.0, "ellipsoid": {"semi_axes_m": [50.0, 1.0, 2.0]}},
-        "UKF": {"error_m": 10.0, "ellipsoid": {"semi_axes_m": [4.0, 200.0, 2.0]}},
-        "KalmanNet": {"error_m": 340.0, "ellipsoid": None},
+        "EKF": {"error_m": 300.0, "ellipsoid": {"semi_axes_m": [50.0, 1.0, 2.0]}, "diverged": False},
+        "UKF": {"error_m": 10.0, "ellipsoid": {"semi_axes_m": [4.0, 200.0, 2.0]}, "diverged": False},
+        "KalmanNet": {"error_m": 340.0, "ellipsoid": None, "diverged": False},
     }
     assert framing_radius_m(readouts) == 350.0
 
 
 def test_framing_radius_counts_an_estimate_without_an_ellipsoid_by_its_error_alone():
-    readouts = {"KalmanNet": {"error_m": 120.0, "ellipsoid": None}}
+    readouts = {"KalmanNet": {"error_m": 120.0, "ellipsoid": None, "diverged": False}}
     assert framing_radius_m(readouts) == 120.0
 
 
 def test_frame_reports_the_framing_radius_of_its_filter_readouts(seed_frame):
     assert seed_frame["framing_radius_m"] == framing_radius_m(seed_frame["filters"])
+
+
+def test_filter_whose_error_peaks_just_under_one_hundred_km_has_not_diverged():
+    assert not diverged(np.array([1.0, 99_999.5, 3.0]))
+
+
+def test_filter_whose_error_peaks_exactly_at_one_hundred_km_has_not_diverged():
+    assert not diverged(np.array([1.0, 100_000.0, 3.0]))
+
+
+def test_filter_whose_error_once_passed_one_hundred_km_stays_diverged_after_it_recovers():
+    assert diverged(np.array([1.0, 100_000.5, 3.0]))
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+def test_filter_with_a_non_finite_error_has_diverged(bad):
+    assert diverged(np.array([1.0, bad, 3.0]))
+
+
+def test_framing_radius_leaves_out_a_diverged_filter():
+    readouts = {
+        "IMM": {"error_m": 3.0, "ellipsoid": {"semi_axes_m": [4.0, 1.0, 2.0]}, "diverged": False},
+        "RKN": {"error_m": 2.2e8, "ellipsoid": {"semi_axes_m": [1e9, 1.0, 2.0]}, "diverged": True},
+    }
+    assert framing_radius_m(readouts) == 7.0
+
+
+def test_framing_radius_with_every_filter_diverged_frames_the_truth_alone():
+    readouts = {"RKN": {"error_m": 2.2e8, "ellipsoid": None, "diverged": True}}
+    assert framing_radius_m(readouts) == 0.0
+
+
+def test_a_raw_error_threshold_far_under_the_peak_errors_diverges_no_filter(tmp_path):
+    """Break-turn peaks: EKF and UKF about 171 m; a 1 m raw-error threshold trips them, yet none is 100 km off."""
+    thresholds = {**DEFAULT_THRESHOLDS, "raw_error_m": 1.0}
+
+    readouts = page_flight(tmp_path, thresholds=thresholds).frame()["filters"]
+
+    assert {name: readout["diverged"] for name, readout in readouts.items()} == {
+        "EKF": False,
+        "UKF": False,
+        "IMM": False,
+    }
+
+
+def test_flight_keeps_a_filter_diverged_after_its_error_falls_back_under_the_limit(tmp_path, monkeypatch):
+    """No committed flight recovers from 100 km, so the limit is moved between IMM's final and peak error."""
+    flight = page_flight(tmp_path)
+    imm_best = json.loads(PAGE_IMM_TUNING.read_text())["best"]
+    errors = [step["IMM"]["error_m"] for step in trace(json.loads(flight.scenario_json()), imm_best, tmp_path)]
+    limit = (errors[-1] + max(errors)) / 2
+    assert errors[-1] < limit < max(errors)
+    monkeypatch.setattr(live_flight, "DIVERGED_POSITION_ERROR_M", limit)
+
+    assert flight.readouts()["IMM"]["diverged"]

@@ -7,8 +7,11 @@ import json
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from filters.flags import FLAGS, shown
+from filters.knet.gain_network import KalmanGainGRU
+from filters.torch_ops import export_npz
 from scripts.replay import replay
 from web.live_flight import trace
 
@@ -23,6 +26,9 @@ TIGHT_THRESHOLDS = {
 }
 TRIP_PROBE = ("EKF", "raw_error")
 DRIFT_QUANTITIES = ("estimate_m", "nees", "nis")
+DIVERGING_KNET_NPZ = "diverging_knet.npz"
+DIVERGING_KNET_SEED = 7
+DIVERGING_KNET_WEIGHT_SCALE = 0.1
 
 
 def native_flags(scenario):
@@ -59,6 +65,16 @@ def write_cases(out_dir):
         (out_dir / f"{name}.json").write_text(json.dumps(scenario) + "\n")
         expected = {"steps": len(scenario["controls"]), "flags": native_flags(scenario)}
         (out_dir / f"{name}.expected.json").write_text(json.dumps(expected) + "\n")
+    write_diverging_knet_weights(out_dir / DIVERGING_KNET_NPZ)
+
+
+def write_diverging_knet_weights(npz):
+    """KalmanNet weights whose gain runs away on break_turn_9g: past 1e5 m by step 60, about 1e33 m at the end."""
+    torch.manual_seed(DIVERGING_KNET_SEED)
+    net = KalmanGainGRU()
+    for parameter in net.parameters():
+        torch.nn.init.uniform_(parameter, -DIVERGING_KNET_WEIGHT_SCALE, DIVERGING_KNET_WEIGHT_SCALE)
+    export_npz(net.double().state_dict(), npz)
 
 
 def absent_or_difference(native, other):
