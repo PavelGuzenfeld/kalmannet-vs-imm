@@ -59,7 +59,7 @@ def los_frame(H):
     angles_defined = 0.0 < norms[AZIMUTH] <= 1.0 / HORIZONTAL_RANGE_FLOOR_M
     measured = np.array([angles_defined, angles_defined, True])
     metres_per_unit = np.divide(1.0, norms, out=np.zeros_like(norms), where=measured)
-    rotation = np.array([normalize(row) for row in position_rows])
+    rotation = np.array([normalize(row) for row in position_rows]) * measured[:, np.newaxis]
     return np.kron(np.eye(KINEMATIC_BLOCKS), rotation), metres_per_unit
 
 

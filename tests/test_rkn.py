@@ -498,6 +498,7 @@ LOOP_GAIN_ATOL = 4e-14
 UNDER_FLOOR_RHO_M = 5e-4
 ABOVE_FLOOR_RHO_M = 2.0**-9
 ABOVE_FLOOR_RTOL = 1e-14
+UNDER_FLOOR_RANGE_RTOL = 1e-12
 
 
 def _exact_raw_features():
@@ -699,6 +700,32 @@ def test_target_within_the_horizontal_range_floor_takes_no_angle_correction_and_
         K = _gain_for_los_output(los_gain, _features_at(position))
         assert torch.all(torch.isfinite(K))
         assert torch.equal(K[:, :2], torch.zeros(STATE_DIM, 2, dtype=torch.float64))
+
+
+def test_target_within_the_horizontal_range_floor_gets_a_range_column_of_n_range_rows_along_u_r():
+    """MS-37, #85: below the floor R keeps only u_r, so each 3-block of K's range column is N[range, range] u_r with
+    no N[el, range] term (that would add 8..26). H's floor adds 1e-6 m² to r², so its range row is 1 - 4.8e-13 long
+    and K's range scale its inverse: measured 4.8e-13 relative, rtol 1e-12."""
+    los_gain = torch.arange(1.0, STATE_DIM * 3 + 1.0, dtype=torch.float64).view(STATE_DIM, 3)
+    for rho in (0.0, UNDER_FLOOR_RHO_M):
+        position = torch.tensor([rho, 0.0, LOS_TEST_RANGE_M], dtype=torch.float64)
+        K = _gain_for_los_output(los_gain, _features_at(position.tolist()))
+        expected = los_gain[2::3, 2].unsqueeze(1) * position / position.norm()
+        assert torch.allclose(K[:, 2].view(3, 3), expected, rtol=UNDER_FLOOR_RANGE_RTOL, atol=0)
+
+
+def test_gain_network_reads_no_angle_components_within_the_horizontal_range_floor():
+    """MS-37, #85: below the floor B keeps only u_r, so vec(H Bᵀ)'s and B·correction's azimuth and elevation
+    entries are exactly 0 and every rnn_K input is finite, overhead and at 0.5 mm."""
+    correction = [3.0, -4.0, 5.0, 1.0, 2.0, -6.0, 0.5, -0.25, 7.0]
+    for position in ([0.0, 0.0, LOS_TEST_RANGE_M], [UNDER_FLOOR_RHO_M, 0.0, LOS_TEST_RANGE_M]):
+        seen = _branch_inputs(_features_at(position, correction))["K"][0]
+        assert torch.all(torch.isfinite(seen))
+        los_H = seen[FEATURE_SLICES["H"]].view(3, 3, 3)
+        los_correction = seen[FEATURE_SLICES["correction"]].view(3, 3)
+        assert torch.equal(los_H[:, :, :2], torch.zeros(3, 3, 2, dtype=torch.float64))
+        assert torch.equal(los_correction[:, :2], torch.zeros(3, 2, dtype=torch.float64))
+        assert torch.all(los_correction[:, 2] != 0.0)
 
 
 def test_angle_columns_at_and_above_the_horizontal_range_floor_scale_by_horizontal_and_slant_range():

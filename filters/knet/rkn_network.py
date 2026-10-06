@@ -46,15 +46,15 @@ def normalise_groups(features):
 
 def los_frame(H):
     """MS-37: H's position rows are u_az/ρ, u_el/r and u_r. Returns blockdiag(R, R, R), R's rows those directions,
-    and each measurement's metres per unit; both angles' are 0 where H floors ρ (ρ < 1 mm), read off the azimuth
-    row (0 overhead, else 1/max(ρ, 2⁻¹⁰ m)): there u_el collapses onto u_r and the angles are undefined (#85)."""
+    and each measurement's metres per unit. Where H floors ρ (ρ < 1 mm, read off the azimuth row: 0 overhead, else
+    1/max(ρ, 2⁻¹⁰ m)) u_el collapses onto u_r and both angles are undefined: R keeps only u_r, angle scales 0 (#85)."""
     position_rows = H[:, :, POS]
     norms = position_rows.norm(dim=-1)
     azimuth_norm = norms[:, [AZIMUTH]]
     angles_defined = (azimuth_norm > 0.0) & (azimuth_norm <= 1.0 / HORIZONTAL_RANGE_FLOOR_M)
     measured = torch.cat([angles_defined, angles_defined, torch.ones_like(angles_defined)], dim=-1)
     metres_per_unit = torch.where(measured, 1.0 / torch.where(measured, norms, torch.ones_like(norms)), 0.0)
-    rotation = F.normalize(position_rows, dim=-1)
+    rotation = F.normalize(position_rows, dim=-1) * measured.unsqueeze(-1)
     identity = torch.eye(_KINEMATIC_BLOCKS, dtype=H.dtype, device=H.device).unsqueeze(0)
     return torch.kron(identity, rotation), metres_per_unit
 

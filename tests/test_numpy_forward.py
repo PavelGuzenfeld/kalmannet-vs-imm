@@ -43,6 +43,7 @@ SEQUENCE_ATOL_P = 1e-9
 SEQUENCE_RTOL_NEES = 1e-11
 GAIN_EFFECT_FLOOR_M = 1.0
 RKN_FEATURE_DIM = 42
+UNIT_VECTOR_ULP = 2.0**-52
 
 
 def stand_in(net, scale):
@@ -314,3 +315,18 @@ def test_numpy_gain_within_the_horizontal_range_floor_has_zero_angle_columns_and
     K = mirror.forward(features, mirror.init_hidden())[0]
     assert np.all(np.isfinite(K))
     assert np.array_equal(K[:, :2], np.zeros((STATE_DIM, 2)))
+    with torch.no_grad():
+        torch_K = net(torch.from_numpy(features).unsqueeze(0), net.init_hidden(1, "cpu"))[0][0].numpy()
+    assert np.array_equal(K, torch_K)
+
+
+@pytest.mark.parametrize("rho", [0.0, 5e-4])
+def test_numpy_los_frame_within_the_horizontal_range_floor_keeps_only_u_r(rho):
+    """MS-37, #85: below the floor R's azimuth and elevation rows are 0 in every block, its range row is u_r."""
+    x = np.zeros(STATE_DIM)
+    x[:3] = [rho, 0.0, 1024.0]
+    blocks, _ = numpy_forward.los_frame(H_jacobian(x))
+    rotation = blocks[:3, :3]
+    assert np.array_equal(blocks, np.kron(np.eye(3), rotation))
+    assert np.array_equal(rotation[:2], np.zeros((2, 3)))
+    np.testing.assert_allclose(rotation[2], x[:3] / np.linalg.norm(x[:3]), rtol=0, atol=UNIT_VECTOR_ULP)
