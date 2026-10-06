@@ -23,7 +23,7 @@ from scripts.export_weights import main as export_weights_main
 from scripts.replay import SEED_SCENARIO_SEED, break_turn_controls, numpy_weights
 from tests.test_numpy_forward import knet_stand_in, rkn_stand_in
 from scripts.eval import ekf_like_steps, imm_steps
-from web.live_flight import FILTER_NAMES, LEARNED_WEIGHTS, LiveFlight, _ellipsoid, page_options
+from web.live_flight import FILTER_NAMES, LEARNED_WEIGHTS, LiveFlight, _ellipsoid, framing_radius_m, page_options
 
 REPO = Path(__file__).resolve().parents[1]
 SEED_SCENARIO = REPO / "data" / "scenarios" / "break_turn_9g.json"
@@ -299,3 +299,21 @@ def test_imm_snapshot_holds_the_mode_probabilities_after_the_last_step(seed_fram
 
 def test_page_options_offer_the_nees_lower_bound():
     assert page_options()["nees_lower"] == NEES_LOWER_025_DOF9
+
+
+def test_framing_radius_reaches_the_far_edge_of_the_largest_ellipsoid_from_truth():
+    readouts = {
+        "EKF": {"error_m": 300.0, "ellipsoid": {"semi_axes_m": [50.0, 1.0, 2.0]}},
+        "UKF": {"error_m": 10.0, "ellipsoid": {"semi_axes_m": [4.0, 200.0, 2.0]}},
+        "KalmanNet": {"error_m": 340.0, "ellipsoid": None},
+    }
+    assert framing_radius_m(readouts) == 350.0
+
+
+def test_framing_radius_counts_an_estimate_without_an_ellipsoid_by_its_error_alone():
+    readouts = {"KalmanNet": {"error_m": 120.0, "ellipsoid": None}}
+    assert framing_radius_m(readouts) == 120.0
+
+
+def test_frame_reports_the_framing_radius_of_its_filter_readouts(seed_frame):
+    assert seed_frame["framing_radius_m"] == framing_radius_m(seed_frame["filters"])

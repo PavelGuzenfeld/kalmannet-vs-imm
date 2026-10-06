@@ -13,6 +13,7 @@ const GRID_SIZE_M = 6000;
 const GRID_CELLS = 60;
 const GRID_CELL_M = GRID_SIZE_M / GRID_CELLS;
 const DEFAULT_DISTANCE_M = 180;
+const FRAMING_DISTANCE_PER_RADIUS = 2.5;
 const MIN_DISTANCE_M = 20;
 const MAX_DISTANCE_M = 4000;
 const DEFAULT_ELEVATION_RAD = 0.35;
@@ -63,6 +64,7 @@ export async function createScene(container) {
 
   const view = { mode: "chase", azimuth: 0, elevation: DEFAULT_ELEVATION_RAD, distance: DEFAULT_DISTANCE_M };
   let heading = 0;
+  let framingRadius = 0;
   let focus = new THREE.Vector3();
 
   function placeCamera() {
@@ -71,7 +73,7 @@ export async function createScene(container) {
       -Math.cos(view.elevation) * Math.cos(azimuth),
       Math.sin(view.elevation),
       Math.cos(view.elevation) * Math.sin(azimuth),
-    ).multiplyScalar(view.distance);
+    ).multiplyScalar(view.mode === "chase" ? Math.max(view.distance, framingRadius * FRAMING_DISTANCE_PER_RADIUS) : view.distance);
     camera.position.copy(focus).add(offset);
     camera.lookAt(focus);
     renderer.render(scene, camera);
@@ -135,6 +137,7 @@ export async function createScene(container) {
       }
       grid.position.set(Math.round(truthPosition.x / GRID_CELL_M) * GRID_CELL_M, 0, Math.round(truthPosition.z / GRID_CELL_M) * GRID_CELL_M);
       focus = truthPosition;
+      framingRadius = frame.framing_radius_m;
       placeCamera();
     },
     reset() {

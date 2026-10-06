@@ -126,3 +126,21 @@ check = "no-citation"
 file = "tests/test_live_flight.py"
 test = "test_page_options_offer_the_nees_lower_bound"
 reason = "The band edge is a pinned chi-square quantile of the Layer 5 harness, forwarded to the page; no model line states it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_framing_radius_reaches_the_far_edge_of_the_largest_ellipsoid_from_truth"
+reason = "Live-page camera framing is presentation, not model behaviour; its requirement is ticket #81, not an MS line."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_framing_radius_counts_an_estimate_without_an_ellipsoid_by_its_error_alone"
+reason = "Live-page camera framing is presentation, not model behaviour; its requirement is ticket #81, not an MS line."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_frame_reports_the_framing_radius_of_its_filter_readouts"
+reason = "Live-page camera framing is presentation, not model behaviour; its requirement is ticket #81, not an MS line."

@@ -76,6 +76,14 @@ def _readout(truth, err, nees=None, nis=None, *, snapshot):
     }
 
 
+def framing_radius_m(readouts):
+    """Farthest reach from truth of any estimate or its 95% ellipsoid, for the 3D view to frame."""
+    return max(
+        readout["error_m"] + (max(readout["ellipsoid"]["semi_axes_m"]) if readout["ellipsoid"] else 0.0)
+        for readout in readouts.values()
+    )
+
+
 class LiveFlight:
     """scripts/replay.py's flight advanced one control row at a time: same seed draws, filters on nominal R.
     A learned filter runs when weights_root holds its LEARNED_WEIGHTS .npz."""
@@ -133,14 +141,16 @@ class LiveFlight:
     def frame(self):
         trips = self.trips()
         flags = {name: {flag: shown(name, found, flag) for flag in FLAGS} for name, found in trips.items()}
+        readouts = {
+            name: _readout(self._truth, *scores[-1], snapshot=self._snapshots[name])
+            for name, scores in self._scores.items()
+        }
         return {
             "step": len(self.controls),
             "truth_m": self._truth[POS].tolist(),
             "truth_velocity_m_s": self._truth[VEL].tolist(),
-            "filters": {
-                name: _readout(self._truth, *scores[-1], snapshot=self._snapshots[name])
-                for name, scores in self._scores.items()
-            },
+            "filters": readouts,
+            "framing_radius_m": framing_radius_m(readouts),
             "trips": trips,
             "flags": {
                 name: flags[name] if name in flags else _unavailable_flags(name) for name in FILTER_NAMES
