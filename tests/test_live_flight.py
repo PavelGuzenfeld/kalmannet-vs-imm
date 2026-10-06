@@ -22,6 +22,7 @@ from filters.torch_ops import export_npz
 from scripts.export_weights import main as export_weights_main
 from scripts.replay import SEED_SCENARIO_SEED, break_turn_controls, numpy_weights
 from tests.test_numpy_forward import knet_stand_in, rkn_stand_in
+from tests.test_replay import recorded_today
 from filters.state import POS
 from scripts.eval import ekf_like_steps, imm_steps, run_ekf_like
 from web import live_flight
@@ -119,7 +120,11 @@ def test_exported_break_turn_replays_to_the_page_preview_flags(learned, tmp_path
 
     assert lines == preview_lines(flight)
     committed = json.loads(SEED_SCENARIO.read_text())
-    assert json.loads(exported.read_text()) == {**committed, "git_tag": "unknown", "tripped": flight.trips()}
+    assert json.loads(exported.read_text()) == {
+        **recorded_today(committed),
+        "git_tag": "unknown",
+        "tripped": flight.trips(),
+    }
     assert flight.trips()["EKF"] == committed["tripped"]["EKF"]
 
 
@@ -229,6 +234,16 @@ def test_scenario_with_a_recorded_start_flies_from_it_and_replays_to_the_page_pr
     assert lines == preview_lines(flight)
     assert json.loads(exported.read_text())["start"] == scenario["start"]
     assert flight.frame()["truth_m"] == fly_scenario(scenario)[0][-1, :3].tolist()
+
+
+def test_page_3_column_rows_export_as_full_rows_with_every_new_input_neutral(tmp_path):
+    """MS-27, #106 decision 4: a recording writes the full control row whatever width the page sent."""
+    scenario = json.loads(OVERHEAD_SCENARIO.read_text())
+    flight = LiveFlight(scenario, json.loads(PAGE_IMM_TUNING.read_text())["best"], tmp_path)
+    for control in scenario["controls"]:
+        flight.advance(control)
+
+    assert json.loads(flight.scenario_json())["controls"] == recorded_today(scenario)["controls"]
 
 
 def test_ellipsoid_of_an_axis_aligned_position_covariance_has_the_95_percent_semi_axes_and_identity_axes():
