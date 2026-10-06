@@ -48,7 +48,7 @@ def normalize(v):
     return v / max(np.linalg.norm(v), torch_normalize_eps)
 
 
-def rkn_gain_features(features):
+def normalise_rkn_groups(features):
     return np.concatenate([normalize(group) for group in np.split(features, RKN_FEATURE_SPLITS)])
 
 
@@ -129,8 +129,8 @@ class RKNGainCovNetwork:
 
     def forward(self, features, hidden):
         h_K, h_cov = hidden
-        K_flat, h_K = self.rnn_K.forward(rkn_gain_features(features), h_K)
-        C, h_cov = self.rnn_cov.forward(features**2, h_cov)
+        K_flat, h_K = self.rnn_K.forward(normalise_rkn_groups(features), h_K)
+        C, h_cov = self.rnn_cov.forward(normalise_rkn_groups(features**2), h_cov)
         L = np.zeros((self.m, self.m))
         L[self._tril] = C
         return K_flat.reshape(self.m, self.n), L, (h_K, h_cov)
