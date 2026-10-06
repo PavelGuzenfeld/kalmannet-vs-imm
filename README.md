@@ -18,8 +18,8 @@ Recursive KalmanNet's one win: it produces a usable, better-calibrated covarianc
 KalmanNet produces none (state dim 9 > measurement dim 3).
 
 Full write-up, methodology, deployment analysis and the conditions that would flip the verdict:
-[#15](https://github.com/PavelGuzenfeld/kalmannet-vs-imm/issues/15). Literature extraction the implementations are grounded in:
-[#14](https://github.com/PavelGuzenfeld/kalmannet-vs-imm/issues/14).
+[the write-up](https://pavelguzenfeld.github.io/kalmannet-vs-imm/docs/view.html?doc=write-up.md). Literature extraction the implementations are grounded in:
+[the source notes](https://pavelguzenfeld.github.io/kalmannet-vs-imm/docs/view.html?doc=source-notes.md).
 
 ![Five filters tracking one maneuvering target](docs/assets/kalmannet_motion_hud.gif)
 
@@ -73,7 +73,7 @@ pip install pre-commit && pre-commit install
 
 ## References
 
-What the filters and the comparison are built on (extracted in [#14](https://github.com/PavelGuzenfeld/kalmannet-vs-imm/issues/14)):
+What the filters and the comparison are built on (extracted in [the source notes](https://pavelguzenfeld.github.io/kalmannet-vs-imm/docs/view.html?doc=source-notes.md)):
 
 1. H. A. P. Blom, Y. Bar-Shalom, "The interacting multiple model algorithm for systems with Markovian switching coefficients," *IEEE Trans. Automatic Control* 33(8), 780–783, 1988. [doi:10.1109/9.1299](https://doi.org/10.1109/9.1299)
 2. Y. Bar-Shalom, X.-R. Li, T. Kirubarajan, *Estimation with Applications to Tracking and Navigation*, Wiley, 2001. [doi:10.1002/0471221279](https://doi.org/10.1002/0471221279)

@@ -5,12 +5,33 @@ import argparse
 import json
 import shutil
 from pathlib import Path
+from string import Template
 
 REPO = Path(__file__).resolve().parents[1]
 SOURCE_DIRS = ["web", "data", "filters"]
-SOURCE_FILES = ["scripts/eval.py"]
+SOURCE_FILES = ["scripts/eval.py", "docs/view.html", "docs/write-up.md", "docs/source-notes.md"]
 WEIGHTS_FILE = "best.npz"
-ROOT_REDIRECT = '<!doctype html><meta http-equiv="refresh" content="0; url=web/">\n'
+LANDING_PAGE = Template("""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KalmanNet vs IMM</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 0 auto; padding: 16px; max-width: 40rem; color: #1d1d1f; background: #fafafa; }
+</style>
+</head>
+<body>
+<h1>KalmanNet vs IMM</h1>
+<ul>
+<li><a href="web/">Tracking test ground</a></li>
+<li><a href="docs/view.html?doc=write-up.md">Write-up</a></li>
+<li><a href="docs/view.html?doc=source-notes.md">Source notes</a></li>
+</ul>
+<p>built from $tag</p>
+</body>
+</html>
+""")
 
 
 def build_site(tag: str, results: Path, out: Path) -> None:
@@ -25,7 +46,7 @@ def build_site(tag: str, results: Path, out: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(weights, target)
     (out / "web" / "version.json").write_text(json.dumps({"tag": tag}))
-    (out / "index.html").write_text(ROOT_REDIRECT)
+    (out / "index.html").write_text(LANDING_PAGE.substitute(tag=tag))
 
 
 def main():

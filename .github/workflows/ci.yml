@@ -99,6 +99,40 @@ jobs:
             PAGE_BASE_URL=http://localhost:8000 python -m pytest -q -p no:cacheprovider tests/test_page_flags_browser.py
             python tests/browser/slice_page_views.py http://localhost:8000 build/replay'
 
+  site-docs:
+    runs-on: ubuntu-latest
+    env:
+      BENCH_IMAGE_PREBUILT: "1"
+      PLAYWRIGHT_IMAGE: mcr.microsoft.com/playwright/python:v1.48.0-jammy
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build bench image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          tags: kalmannet-bench:cpu
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build site
+        run: ./docker_run.sh python scripts/build_site.py --tag ci
+
+      - name: Write-up opens from the landing page with its table rendered
+        run: |
+          docker run --rm --ipc=host -e PYTHONDONTWRITEBYTECODE=1 -v "$PWD":/w -w /w "$PLAYWRIGHT_IMAGE" sh -c '
+            set -e
+            pip install -q pytest==8.3.3 playwright==1.48.0
+            mkdir /srv/root
+            ln -s /w/_site /srv/root/kalmannet-vs-imm
+            python -m http.server 8000 --directory /srv/root >/dev/null 2>&1 &
+            sleep 1
+            SITE_BASE_URL=http://localhost:8000/kalmannet-vs-imm python -m pytest -q -p no:cacheprovider tests/test_site_docs_browser.py'
+
   # Informational: how far Pyodide's numpy drifts from native on the committed scenarios.
   pyodide-drift:
     runs-on: ubuntu-latest
