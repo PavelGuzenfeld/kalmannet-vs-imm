@@ -249,3 +249,34 @@ def test_replay_numpy_backend_never_builds_a_torch_network(monkeypatch, tmp_path
     results = replay_script.replay(json.loads(SEED_SCENARIO.read_text()), missing, knet, rkn, "numpy")
 
     assert isinstance(results["KalmanNet"], dict) and isinstance(results["RKN"], dict)
+
+
+SIGMOID_FLOAT64_ULP_BUDGET = 4 * np.finfo(np.float64).eps
+SATURATING_INPUTS = np.array([-1000.0, -745.0, 745.0, 1000.0])
+
+
+def test_sigmoid_at_saturating_inputs_raises_no_floating_point_error():
+    """MS-10, #87: the gate saturates for the stand-in network; overflow is noise, not a result."""
+    with np.errstate(over="raise", invalid="raise", divide="raise"):
+        numpy_forward.sigmoid(SATURATING_INPUTS)
+
+
+def test_sigmoid_at_saturating_inputs_returns_exact_limits():
+    """MS-10, #87: exp(-745) is the smallest float64 subnormal, so the lower limit is checked there."""
+    out = numpy_forward.sigmoid(SATURATING_INPUTS)
+    assert out[0] == 0.0
+    assert out[1] == np.exp(-745.0)
+    assert out[2] == 1.0
+    assert out[3] == 1.0
+
+
+def test_sigmoid_matches_torch_across_the_active_range():
+    """MS-10, #87: rtol is 4 float64 eps, the error budget of exp plus one division."""
+    x = np.linspace(-40.0, 40.0, 801)
+    expected = torch.sigmoid(torch.from_numpy(x)).numpy()
+    np.testing.assert_allclose(numpy_forward.sigmoid(x), expected, rtol=SIGMOID_FLOAT64_ULP_BUDGET, atol=0.0)
+
+
+def test_sigmoid_at_zero_is_one_half():
+    """MS-10, #87: the sign split joins at zero."""
+    assert numpy_forward.sigmoid(np.array([0.0]))[0] == 0.5
