@@ -5,7 +5,8 @@ from the official reference (`github.com/ixblue/RecursiveKalmanNet`,
 independent GRU networks, matching the reference's `GRUNetwork` structure
 (FC pre-layer -> GRU -> FC post-layer -> linear output):
 
-  - rnn_K:   outputs the flattened Kalman gain, K in R^{m x n}.
+  - rnn_K:   outputs the Kalman gain in the line-of-sight frame, K in R^{m x n},
+             rotated to Cartesian (decision 58 in #2, #85).
   - rnn_cov: outputs the p = m(m+1)/2 free lower-triangular entries of a
              Cholesky factor L; B_t = L_t L_t^T is the learned half of the
              Joseph-form covariance (issue #14 sec. 2). The other half, A_t
@@ -25,12 +26,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from filters.state import MEAS_DIM, STATE_DIM
+from filters.state import ACC, MEAS_DIM, POS, STATE_DIM, VEL
 
 _M, _N = STATE_DIM, MEAS_DIM
 _FEATURE_GROUPS = (_N, _N, _M * _N, _M)
 _FEATURE_DIM = sum(_FEATURE_GROUPS)
 _FEATURE_AXIS = 1
+_KINEMATIC_BLOCKS = len((POS, VEL, ACC))
 
 
 def normalise_groups(features):
@@ -39,6 +41,18 @@ def normalise_groups(features):
     groups = features.split(_FEATURE_GROUPS, dim=_FEATURE_AXIS)
     normalised = [F.normalize(group, dim=_FEATURE_AXIS) for group in groups]
     return torch.cat(normalised, dim=_FEATURE_AXIS)
+
+
+def los_frame(H):
+    """MS-37: H's position rows are u_az/ρ, u_el/r and u_r, ρ floored as H floors it. Returns blockdiag(R, R, R)
+    with R's rows those directions, and the metres per unit of each measurement, 0 where a row is 0 (overhead)."""
+    position_rows = H[:, :, POS]
+    norms = position_rows.norm(dim=-1)
+    nonzero = norms > 0.0
+    metres_per_unit = torch.where(nonzero, 1.0 / torch.where(nonzero, norms, torch.ones_like(norms)), 0.0)
+    rotation = F.normalize(position_rows, dim=-1)
+    identity = torch.eye(_KINEMATIC_BLOCKS, dtype=H.dtype, device=H.device).unsqueeze(0)
+    return torch.kron(identity, rotation), metres_per_unit
 
 
 class GRUNetwork(nn.Module):
@@ -101,12 +115,21 @@ class RKNGainCovNetwork(nn.Module):
         return self.rnn_K.init_hidden(batch_size, device), self.rnn_cov.init_hidden(batch_size, device)
 
     def forward(self, features, hidden):
+        """MS-37, #85: rnn_K reads H and the correction in the line-of-sight frame and emits N there; K =
+        blockdiag(Rᵀ) N diag(ρ, r, 1), so on position K H = Rᵀ N R: the loop is N's alone, whatever the range
+        and bearing, and a mirror through the z axis gives diag(mirror) K exactly."""
         h_K, h_cov = hidden
-        K_flat, h_K = self.rnn_K(normalise_groups(features), h_K)
+        batch = features.shape[0]
+        innovation, z_diff, H_flat, correction = features.split(_FEATURE_GROUPS, dim=_FEATURE_AXIS)
+        H = H_flat.view(batch, self.n, self.m)
+        blocks, metres_per_unit = los_frame(H)
+        los_H = (H @ blocks.transpose(1, 2)).reshape(batch, -1)
+        los_correction = (blocks @ correction.unsqueeze(-1)).squeeze(-1)
+        los_features = torch.cat([innovation, z_diff, los_H, los_correction], dim=_FEATURE_AXIS)
+        los_gain, h_K = self.rnn_K(normalise_groups(los_features), h_K)
         C, h_cov = self.rnn_cov(normalise_groups(features**2), h_cov)
 
-        batch = features.shape[0]
-        K = K_flat.view(batch, self.m, self.n)
+        K = blocks.transpose(1, 2) @ los_gain.view(batch, self.m, self.n) * metres_per_unit.unsqueeze(1)
 
         L = torch.zeros(batch, self.m, self.m, dtype=features.dtype, device=features.device)
         L[:, self._tril_rows, self._tril_cols] = C

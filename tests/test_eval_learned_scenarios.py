@@ -62,7 +62,7 @@ def open_loop_cv_errors():
     return np.concatenate([open_loop_cv_flight_errors(states) for states, _ in flights()])
 
 
-def fixed_gain_flight_errors(gain, states, measurements):
+def fixed_gain_flight_errors(gain_at, states, measurements):
     F, _ = cv_model(NOMINAL.dt)
     estimate, errors = states[0] + INIT_OFFSET, []
     for truth, z in zip(states, measurements):
@@ -71,13 +71,26 @@ def fixed_gain_flight_errors(gain, states, measurements):
         predicted = np.array([np.arctan2(prior[1], prior[0]), np.arctan2(prior[2], rho), np.hypot(rho, prior[2])])
         innovation = z - predicted
         innovation[:2] = (innovation[:2] + np.pi) % (2 * np.pi) - np.pi
-        estimate = prior + gain @ innovation
+        estimate = prior + gain_at(prior) @ innovation
         errors.append(estimate - truth)
     return np.array(errors)[BURN_IN:]
 
 
-def fixed_gain_errors(gain):
-    return np.concatenate([fixed_gain_flight_errors(gain, *flight) for flight in flights()])
+def fixed_gain_errors(gain_at):
+    return np.concatenate([fixed_gain_flight_errors(gain_at, *flight) for flight in flights()])
+
+
+def los_gain_at(los_gain):
+    def gain(prior):
+        px, py, pz = prior[:3]
+        rho = np.hypot(px, py)
+        r = np.hypot(rho, pz)
+        u_az = np.array([-py, px, 0.0]) / rho
+        u_el = np.array([-pz * px / rho, -pz * py / rho, rho]) / r
+        rotation = np.array([u_az, u_el, prior[:3] / r])
+        return np.kron(np.eye(3), rotation).T @ los_gain * np.array([rho, r, 1.0])
+
+    return gain
 
 
 def constant_gain_checkpoint(net, final_layer, path):
@@ -157,13 +170,13 @@ def test_eval_knet_scenarios_row_applies_the_checkpoint_gain_as_a_fixed_gain_obs
 
     eval_knet_main()
 
-    errors = fixed_gain_errors(CONSTANT_GAIN)
+    errors = fixed_gain_errors(lambda prior: CONSTANT_GAIN)
     assert rms_norm(errors, slice(0, 3)) != pytest.approx(rms_norm(open_loop_cv_errors(), slice(0, 3)), rel=0.01)
     assert_rmse(scenarios_rows(out)[0], errors)
 
 
 def test_eval_rkn_scenarios_row_applies_the_checkpoint_gain_as_a_fixed_gain_observer(datasets, tmp_path, monkeypatch):
-    """MS-10: RKN learns only the gain, so a constant rnn_K output is the same fixed-gain observer as KalmanNet's."""
+    """MS-10, MS-37: RKN learns only the gain, so a constant rnn_K output is a fixed gain in the line-of-sight frame."""
     net = RKNGainCovNetwork(**RKN_MULTIPLIERS)
     checkpoint = constant_gain_checkpoint(net, net.rnn_K.fc2[-1], tmp_path / "rkn.pt")
     out, out_csv = tmp_path / "rkn.json", tmp_path / "rkn.csv"
@@ -173,7 +186,7 @@ def test_eval_rkn_scenarios_row_applies_the_checkpoint_gain_as_a_fixed_gain_obse
 
     eval_rkn_main()
 
-    assert_rmse(scenarios_rows(out_csv)[0], fixed_gain_errors(CONSTANT_GAIN))
+    assert_rmse(scenarios_rows(out_csv)[0], fixed_gain_errors(los_gain_at(CONSTANT_GAIN)))
 
 
 class NonFiniteFilter:

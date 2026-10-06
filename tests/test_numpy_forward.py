@@ -33,13 +33,13 @@ SEED_SCENARIO = REPO / "data" / "scenarios" / "break_turn_9g.json"
 STAND_IN_SEED = 7
 GRU_WEIGHT_SCALE = 0.1
 KNET_WEIGHT_SCALE, KNET_GAIN_LAYER_SCALE = 0.1, 3e-3
-RKN_WEIGHT_SCALE = 0.03
+RKN_WEIGHT_SCALE, RKN_GAIN_LAYER_SCALE = 0.03, 3e-3
 GRU_INPUT, GRU_HIDDEN = 5, 4
 P0_VARIANCE = 100.0
 SINGLE_STEP_ATOL = 1e-15
 SEQUENCE_ATOL_STATE = 1e-10
-SEQUENCE_ATOL_P = 5e-8
-SEQUENCE_RTOL_NEES = 1e-9
+SEQUENCE_ATOL_P = 1e-9
+SEQUENCE_RTOL_NEES = 1e-11
 GAIN_EFFECT_FLOOR_M = 1.0
 RKN_FEATURE_DIM = 42
 
@@ -60,7 +60,11 @@ def knet_stand_in():
 
 
 def rkn_stand_in():
-    return stand_in(RKNGainCovNetwork(**RKN_LAYER_MULTS), RKN_WEIGHT_SCALE)
+    """K is rnn_K's output times range (#85): a gain layer at 0.03 grows P to 1e8; 3e-3 keeps it at 2e4, moves x 270 m."""
+    net = stand_in(RKNGainCovNetwork(**RKN_LAYER_MULTS), RKN_WEIGHT_SCALE)
+    for parameter in net.rnn_K.fc2[-1].parameters():
+        torch.nn.init.uniform_(parameter, -RKN_GAIN_LAYER_SCALE, RKN_GAIN_LAYER_SCALE)
+    return net
 
 
 def exported(net, tmp_path):
@@ -122,8 +126,8 @@ def test_numpy_kalmannet_matches_torch_at_every_step_of_the_committed_scenario(f
 
 
 def test_numpy_rkn_matches_torch_state_and_covariance_at_every_step_of_the_committed_scenario(flight, tmp_path):
-    """MS-10: same CV f, h and H, learned K and B. float64 summation order over the 296 steps drifts x by 1.1e-11
-    (atol 1e-10, ~9x) and P by 6.5e-9 at |P| <= 5.8e5 (atol 5e-8, ~8x)."""
+    """MS-10: same CV f, h and H, learned K and B. float64 summation order over the 296 steps drifts x by 5.0e-12
+    (atol 1e-10, ~20x) and P by 8.5e-11 at |P| <= 1.8e4 (atol 1e-9, ~12x)."""
     states, z = flight
     net = rkn_stand_in()
     x0, P0 = states[0] + _INIT_OFFSET.numpy(), np.eye(STATE_DIM) * P0_VARIANCE
@@ -188,7 +192,7 @@ def test_numpy_normalize_scales_a_sub_eps_feature_by_one_over_eps_like_torch():
 
 def test_replay_numpy_rkn_errors_and_nees_match_the_torch_backend_from_the_same_start(flight, tmp_path):
     """MS-10: the overconfidence flag reads NEES, so both backends start from x0 + offset and P0 = 100 I.
-    NEES spans 4e-2..3e6 and drifts 3.2e-10 relative; one ulp on z_0 moves torch alone 2.6e-10, so rtol 1e-9."""
+    NEES spans 4e-2..3e6 and drifts by 1.1e-12 relative in float64, so rtol 1e-11 is ~10x headroom."""
     states, z = flight
     checkpoint = tmp_path / "rkn.pt"
     torch.save(rkn_stand_in().state_dict(), checkpoint)
