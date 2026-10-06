@@ -80,15 +80,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Native flags for the browser cases
-        run: ./docker_run.sh python scripts/page_parity.py cases build/browser
+      - name: Native flags and trip steps for the browser cases
+        run: |
+          ./docker_run.sh python scripts/page_parity.py cases build/browser
+          mkdir -p build/replay
+          for scenario in break_turn_9g overhead_pass; do
+            ./docker_run.sh python scripts/replay.py data/scenarios/$scenario.json \
+              --imm-tuning web/imm_tuning.json > build/replay/$scenario.txt
+          done
 
-      - name: Page flags equal native replay
+      - name: Page flags and trip markers equal native replay
         run: |
           docker run --rm --ipc=host -e PYTHONDONTWRITEBYTECODE=1 -v "$PWD":/w -w /w "$PLAYWRIGHT_IMAGE" sh -c '
+            set -e
             pip install -q pytest==8.3.3 playwright==1.48.0
             python -m http.server 8000 >/dev/null 2>&1 &
-            PAGE_BASE_URL=http://localhost:8000 python -m pytest -q -p no:cacheprovider tests/test_page_flags_browser.py'
+            sleep 1
+            PAGE_BASE_URL=http://localhost:8000 python -m pytest -q -p no:cacheprovider tests/test_page_flags_browser.py
+            python tests/browser/slice_page_views.py http://localhost:8000 build/replay'
 
   # Informational: how far Pyodide's numpy drifts from native on the committed scenarios.
   pyodide-drift:
@@ -127,4 +136,5 @@ jobs:
               build/pyodide_trace.json data/scenarios/*.json"
 
       - name: Report drift against native
-        run: ./docker_run.sh python scripts/page_parity.py drift build/pyodide_trace.json >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          ./docker_run.sh python scripts/page_parity.py drift build/pyodide_trace.json | tee -a "$GITHUB_STEP_SUMMARY"
