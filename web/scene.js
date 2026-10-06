@@ -69,11 +69,14 @@ export async function createScene(container) {
 
   function placeCamera() {
     const azimuth = view.azimuth + (view.mode === "chase" ? heading : 0);
+    const distance = view.mode === "chase" ? Math.max(view.distance, framingRadius * FRAMING_DISTANCE_PER_RADIUS) : view.distance;
+    container.dataset.cameraDistance = distance;
+    container.dataset.framingRadius = framingRadius;
     const offset = new THREE.Vector3(
       -Math.cos(view.elevation) * Math.cos(azimuth),
       Math.sin(view.elevation),
       Math.cos(view.elevation) * Math.sin(azimuth),
-    ).multiplyScalar(view.mode === "chase" ? Math.max(view.distance, framingRadius * FRAMING_DISTANCE_PER_RADIUS) : view.distance);
+    ).multiplyScalar(distance);
     camera.position.copy(focus).add(offset);
     camera.lookAt(focus);
     renderer.render(scene, camera);
