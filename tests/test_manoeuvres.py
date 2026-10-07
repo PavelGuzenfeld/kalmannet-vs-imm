@@ -128,3 +128,16 @@ def test_every_manoeuvre_ends_flies_at_full_throttle_on_six_column_rows(name):
     assert 50 < len(states) < 2000
     assert rows.shape[1] == 6
     assert set(rows[:, THROTTLE]) == {1.0}
+
+
+@pytest.mark.parametrize("name", MANOEUVRES)
+def test_no_manoeuvre_commands_past_the_envelope_load_or_side_limits(name):
+    _, _, rows = run(name)
+    assert rows[:, 1].max() <= ENVELOPE.max_load_factor
+    assert np.abs(rows[:, 3]).max() <= ENVELOPE.max_side_load_factor
+
+
+def test_jink_rudder_flips_sign_at_every_second_boundary_for_four_halves():
+    _, _, rows = run("jink")
+    signs = np.sign(rows[:, 3])
+    assert np.count_nonzero(np.diff(signs)) == 3
