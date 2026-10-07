@@ -21,6 +21,7 @@ const PYTHON_SOURCES = [
   "filters/metrics.py",
   "filters/plot_data.py",
   "scripts/eval.py",
+  "web/evade.py",
   "web/holds.py",
   "web/live_flight.py",
   "web/manoeuvres.py",
@@ -88,6 +89,11 @@ const handlers = {
   async manoeuvre({ name }) {
     if (name) flight.start_manoeuvre(name);
     else flight.cancel_manoeuvre();
+    return null;
+  },
+  async evade({ engaged }) {
+    if (engaged) flight.engage_evade();
+    else flight.disengage_evade();
     return null;
   },
   async setThresholds({ thresholds }) {

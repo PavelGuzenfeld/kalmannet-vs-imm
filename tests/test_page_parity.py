@@ -10,13 +10,17 @@ from scripts.page_parity import (
     DIVERGING_KNET_DIVERGENCE,
     DIVERGING_KNET_NPZ,
     DRIFT_QUANTITIES,
+    EVADE_CASE,
+    EVADE_ENGAGE_STEP,
     IMM_TUNING,
     MAX_G_LOWERED_CASE,
     NO_WEIGHTS,
+    PILOT_ROW,
     SCENARIOS_DIR,
     TIGHT_THRESHOLDS,
     drift_markdown,
     drift_table,
+    evasive_flight,
     absent_or_difference,
     main,
     max_abs_difference,
@@ -224,3 +228,25 @@ def test_max_g_lowered_mid_pull_case_flies_the_page_truth_and_leaves_the_break_t
     after = MID_PULL_STEP + 1
     assert states[:after, :6].tobytes() == break_turn[:after, :6].tobytes()
     assert not np.array_equal(states[after, :6], break_turn[after, :6])
+
+
+def test_exported_evasive_flight_replays_to_the_flags_and_final_truth_the_live_flight_showed(cases):
+    flight = evasive_flight(json.loads((SCENARIOS_DIR / "break_turn_9g.json").read_text()))
+    scenario = json.loads((cases / f"{EVADE_CASE}.json").read_text())
+
+    live_flags = flight.frame()["flags"]
+    assert scenario["controls"] == json.loads(flight.scenario_json())["controls"]
+    assert scenario["controls"][:EVADE_ENGAGE_STEP] == [PILOT_ROW] * EVADE_ENGAGE_STEP
+    assert PILOT_ROW not in scenario["controls"][EVADE_ENGAGE_STEP:]
+    assert case_flags(cases, EVADE_CASE) == {name: live_flags[name] for name in ("EKF", "UKF", "IMM")}
+    assert fly_scenario(scenario)[0][-1, :6].tolist() == flight.frame()["truth_m"] + flight.frame()["truth_velocity_m_s"]
+
+
+def test_evasive_case_flies_level_at_the_sensor_from_4_km_and_engages_evade_after_one_second_of_eight(cases):
+    scenario = json.loads((cases / f"{EVADE_CASE}.json").read_text())
+    controls = scenario["controls"]
+
+    assert scenario["start"] == {"position": [0.0, 4000.0, 300.0], "velocity": [0.0, -110.0, 0.0]}
+    assert controls[0] == [0.0, 1.0, 0.6, 0.0, 0.0, 0.0]
+    assert len(controls) == 400
+    assert [row == PILOT_ROW for row in controls].index(False) == 50

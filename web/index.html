@@ -75,6 +75,7 @@
     <legend>Flight</legend>
     <label>noise regime <select id="noise_regime"></select></label>
     <label>seed <input id="seed" type="number" min="0" step="1"></label>
+    <label><input id="evade" type="checkbox"> evade (E)</label>
   </fieldset>
 
   <fieldset>
@@ -106,6 +107,7 @@
       <tr><td>jink</td><td><kbd data-code="Digit4">4</kbd></td><td>—</td></tr>
       <tr><td>weave</td><td><kbd data-code="Digit5">5</kbd></td><td>—</td></tr>
       <tr><td>barrel roll</td><td><kbd data-code="Digit6">6</kbd></td><td>—</td></tr>
+      <tr><td>evade</td><td><kbd data-code="KeyE">E</kbd></td><td>—</td></tr>
     </tbody>
   </table>
   <p id="controls"></p>
@@ -142,6 +144,7 @@
           <span data-hud-hold="altitude" data-engaged="false">J alt</span>
           <span data-hud-hold="speed" data-engaged="false">K spd</span>
           <span data-hud-hold="bank" data-engaged="false">L bank</span>
+          <span data-hud-evade data-engaged="false">E evade</span>
         </div>
         <div data-hud-axis="roll"data-percent="0">roll <meter min="-100" max="100" value="0"></meter> <output>0%</output></div>
         <div data-hud-axis="pull" data-percent="0">pull <meter min="-100" max="100" value="0"></meter> <output>0%</output></div>

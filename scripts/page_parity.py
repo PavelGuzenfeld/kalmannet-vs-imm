@@ -13,7 +13,7 @@ from filters.flags import FLAGS, shown
 from filters.knet.gain_network import KalmanGainGRU
 from filters.torch_ops import export_npz
 from scripts.replay import replay
-from web.live_flight import trace
+from web.live_flight import LiveFlight, trace
 
 SCENARIOS_DIR = Path("data/scenarios")
 IMM_TUNING = Path("web/imm_tuning.json")
@@ -34,6 +34,11 @@ DIVERGING_KNET_WEIGHT_SCALE = 0.1
 MAX_G_LOWERED_CASE = "break_turn_9g_max_g_lowered_mid_pull"
 MAX_G_LOWERED_STEP = 100
 MAX_G_LOWERED_TO = 3.0
+EVADE_CASE = "evade_head_on"
+EVADE_START = {"position": [0.0, 4000.0, 300.0], "velocity": [0.0, -110.0, 0.0]}
+EVADE_ENGAGE_STEP = 50
+EVADE_CASE_STEPS = 400
+PILOT_ROW = [0.0, 1.0, 0.6, 0.0, 0.0, 0.0]
 
 
 def native_flags(scenario):
@@ -45,9 +50,21 @@ def native_flags(scenario):
     }
 
 
+def evasive_flight(break_turn):
+    """A live flight toward the sensor that engages evade at EVADE_ENGAGE_STEP, as the page flies it."""
+    imm_best = json.loads(IMM_TUNING.read_text())["best"]
+    flight = LiveFlight({**break_turn, "start": EVADE_START}, imm_best, NO_WEIGHTS)
+    for step in range(EVADE_CASE_STEPS):
+        if step == EVADE_ENGAGE_STEP:
+            flight.engage_evade()
+        flight.advance(PILOT_ROW)
+    return flight
+
+
 def case_scenarios():
     break_turn = json.loads((SCENARIOS_DIR / "break_turn_9g.json").read_text())
     overhead = json.loads((SCENARIOS_DIR / "overhead_pass.json").read_text())
+    evasive = json.loads(evasive_flight(break_turn).scenario_json())
     trip_step = int(native_flags(break_turn)[TRIP_PROBE[0]][TRIP_PROBE[1]])
     return {
         "break_turn_9g": break_turn,
@@ -67,6 +84,7 @@ def case_scenarios():
                 [MAX_G_LOWERED_STEP, {**break_turn["envelope"], "max_load_factor": MAX_G_LOWERED_TO}]
             ],
         },
+        EVADE_CASE: evasive,
     }
 
 
