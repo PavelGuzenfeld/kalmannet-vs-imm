@@ -34,7 +34,7 @@ def test_write_up_results_table_renders_as_a_table(browser_context):
 
     headers = page.eval_on_selector_all("table th", "cells => cells.map(c => c.textContent)")
     assert "Pos RMSE (m)" in headers
-    assert page.locator("table td", has_text="112.59").count() > 0
+    assert page.locator("table td", has_text="55.89").count() > 0
 
 
 def test_source_notes_link_from_write_up_opens_source_notes(browser_context):
