@@ -1,6 +1,9 @@
+import csv
+import json
 import warnings
 
 import numpy as np
+import pytest
 from scipy.stats import chi2
 
 from filters.metrics import (
@@ -280,3 +283,92 @@ def test_velocity_rmse_is_the_root_mean_square_of_the_velocity_error_norm():
 
     assert bench_eval.summarize_rmse(result, burn_in=0)[1] == 5.0
     assert eval_rkn.summarize(result, burn_in=0)["vel_rmse"] == 5.0
+
+
+def test_counted_mask_latches_at_the_first_step_past_200_m_though_the_error_comes_back_under():
+    err = np.zeros((1, 5, 9))
+    err[0, 1, 0] = PAST_LIMIT_M[0]
+    err[0, 3, 0] = PAST_LIMIT_M[0]
+
+    np.testing.assert_array_equal(counted_mask(err), [[True, False, False, False, False]])
+
+
+def test_counted_mask_keeps_a_step_at_exactly_200_m_and_drops_the_first_float_above_it():
+    err = np.zeros((2, 4, 9))
+    err[0, 2, 0] = 200.0
+    err[1, 2, 0] = np.nextafter(200.0, np.inf)
+
+    np.testing.assert_array_equal(counted_mask(err), [[True] * 4, [True, True, False, False]])
+
+
+@pytest.mark.parametrize(
+    ("error_m", "pulled"), [(200.0, BENCH_STEPS), (np.nextafter(200.0, np.inf), 3)], ids=["at_limit", "past_limit"]
+)
+def test_eval_run_is_stopped_only_by_an_error_past_200_m_not_by_one_at_it(error_m, pulled):
+    errors_m = [WITHIN_LIMIT_M] * 2 + [[error_m, 0.0, 0.0]] + [WITHIN_LIMIT_M] * (BENCH_STEPS - 3)
+    flt = ScriptedPositionError(errors_m)
+
+    err, _, _ = bench_eval.run_ekf_like(flt, np.zeros((BENCH_STEPS, 9)), np.zeros((BENCH_STEPS, 3)))
+
+    assert (flt.steps, len(err)) == (pulled, pulled)
+
+
+def test_nis_averages_only_the_counted_steps_of_a_run_stopped_part_way():
+    """Counted NIS reads 3 in the 95% band for df 3; the stopped step's 9e4 would drop the inside share to 3/4."""
+    err = np.zeros((1, 1, 4, 9))
+    err[0, 0, 3, 0] = PAST_LIMIT_M[0]
+    result = {"err": err, "nees": np.full((1, 1, 4), 9.0), "nis": np.array([[[3.0, 3.0, 3.0, 9e4]]])}
+
+    consistency = bench_eval.summarize_consistency(result, burn_in=0)
+
+    assert (consistency["anis_mean"], consistency["anis_fraction_inside_95"]) == (3.0, 1.0)
+
+
+def diverging_and_healthy_runs():
+    err = np.zeros((1, 2, BENCH_STEPS, 9))
+    err[0, 0, DIVERGES_AT, 0] = PAST_LIMIT_M[0]
+    err[0, 0, DIVERGES_AT + 1 :] = np.nan
+    ones = np.ones((1, 2, BENCH_STEPS))
+    return {"err": err, "nees": ones, "nis": ones}
+
+
+DIVERGENCE_COLUMNS = {"diverged_fraction": 0.5, "median_divergence_step": float(DIVERGES_AT)}
+
+
+def test_knet_regime_row_of_a_nominal_regime_carries_the_divergence_columns():
+    runs = [np.zeros((DIVERGES_AT + 1, 9)), np.zeros((BENCH_STEPS, 9))]
+    runs[0][DIVERGES_AT, 0] = PAST_LIMIT_M[0]
+
+    row = eval_knet.regime_row("nominal", runs)
+
+    assert {key: row[key] for key in DIVERGENCE_COLUMNS} == DIVERGENCE_COLUMNS
+
+
+def test_rkn_summary_of_a_nominal_regime_carries_the_divergence_columns():
+    summary = eval_rkn.summarize(diverging_and_healthy_runs())
+
+    assert {key: summary[key] for key in DIVERGENCE_COLUMNS} == DIVERGENCE_COLUMNS
+
+
+def test_eval_writes_the_divergence_columns_on_the_nominal_and_sweep_regime_rows(tmp_path, monkeypatch):
+    regime = {"dt": 0.02, "sigma_az_rad": 0.001, "sigma_el_rad": 0.001, "sigma_range_m": 2.0}
+    data_dir, out, scenarios = tmp_path / "datasets", tmp_path / "results", tmp_path / "scenarios"
+    for directory in (data_dir, scenarios):
+        directory.mkdir()
+    (data_dir / "manifest.json").write_text(json.dumps({"regimes": {"nominal": regime, "high_noise": regime}}))
+    (data_dir / "test_high_noise.npz").touch()
+    tuning = tmp_path / "imm_tuning.json"
+    tuning.write_text(json.dumps({"best": {
+        "omega_ct_deg": 15.0, "p_stay": 0.97, "ca_sigma_a": 3.0, "ca_tau": 4.0, "cv_sigma_a": 0.05, "ct_sigma_a": 0.3,
+    }}))
+    monkeypatch.setattr(bench_eval, "_load", lambda path: (np.zeros((1, BENCH_STEPS, 9)), np.zeros((1, 2, BENCH_STEPS, 3))))
+    monkeypatch.setattr(bench_eval, "evaluate_dataset", lambda *_: diverging_and_healthy_runs())
+    argv = ["eval.py", "--data-dir", str(data_dir), "--imm-tuning", str(tuning), "--scenario-dir", str(scenarios), "--out", str(out)]
+    monkeypatch.setattr("sys.argv", argv)
+
+    bench_eval.main()
+
+    with open(out / "results_table.csv") as f:
+        rows = list(csv.DictReader(f))
+    assert [row["regime"] for row in rows] == ["nominal"] * 3 + ["high_noise"] * 3
+    assert {(row["diverged_fraction"], row["median_divergence_step"]) for row in rows} == {("0.5", "25.0")}

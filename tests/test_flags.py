@@ -169,3 +169,9 @@ def test_a_filter_off_only_in_altitude_is_pulled_no_further_once_past_200_m():
     err[2] = 201.0
 
     assert len(list(until_diverged((err,) for _ in range(3)))) == 1
+
+
+def test_divergence_latches_at_the_first_step_past_200_m_though_the_error_comes_back_under():
+    errors = np.array([1.0, 250.0, 10.0, 300.0, 5.0])
+
+    assert (divergence_step(errors), counted_steps(errors)) == (1, 1)
