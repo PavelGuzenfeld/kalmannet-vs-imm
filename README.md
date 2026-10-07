@@ -4,18 +4,23 @@ Does a learned Kalman filter beat a well-tuned classical IMM for maneuvering-tar
 with azimuth/elevation/range measurements, on an edge tracker where the GPU is reserved for the
 vision pipeline?
 
-Short answer: no. A tuned IMM wins on accuracy, on calibration, and on cost.
+Short answer: not yet. A tuned IMM still wins on nominal accuracy, on calibration and on cost, but
+Recursive KalmanNet now comes within 1.3x of it and beats it under hard maneuvers.
 
 | | IMM | KalmanNet (vanilla) | RKN |
 |---|---|---|---|
-| Position RMSE, nominal (m) | **1.17** | 576.75 | 798.13 |
-| High-MC ANEES (bounds 8.19-9.85) | 11.06 | N/A (no covariance) | 23.21 |
-| Coverage @68/95 | 0.691 / 0.829 | N/A | 0.453 / 0.603 |
-| Median CPU latency (ms) | 0.235 | 0.333 | 0.391 |
+| Diverged runs (> 200 m), nominal | 0% | 86.3% | 0% |
+| Position RMSE, nominal (m) | **1.17** | 74.57 (before divergence) | 1.49 |
+| Position RMSE, high_maneuver (m) | 2.53 | 79.41 (before divergence) | **1.89** |
+| High-MC ANEES (bounds 8.19-9.85) | **9.53** | N/A (no covariance) | 15.02 |
+| Coverage @68/95 | 0.702 / 0.862 | N/A | 0.553 / 0.732 |
+| Median CPU latency (ms) | 0.239 | 0.333 | 0.559 |
 | Params | 0 | 526,116 | 301,266 |
 
-Recursive KalmanNet's one win: it produces a usable, better-calibrated covariance where vanilla
-KalmanNet produces none (state dim 9 > measurement dim 3).
+What keeps RKN out: its covariance is learned from nominal-noise data and does not follow a
+noisier sensor (ANEES 86 at 4x measurement noise, where IMM, which is given the new `R`, stays
+at 8.8). Vanilla KalmanNet
+produces no covariance at all (state dim 9 > measurement dim 3) and diverges in most runs.
 
 Full write-up, methodology, deployment analysis and the conditions that would flip the verdict:
 [the write-up](https://pavelguzenfeld.github.io/kalmannet-vs-imm/docs/view.html?doc=write-up.md). Literature extraction the implementations are grounded in:
@@ -29,13 +34,14 @@ Everything runs in a CPU-only Docker image; `docker_run.sh` builds it and mounts
 `/work`.
 
 ```
-./docker_run.sh pytest -q                        # 45 tests
+./docker_run.sh pytest -q                        # 340 tests
 ./docker_run.sh python scripts/make_dataset.py   # -> datasets/
 ./docker_run.sh python scripts/tune_imm.py
 ./docker_run.sh python scripts/eval.py           # classical filters -> results/
 ./docker_run.sh python scripts/train_knet.py && ./docker_run.sh python scripts/eval_knet.py
 ./docker_run.sh python scripts/train_rkn.py  && ./docker_run.sh python scripts/eval_rkn.py
-./docker_run.sh python scripts/bench_latency.py
+./docker_run.sh python scripts/bench_latency.py --knet-checkpoint results/knet_vanilla/best.pt \
+    --rkn-checkpoint results/rkn/best.pt --bench-rkn-reference-default
 ./docker_run.sh python scripts/make_plots.py
 ./docker_run.sh python scripts/make_animation.py
 ```

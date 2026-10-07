@@ -70,16 +70,26 @@ extraction this implementation is grounded in.
   fairness rationale), but its architecture produces an actual state covariance every step (sec.
   1.6). Unlike vanilla KalmanNet, RKN can be judged on NEES/NIS/coverage on the same footing
   as EKF/UKF/IMM. That comparison is the point of building it.
+- **Measurement noise on the sweep**: EKF/UKF/IMM are built with each regime's own `R`
+  (`scripts/eval.py`), so on `high_noise` and `low_noise` they are told the shifted noise level.
+  Both learned filters take no `R` and see only what they learned from nominal-noise training
+  data. On `heavy_tailed` every filter assumes the nominal Gaussian `R`. This asymmetry matters
+  for the RKN calibration result in sec. 2.3 and the verdict in sec. 4.
 
 ### 1.4 IMM tuning (`scripts/tune_imm.py`)
 
-Grid search over `p_stay in {0.90, 0.95, 0.97, 0.99}`, nominal `|omega_CT| in {10,15,20,25} deg/s`,
-`sigma_a^CA in {2,4,6} m/s^2`, `tau^CA in {2,4} s` (96 combinations), scored by mean position RMSE
-on a 30-trajectory validation subset, winner re-verified on the full 200-trajectory validation set.
-Full search log: `results/imm_tuning.json`.
+Coordinate search (`filters/imm_tuning.py`) from `p_stay=0.99, omega_CT=25 deg/s,
+sigma_a^CA=2 m/s^2, tau^CA=2 s, sigma_a^CT=0.3 m/s^2` over `p_stay in {0.95, 0.97, 0.99, 0.995, 0.998}`,
+nominal `|omega_CT| in {15,20,25,30,40} deg/s`, `sigma_a^CA in {1,2,4} m/s^2`, `tau^CA in {1,2,4} s`,
+`sigma_a^CT in {0.1,0.3,1.0} m/s^2`. An axis whose best value sits on a grid edge is extended
+geometrically (capped at 3 extensions) so the selection is never an edge artifact; `sigma_a^CT` was
+extended once, to 3.33. CV `sigma_a` is pinned at the truth generator's 0.05 (validation RMSE is flat
+in it). 28 candidates, each scored by mean position RMSE on a 30-trajectory validation subset; the
+winner re-verified on the full 200-trajectory validation set. Full search log:
+`results/imm_tuning.json`.
 
-**Chosen**: `p_stay=0.99`, `omega_CT=25 deg/s`, `sigma_a^CA=2 m/s^2`, `tau^CA=2 s` — full-val-set
-position RMSE **1.20 m**.
+**Chosen**: `p_stay=0.99`, `omega_CT=25 deg/s`, `sigma_a^CA=2 m/s^2`, `tau^CA=2 s`,
+`sigma_a^CT=1.0 m/s^2` — full-val-set position RMSE **1.19 m**.
 
 ### 1.5 KalmanNet architecture and training (`filters/knet/`, `scripts/train_knet.py`)
 
@@ -106,8 +116,9 @@ acknowledgment that different BPTT strategies (full vs. truncated-then-full vs. 
 were needed for training stability on challenging trajectories ([#14](source-notes.md) sec. 1b). It is a
 property of this architecture applied to our az/el/range/maneuvering setup, not an implementation
 shortcut. Final training run: `results/knet_vanilla/training_log.json` (protocol: truncated BPTT,
-truncation length 25 steps, Adam, per-step squared-error loss time-averaged per trajectory, L2
-weight decay, validation-based early stopping; batch size 32, up to 30 epochs, patience 6).
+truncation length 20 steps, Adam at lr 3e-4, per-step squared-error loss time-averaged per
+trajectory, L2 weight decay 1e-4, gradient-norm clip 1.0, validation-based early stopping; batch
+size 16, up to 100 epochs, patience 10, seed 0).
 
 ### 1.6 Recursive KalmanNet architecture and training (`filters/knet/rkn_*.py`, `scripts/train_rkn.py`)
 
@@ -117,12 +128,16 @@ integration, not a from-paper reimplementation" design implication. As with vani
 reference source was read (not just the paper) before porting.
 
 - **Two independent GRU networks**, each FC-pre -> GRU -> FC-post -> linear, matching the
-  reference's `GRUNetwork`: `rnn_K` outputs the flattened Kalman gain `K in R^{9x3}`; `rnn_cov`
+  reference's `GRUNetwork`: `rnn_K` reads `H` and the state correction rotated into the predicted
+  line of sight's (azimuth, elevation, range) frame and outputs a gain `N` there, mapped back to
+  the Cartesian `K in R^{9x3}` as `K = blockdiag(R^T) N diag(rho, r, 1)` with `R` the row-normalised
+  position block of `H`, so the gain is mirror-equivariant by construction (#94); `rnn_cov`
   outputs the `m(m+1)/2 = 45` free lower-triangular entries of a Cholesky factor `L`, from which
   `B_t = L_t L_t^T` (PSD for any real `L`, so no positivity constraint is needed on the
   diagonal the way Cholesky-KalmanNet's PDEL requires; confirmed from the reference
   code, not assumed).
-- **Same 4 features as vanilla KalmanNet, squared elementwise**: innovation, observation
+- **Same 4 features as vanilla KalmanNet, squared elementwise and, for `rnn_cov`, L2-normalised
+  per group so a runaway state cannot saturate the GRU (#86)**: innovation, observation
   difference, the measurement Jacobian `H_t` (flattened), and the state correction from the
   previous step. The reference's own features assume a linear `H` multiplying `x`
   directly; adapting to our nonlinear az/el/range `h()` required computing `H_t` as an actual
@@ -151,14 +166,15 @@ reference source was read (not just the paper) before porting.
 - **Network size: the reference's default multipliers do not fit our latency budget.** The
   reference's default `GRUNetwork` config (`fc1_mult=10, hidden_mult=10, fc2_mult=20`) is sized for
   the paper's own (smaller) example systems; at our `m=9`, it produces a 7.85M-parameter
-  network whose forward pass alone measures 3.37 ms/step single-threaded, already over the
+  network whose forward pass alone measures 2.76 ms/step single-threaded, already over the
   2 ms target before any accelerator is involved (sec. 3.1). We report that reference-default
   number as a deployment-audit data point and also train a
   scaled-down variant (`fc1_mult=3, hidden_mult=3, fc2_mult=4`, 301,266 parameters, matching
-  vanilla KalmanNet's rough size) for a latency-competitive, directly comparable result. Same
-  training protocol as vanilla KalmanNet otherwise: truncated BPTT (25-step chunks), Adam,
-  finite-loss/finite-gradient skip-guard, no ground-truth state injection, validation-based early
-  stopping, batch size 32. Training log: `results/rkn/training_log.json`.
+  vanilla KalmanNet's rough size) for a latency-competitive, directly comparable result. Training
+  protocol (`scripts/train_rkn.py` defaults): truncated BPTT (25-step chunks), Adam at lr 3e-4,
+  weight decay 1e-4, finite-loss/finite-gradient skip-guard, no ground-truth state injection,
+  validation-based early stopping; batch size 32, up to 30 epochs, patience 6, seed 0. Best epoch 9,
+  validation position RMSE 1.56 m. Training log: `results/rkn/training_log.json`.
 
 ## 2. Results
 
@@ -166,52 +182,68 @@ All numbers below: full `datasets/test.npz` (200 trajectories x 5 Monte Carlo no
 realizations each) for RMSE and the fraction-inside-95%-bounds check; `test_highmc.npz` (5
 trajectories x 100 realizations) for the headline ANEES/ANIS/coverage numbers, which need many
 realizations per time step to be discriminating. First 20 steps (0.4 s) excluded from every
-statistic to let the initial-condition perturbation settle. Full CSV: `results/results_table.csv`
+statistic to let the initial-condition perturbation settle.
+
+**Divergence rule ([#111](https://github.com/PavelGuzenfeld/kalmannet-vs-imm/issues/111)).** A run
+is diverged from the first step its position error exceeds 200 m or goes non-finite, and the
+evaluator stops stepping it there. Every statistic counts only the steps before that step, and
+every RMSE row also carries `diverged_fraction` (share of runs that diverged) and
+`median_divergence_step` (of 750 steps at 50 Hz). This changes what a pos RMSE means for any
+filter that diverges: it is the error *while still tracking*, capped near 200 m by construction,
+not the whole-run error. The earlier revision of this report counted every step, so its numbers
+for EKF/UKF and vanilla KalmanNet (112.59 m and 576.75 m nominal) are not comparable with the ones
+below; for those filters, read the diverged fraction first. IMM and RKN never diverge, so their
+numbers mean the same thing as before.
+
+Full CSV: `results/results_table.csv`
 (classical filters) + `results/knet_test_rmse.csv` / `results/rkn_test_rmse.csv` (learned filters);
 full high-MC JSON: `results/anees_highmc.json` (classical) + `results/rkn_eval.json` (RKN); plots
-(`scripts/make_plots.py`) in `results/plots/`: `trajectory_overlay.png` (a maneuvering test trajectory —
-IMM tracks the turn the CV-only floor cuts the corner on), `rmse_vs_time.png` (EKF/UKF diverge
-steadily from ~1 m to ~250 m over 15 s as maneuvers accumulate; IMM stays flat near 1 m
-throughout), `nees_vs_time.png` (EKF's ANEES reaches ~10^7 against an expected value of 9; IMM's
-oscillates around the expected value inside the chi-square band), `coverage.png` (EKF/UKF near
-zero, IMM near nominal, RKN in between), `accuracy_vs_intensity.png` (RKN tracks just above
-vanilla KalmanNet across every regime, both far above IMM), `latency_vs_parameters.png` (the
+(`scripts/make_plots.py`, which does not apply the divergence rule) in `results/plots/`:
+`trajectory_overlay.png` (a maneuvering test trajectory — IMM tracks the turn the CV-only floor
+cuts the corner on), `rmse_vs_time.png` (EKF/UKF grow steadily from ~1 m to ~280 m over 15 s as
+maneuvers accumulate; IMM stays flat near 1 m throughout), `nees_vs_time.png` (EKF's ANEES reaches
+~10^7 against an expected value of 9; IMM's oscillates around the expected value near the
+chi-square band), `coverage.png` (EKF/UKF near zero, IMM near nominal, RKN in between),
+`accuracy_vs_intensity.png` (RKN within ~1.3x of IMM everywhere and below it on `high_maneuver`;
+vanilla KalmanNet and EKF/UKF two orders of magnitude above both), `latency_vs_parameters.png` (the
 reference-default RKN sizing sits far above the 2 ms line; every trained/deployed variant sits
 under it).
 
 ### 2.1 Accuracy and calibration, nominal regime
 
-| Filter | Pos RMSE (m) | Vel RMSE (m/s) | ANEES (main, N=5) | bounds (95%) | frac in 95% | ANEES (high-MC, N=100) | bounds (95%) | Coverage@68/95 |
-|---|---|---|---|---|---|---|---|---|
-| EKF (CV-only) | 112.59 | 63.67 | 2,944,095 | 5.67-13.08 | 0.112 | 4,755,205 | 8.19-9.85 | 0.027 / 0.037 |
-| UKF (CV-only) | 112.59 | 63.67 | 2,944,093 | 5.67-13.08 | 0.112 | 4,755,204 | 8.19-9.85 | 0.027 / 0.037 |
-| IMM (CV/CT+/CT-/CA, tuned) | **1.17** | **4.52** | 9.70 | 5.67-13.08 | 0.326 | 11.06 | 8.19-9.85 | 0.691 / 0.829 |
-| KalmanNet (vanilla, arch #2) | 576.75 | 98.55 | N/A | N/A | N/A | N/A | N/A | N/A |
-| Recursive KalmanNet (RKN, 301k params) | 798.13 | 153.85 | 13.46 | 5.67-13.08 | 0.158 | 23.21 | 8.19-9.85 | 0.453 / 0.603 |
+| Filter | Pos RMSE (m) | Vel RMSE (m/s) | Diverged (median step) | ANEES (main, N=5) | bounds (95%) | frac in 95% | ANEES (high-MC, N=100) | bounds (95%) | Coverage@68/95 |
+|---|---|---|---|---|---|---|---|---|---|
+| EKF (CV-only) | 55.89 | 42.56 | 29.5% (536) | 1,186,926 | 5.67-13.08 | 0.123 | 906,770 | 8.19-9.85 | 0.036 / 0.047 |
+| UKF (CV-only) | 55.89 | 42.56 | 29.5% (536) | 1,186,897 | 5.67-13.08 | 0.123 | 906,769 | 8.19-9.85 | 0.036 / 0.047 |
+| IMM (CV/CT+/CT-/CA, tuned) | **1.17** | **4.48** | 0% | 8.98 | 5.67-13.08 | 0.337 | **9.53** | 8.19-9.85 | 0.702 / 0.862 |
+| KalmanNet (vanilla, arch #2) | 74.57 | 37.12 | 86.3% (408) | N/A | N/A | N/A | N/A | N/A | N/A |
+| Recursive KalmanNet (RKN, 301k params) | 1.49 | 5.99 | 0% | 10.27 | 5.67-13.08 | 0.362 | 15.02 | 8.19-9.85 | 0.553 / 0.732 |
 
-*Accuracy*: IMM beats the single-model CV floor by ~96x on
-position RMSE (1.17 m vs. 112.59 m). That is expected: the test trajectories spend most
-of their time in CT/CA maneuver segments a CV-only filter cannot track. *Calibration*: EKF/UKF's
-ANEES is ~300,000x the upper bound of its own claimed 95% interval, with only 2.7-3.7% empirical
-coverage where a well-calibrated filter gives ~68%/~95%. That is an overconfident filter, the
-failure mode the brief calls out as unsafe for track-management gating. IMM lands inside its
-own high-MC ANEES bound (11.06 vs. 8.19-9.85 is a narrow miss on the upper edge, essentially
-consistent), and its coverage (69%/83% vs. nominal 68%/95%) is imperfect but in the right regime,
-not off by orders of magnitude. A tuned IMM is both far more accurate and far better calibrated
-than the naive floor here.
+*Accuracy*: IMM beats the single-model CV floor by ~48x on position RMSE (1.17 m vs. 55.89 m) even
+with the floor's diverged tails cut off, and 29.5% of the floor's runs pass 200 m before 15 s.
+That is expected: the test trajectories spend most of their time in CT/CA maneuver segments a
+CV-only filter cannot track. RKN is the first learned filter here in IMM's range: 1.49 m, 1.27x
+IMM, no diverged runs. *Calibration*: EKF/UKF's ANEES is ~90,000x the upper bound of its own
+claimed 95% interval over the steps before divergence, with only 3.6-4.7% empirical coverage where
+a well-calibrated filter gives ~68%/~95%. That is an overconfident filter, the failure mode the
+brief calls out as unsafe for track-management gating. IMM now lands inside its own high-MC ANEES
+bound (9.53 vs. 8.19-9.85), and its coverage (70%/86% vs. nominal 68%/95%) is slightly short at
+95% but in the right regime. RKN is overconfident by ~1.5x on the high-MC ANEES (15.02) with
+coverage 55%/73%, closer to IMM than to the floor.
 
 ### 2.2 Vanilla KalmanNet: accuracy, and why there is no calibration number at all
 
-Best checkpoint (epoch 14 of 20, early-stopped): validation position RMSE 720.77 m (no burn-in
-exclusion; `results/knet_vanilla/training_log.json`). Test-set position RMSE, same burn-in-excluded
-protocol as every other filter in this report (`results/knet_test_rmse.csv`): **576.75 m nominal**,
-830.36 m / 676.64 m / 654.10 m / 689.33 m on the high_maneuver / high_noise / low_noise /
-heavy_tailed sweep regimes respectively, i.e. consistently in the 550-830 m range across every
-regime.
+Best checkpoint (epoch 11, early-stopped at epoch 21): validation position RMSE 718.42 m (no
+burn-in exclusion, no divergence cut; `results/knet_vanilla/training_log.json`). From epoch 1 on,
+validation RMSE swung between 718 m and 4,493 m from epoch to epoch (epoch 0: 5,718 m). On the test set
+(`results/knet_test_rmse.csv`), **86.3% of nominal runs diverge**, at a median step of 408 (8.2 s
+into a 15 s trajectory); the position RMSE over the steps before divergence is 74.57 m. Across the
+sweep regimes 74-94% of runs diverge (high_maneuver worst: 94%, median step 249), with
+pre-divergence RMSE 70-79 m.
 
-This is worse than the naive CV-only EKF/UKF floor (112.59 m nominal, 75.85-188.23 m across the
-sweep), let alone IMM (1.17 m nominal, 0.44-3.88 m across the sweep). Per sec. 1.5, this is a
-timeboxed finding, not an under-tuned strawman:
+This is worse than the naive CV-only EKF/UKF floor (14-50% of runs diverged, 51-71 m before
+divergence), let alone IMM (never diverges; 1.17 m nominal, 0.44-3.88 m across the sweep). Per
+sec. 1.5, this is a timeboxed finding, not an under-tuned strawman:
 
 - The architecture-#2 port was cross-checked line-by-line against the reference
   `KNet/KalmanNet_nn.py` and unit-tested (`tests/test_knet_filter.py`, `tests/test_torch_ops.py`)
@@ -230,7 +262,7 @@ timeboxed finding, not an under-tuned strawman:
     get stable training on harder trajectories ([#14](source-notes.md) sec. 1).
   - No ground-truth state is ever injected to mask this (the training loop's only safety net
     is skipping a non-finite gradient update, never resetting the recurrent state to truth). The
-    576.75 m test-set number is the model's own, unassisted performance.
+    86.3% divergence rate is the model's own, unassisted performance.
 - **No usable covariance, structurally, not by omission.** Vanilla KalmanNet ("KG-only" in Bayesian
   KalmanNet's own taxonomy, [#14](source-notes.md) sec. 4) has no covariance output at all; the one documented
   post-hoc recovery trick needs `H` full column rank, i.e. state dim `<=` measurement dim. Our
@@ -241,62 +273,65 @@ timeboxed finding, not an under-tuned strawman:
   the brief's required reading list prioritizes Recursive KalmanNet as the variant that fixes this
   gap ([#14](source-notes.md) sec. 2). Built and evaluated next (sec. 2.3).
 
-### 2.3 Recursive KalmanNet: worse accuracy, but meaningfully better calibration
+### 2.3 Recursive KalmanNet: close to IMM, ahead of it under hard maneuvers
 
-RKN (301k-parameter trained variant, sec. 1.6) is the one result in this report that complicates a
+RKN (301k-parameter trained variant, sec. 1.6) is the one result in this report that breaks a
 clean "learned filters lose" story:
 
 | Metric | EKF/UKF | IMM | KalmanNet (vanilla) | RKN |
 |---|---|---|---|---|
-| Position RMSE, nominal (m) | 112.59 | **1.17** | 576.75 | 798.13 |
-| ANEES, high-MC (bounds 8.19-9.85) | 4,755,205 | 11.06 | N/A | 23.21 |
-| Coverage @68/95, high-MC | 0.027 / 0.037 | 0.691 / 0.829 | N/A | 0.453 / 0.603 |
+| Diverged runs, nominal | 29.5% | 0% | 86.3% | 0% |
+| Position RMSE, nominal (m) | 55.89 (pre-divergence) | **1.17** | 74.57 (pre-divergence) | 1.49 |
+| Position RMSE, high_maneuver (m) | 71.12 (pre-divergence) | 2.53 | 79.41 (pre-divergence) | **1.89** |
+| ANEES, high-MC (bounds 8.19-9.85) | 906,770 | **9.53** | N/A | 15.02 |
+| Coverage @68/95, high-MC | 0.036 / 0.047 | 0.702 / 0.862 | N/A | 0.553 / 0.732 |
 
-- **Accuracy is worse than vanilla KalmanNet**: 798 m vs. 577 m nominal, and RKN sits
-  just above vanilla KalmanNet across every sweep regime too (`accuracy_vs_intensity.png`;
-  `results/rkn_test_rmse.csv`). Adding a second network (and the recursive `A_t` dependence on the
-  gain network's own output) did not help point-estimate accuracy here. If anything the extra
-  learned covariance pathway made training somewhat harder to stabilize, plausibly because the two
-  networks' losses interact (the NLL loss weights state error by the *learned* `P_t^{-1}`, so a
-  poorly-calibrated early `P_t` can distort the effective gradient signal on the state error itself,
-  a coupling vanilla KalmanNet's plain MSE loss doesn't have).
-- **Calibration is far better than EKF/UKF and than vanilla KalmanNet's N/A, though still
-  well short of IMM.** RKN's high-MC ANEES (23.21) is ~200,000x smaller than EKF/UKF's (4,755,205)
-  and only ~2.4x its own upper bound, versus EKF/UKF's ~480,000x. Its coverage (0.45/0.60) sits
-  closer to nominal (0.68/0.95) than EKF/UKF's near-total failure (0.027/0.037), though
-  not as tight as IMM's (0.69/0.83). This validates the premise of consistency-corrected
-  KalmanNet variants: the closed-form `A_t` + learned-Cholesky
-  `B_t` construction produces a more trustworthy covariance than a network with no
-  covariance mechanism at all, even when the underlying point estimate is worse. These are the
-  "matched-accuracy-but-uncalibrated" and "calibrated-but-not-matched-accuracy" outcomes the brief
-  asked this benchmark to be able to tell apart, in one built system.
-- **Interpretation for the deployment question**: RKN as trained
-  here is not competitive with IMM on accuracy or calibration, so it does not change sec. 4's
-  recommendation. It is a positive result for the architectural idea. Unlike vanilla
-  KalmanNet, RKN did not need a "this fundamentally can't be graded on calibration"
-  caveat; it earned a real, if imperfect, calibration number on the same metric code as every
-  classical filter.
+- **Accuracy is close to IMM, and ahead of it on the hardest maneuvers.** 1.49 m vs. 1.17 m
+  nominal, never diverging, within 1.6x of IMM in every regime (`accuracy_vs_intensity.png`;
+  `results/rkn_test_rmse.csv`). On `high_maneuver` (turn rates 20-60 deg/s against IMM's fixed
+  25 deg/s CT modes) RKN is 25% better than IMM, 1.89 m vs. 2.53 m. That is the case the brief
+  framed as KalmanNet's reason to exist: a learned gain absorbing dynamics outside a fixed model
+  bank. On the two recorded flights both sit at 1.49 m.
+- **Calibration is far better than EKF/UKF and than vanilla KalmanNet's N/A, but short of IMM
+  under nominal conditions.** RKN's high-MC ANEES (15.02) is ~1.5x its own upper bound, where IMM's
+  (9.53) is inside it and EKF/UKF's is ~90,000x over. Coverage 0.55/0.73 vs. IMM's 0.70/0.86. The
+  closed-form `A_t` + learned-Cholesky `B_t` construction produces a usable covariance on the same
+  metric code as every classical filter.
+- **Calibration does not survive a noise shift.** RKN was trained only on the nominal measurement
+  noise and learned its covariance from it, where IMM is told the true `R`. On `high_noise`
+  (4x sigma) RKN's ANEES is 86.25 with coverage 0.014/0.046, i.e. it reports a covariance far
+  tighter than its real error; IMM there is 8.79 with 0.72/0.87. On `heavy_tailed` RKN is 20.62
+  (0.35/0.58) vs. IMM's 16.56 (0.42/0.67). On `high_maneuver` the order flips: RKN 45.63
+  (0.47/0.56), IMM 91.22 (0.34/0.38), both overconfident. `results/rkn_eval.json`,
+  `results/results_table.csv`.
+- **Interpretation for the deployment question**: RKN as trained here is competitive with IMM on
+  accuracy and wins where IMM's model bank is mismatched, but it is overconfident under
+  nominal conditions and badly so under a measurement-noise shift it was not trained on. A track
+  gate fed RKN's covariance in a noisier-than-trained environment would reject good
+  measurements. Sec. 4 weighs this.
 - **Reference-default sizing (7.85M params, untrained) latency-audited but not trained**: forward
-  pass alone measures 3.37 ms/step, over budget before any weights are learned (sec. 1.6, sec. 3.1).
+  pass alone measures 2.76 ms/step, over budget before any weights are learned (sec. 1.6, sec. 3.1).
   Training it would need either a smaller architecture (as done here) or accepting it cannot run
   in this deployment's 20 ms cycle regardless of accuracy. That is why we did not spend the
   (substantially larger) compute budget training the reference-default size.
 
 ### 2.4 Robustness sweep (test-only shifted regimes; filters never trained/tuned on these)
 
-| Regime | EKF/UKF pos RMSE (m) | IMM pos RMSE (m) | KalmanNet pos RMSE (m) | RKN pos RMSE (m) | IMM frac-in-95% | Note |
-|---|---|---|---|---|---|---|
-| high_maneuver (turn rate 20-60 deg/s, higher Q) | 188.23 | 2.89 | 830.36 | 1712.80 | 0.075 | IMM's CT modes assume a fixed nominal 25 deg/s turn rate; degrades gracefully under a 2-3x wider true-rate range |
-| high_noise (4x az/el, 4x range sigma) | 179.78 | 3.88 | 676.64 | 928.63 | 0.318 | |
-| low_noise (0.3x az/el, 0.25x range sigma) | 75.85 | 0.44 | 654.10 | 882.41 | 0.321 | |
-| heavy_tailed (Student-t, dof=3, same nominal R assumed) | 154.87 | 2.06 | 689.33 | 996.87 | 0.413 | see fix note below |
+Pos RMSE in metres; a percentage is the share of runs diverged under the 200 m rule, whose RMSE
+counts only the steps before divergence (sec. 2). IMM and RKN diverge in no run of any regime.
 
-KalmanNet and RKN both stay in the same bands across every shifted regime as in the nominal case.
-RKN is consistently ~1.1-2x vanilla KalmanNet's error, worst on `high_maneuver` (1712.80 m, RKN's
-weakest regime by a clear margin; its calibration also degrades most there,
-`results/rkn_eval.json`: ANEES 88.02, coverage 0.35/0.41). Neither learned filter's failure mode
-meaningfully worsens or improves under the other sweep stressors, consistent with the
-closed-loop-instability explanation in sec. 2.2/2.3 dominating over any specific regime mismatch.
+| Regime | EKF/UKF | IMM | KalmanNet | RKN | IMM frac-in-95% | Note |
+|---|---|---|---|---|---|---|
+| high_maneuver (turn rate 20-60 deg/s, higher Q) | 71.12 (50%) | 2.53 | 79.41 (94%) | **1.89** | 0.081 | IMM's CT modes assume a fixed nominal 25 deg/s turn rate; degrades gracefully under a 2-3x wider true-rate range, but RKN beats it here |
+| high_noise (4x az/el, 4x range sigma) | 65.44 (48%) | **3.88** | 76.60 (88%) | 5.00 | 0.341 | RKN overconfident, sec. 2.3 |
+| low_noise (0.3x az/el, 0.25x range sigma) | 51.37 (14%) | **0.44** | 70.26 (74%) | 0.68 | 0.334 | |
+| heavy_tailed (Student-t, dof=3, same nominal R assumed) | 60.62 (44%) | **2.09** | 77.96 (90%) | 2.46 | 0.434 | see fix note below |
+| scenarios (2 recorded flights, nominal R) | 71.99 / 71.94 (0%) | 1.49 | 50.50 (50%) | 1.49 | 0.303 | one run per flight |
+
+Vanilla KalmanNet diverges in most runs of every regime; `high_maneuver` brings its divergence
+earliest (median step 249 vs. 408 nominal). RKN stays within 1.6x of IMM throughout and beats it
+on `high_maneuver`. Its calibration is the regime-sensitive part (sec. 2.3): fine at `low_noise`
+(ANEES 4.30, under its bound; coverage 0.88/0.94), badly overconfident at `high_noise`.
 
 **A bug caught by this sweep**: the first evaluation run produced `NaN` for IMM on the heavy-tailed
 regime. Root cause: the mode-probability update computed each mode's *raw* Gaussian likelihood via
@@ -307,12 +342,14 @@ subsequent step for that trajectory. Fixed in `filters/imm.py` by moving the mod
 update into log-space (subtracting the max log-weight before exponentiating, a standard
 log-sum-exp/softmax stabilization), so it stays numerically stable however extreme a single
 innovation is. Full test suite green after the fix; the entire evaluation
-was then re-run from scratch on the corrected code, so every number in this report comes from one
-code version, not a patched-in single row.
+was then re-run from scratch on the corrected code. In this revision every evaluation and latency
+number comes from one commit (`f74fc30`), from the IMM tuning and RKN training run at `1478abc`
+and vanilla KalmanNet trained at `4c68643`; the tuner, both trainers, the filters and the data
+generator are unchanged between those commits. Each artifact records its commit.
 
-IMM's accuracy holds across every shifted regime (sub-4 m position RMSE throughout, vs.
-75-188 m for the CV-only floor). The tuning in sec. 1.4 generalizes past the
-validation conditions it was chosen on.
+IMM's accuracy holds across every shifted regime (sub-4 m position RMSE throughout, never
+diverging, vs. 14-50% diverged runs for the CV-only floor). The tuning in sec. 1.4 generalizes past
+the validation conditions it was chosen on.
 
 ## 3. Deployment analysis (Jetson Orin, JetPack 6.2; GPU reserved for vision, CPU/DLA/PVA only)
 
@@ -325,12 +362,17 @@ median/p99 — methodology per the brief; `results/latency.json`)
 
 | Filter | Median (ms) | p99 (ms) | vs. 2 ms target |
 |---|---|---|---|
-| EKF (CV-only) | 0.023 | 0.039 | 87x headroom |
-| UKF (CV-only, 19 sigma points) | 0.098 | 0.150 | 20x headroom |
-| IMM (4 modes, mix+update+combine) | 0.235 | 0.300 | 8x headroom |
-| KalmanNet (vanilla, 3 GRUs, 526,116 params) | 0.333 | 0.439 | 6x headroom |
-| Recursive KalmanNet (trained, 2 GRUs, 301,266 params) | 0.391 | 0.461 | 5x headroom |
-| Recursive KalmanNet (**reference-default sizing**, 7,847,112 params, untrained) | **2.858** | **4.157** | **over budget at median, not just p99** |
+| EKF (CV-only) | 0.025 | 0.032 | 80x headroom |
+| UKF (CV-only, 19 sigma points) | 0.115 | 0.140 | 17x headroom |
+| IMM (4 modes, mix+update+combine) | 0.239 | 0.292 | 8x headroom |
+| KalmanNet (vanilla, 3 GRUs, 526,116 params) | 0.333 | 0.669 | 6x headroom |
+| Recursive KalmanNet (trained, 2 GRUs, 301,266 params) | 0.559 | 0.772 | 3.6x headroom |
+| Recursive KalmanNet (**reference-default sizing**, 7,847,112 params, untrained) | **2.759** | **3.831** | **over budget at median, not just p99** |
+
+Measured on an x86 dev host (not the Orin), one container pinned to a single idle core
+(`--cpuset-cpus`, load average ~2.6 on 20 cores), all six filters in one run. RKN's median is up
+from the earlier revision's 0.391 ms; its gain has since moved into the line-of-sight frame (#94),
+and this run does not isolate how much of the change that accounts for.
 
 Every filter we trained and deployed fits the <2 ms per-step target on CPU
 alone, single-threaded, with no DLA or PVA offload, including RKN once scaled to a
@@ -426,12 +468,12 @@ stated explicitly per row)
 
 | Component | Candidate | Engine | Precision | Cross-engine transfer | Per-step latency |
 |---|---|---|---|---|---|
-| Predict + update, single model | EKF | CPU | FP64 (FP32 in production) | none | **0.023 ms measured** |
-| Predict + update, sigma points | UKF | CPU | FP64 | none | **0.098 ms measured** |
-| Mixing + 4x predict/update + combination | IMM | CPU | FP64 | none | **0.235 ms measured** |
-| Gain network (3 GRUs, 526k params) | KalmanNet vanilla | CPU | FP64 (FP32 production) | none | **0.333 ms measured** (p99 0.439 ms) |
-| Gain RNN + Cholesky-factor covariance RNN (2 GRUs, 301k params, scaled down for latency) | Recursive KalmanNet, trained | CPU | FP64 (FP32 production) | none | **0.391 ms measured** (p99 0.461 ms) |
-| Same architecture, reference paper's default sizing (7.85M params, untrained) | Recursive KalmanNet, reference-default | CPU | FP64 | none | **2.858 ms measured — over the 2 ms budget at the median**, illustrating that faithful-to-paper sizing and edge-latency fitness are separate questions |
+| Predict + update, single model | EKF | CPU | FP64 (FP32 in production) | none | **0.025 ms measured** |
+| Predict + update, sigma points | UKF | CPU | FP64 | none | **0.115 ms measured** |
+| Mixing + 4x predict/update + combination | IMM | CPU | FP64 | none | **0.239 ms measured** |
+| Gain network (3 GRUs, 526k params) | KalmanNet vanilla | CPU | FP64 (FP32 production) | none | **0.333 ms measured** (p99 0.669 ms) |
+| Gain RNN + Cholesky-factor covariance RNN (2 GRUs, 301k params, scaled down for latency) | Recursive KalmanNet, trained | CPU | FP64 (FP32 production) | none | **0.559 ms measured** (p99 0.772 ms) |
+| Same architecture, reference paper's default sizing (7.85M params, untrained) | Recursive KalmanNet, reference-default | CPU | FP64 | none | **2.759 ms measured — over the 2 ms budget at the median**, illustrating that faithful-to-paper sizing and edge-latency fitness are separate questions |
 | Gain network, reconstructed feedforward (Conv/FC/Sigmoid/Tanh) | KalmanNet DLA-variant | DLA | FP16 | CPU->DLA round trip **every 20 ms cycle** | **not built; not projectable** — compute itself plausibly sub-0.1 ms at our trained sizes, but no documented per-submission dispatch/sync overhead exists to bound the total; treat as an open hardware-measurement question, not a number to plan around |
 | Any component | -- | PVA | -- | -- | **not attempted, and assessed not worth attempting** (sec. 3.3) |
 
@@ -439,7 +481,7 @@ stated explicitly per row)
 
 Recommended configuration for this problem size, given every measured CPU number for a
 practically-sized network sits well under budget: **IMM entirely on CPU, single-threaded, no
-accelerator offload.** 0.235 ms median (0.300 ms p99) against the 2 ms filter-level target
+accelerator offload.** 0.239 ms median (0.292 ms p99) against the 2 ms filter-level target
 and the 20 ms full-cycle budget leaves 8x and ~65x headroom respectively, before accounting for
 the filter being only one consumer of that 20 ms cycle. DLA is not needed at any of the
 network sizes we deployed and carries a currently unquantifiable dispatch-latency risk that
@@ -451,69 +493,75 @@ crosses into DLA territory on latency grounds alone.
 ## 4. Verdict
 
 For this Jetson-Orin gimbal tracker (CPU/DLA/PVA only, GPU unavailable, 20 ms cycle), the
-classical, well-tuned IMM is the clear choice over every learned filter built here, on every axis
-this benchmark measured:
+classical, well-tuned IMM is still the choice, but no longer on every axis. RKN is now close on
+accuracy and ahead of IMM under hard maneuvers; vanilla KalmanNet is not in contention.
 
 | | IMM | KalmanNet (vanilla) | RKN |
 |---|---|---|---|
-| Position RMSE, nominal (m) | **1.17** | 576.75 | 798.13 |
-| Calibration (high-MC ANEES vs. bounds 8.19-9.85) | 11.06 (essentially inside) | N/A (no covariance) | 23.21 (~2.4x over, but real) |
-| Coverage @68/95 | 0.691 / 0.829 | N/A | 0.453 / 0.603 |
-| Measured CPU latency (median) | 0.235 ms | 0.333 ms | 0.391 ms (301k params) / 2.858 ms (reference-default 7.85M params) |
+| Diverged runs, nominal | 0% | 86.3% (median step 408) | 0% |
+| Position RMSE, nominal (m) | **1.17** | 74.57 (pre-divergence) | 1.49 |
+| Position RMSE, high_maneuver (m) | 2.53 | 79.41 (pre-divergence, 94% diverged) | **1.89** |
+| Calibration (high-MC ANEES vs. bounds 8.19-9.85) | **9.53 (inside)** | N/A (no covariance) | 15.02 (~1.5x over) |
+| Coverage @68/95 | 0.702 / 0.862 | N/A | 0.553 / 0.732 |
+| ANEES, high_noise (bounds 5.67-13.08) | 8.79 | N/A | 86.25 |
+| Measured CPU latency (median) | 0.239 ms | 0.333 ms | 0.559 ms (301k params) / 2.759 ms (reference-default 7.85M params) |
 | Params | 0 | 526,116 | 301,266 |
 
-- **Accuracy**: IMM beats vanilla KalmanNet by ~490x and RKN by ~680x on position RMSE, and beats
-  the naive CV-only floor (112.59 m) by ~96x. RKN is worse
-  than vanilla KalmanNet on this axis (sec. 2.3); the covariance-learning
-  machinery did not buy back accuracy here.
-- **Calibration**: IMM lands inside (nominal test set) or within a hair of (high-MC subset) its own
-  claimed 95% ANEES interval, a usable, gateable uncertainty estimate. Vanilla KalmanNet
-  produces no uncertainty estimate at all (structural, `m=9 > n=3`). RKN is the one place a
-  learned filter earned a real, non-N/A calibration number: ~200,000x closer to its own bound
-  than EKF/UKF, coverage closer to nominal than EKF/UKF though still short of IMM. This
-  is the clearest positive evidence in this benchmark for the KalmanNet family's consistency-
-  correction research direction, though it doesn't change the deployment recommendation.
-- **Deployment cost**: IMM runs in 0.235 ms median on a single CPU core, no accelerator required,
+- **Accuracy**: IMM beats RKN by 1.27x nominal and by 1.2-1.6x on the noise regimes, and they tie
+  on the recorded flights; RKN beats IMM by 25% on `high_maneuver`, where true turn rates run 20-60 deg/s past IMM's fixed
+  25 deg/s CT modes. Vanilla KalmanNet diverges in 86% of nominal runs. IMM never diverges; the
+  CV-only floor does in 29.5% of nominal runs.
+- **Calibration**: IMM lands inside its own high-MC 95% ANEES interval, a usable, gateable
+  uncertainty estimate, and stays consistent when the measurement noise is 4x nominal because it
+  is told `R`. Vanilla KalmanNet produces no uncertainty estimate at all (structural, `m=9 > n=3`).
+  RKN produces a real covariance, ~1.5x overconfident nominally, but it learned that covariance
+  from nominal-noise training data and does not adapt: at `high_noise` its ANEES is 86 and its
+  95% coverage 5%. For a track gate that is the disqualifying failure: a noisier-than-trained
+  sensor would make RKN reject good measurements. It is better calibrated than IMM on
+  `high_maneuver` (45.6 vs. 91.2), where both are overconfident.
+- **Deployment cost**: IMM runs in 0.239 ms median on a single CPU core, no accelerator required,
   8x under the 2 ms target. Both learned filters, at the sizes we trained, also fit
-  (0.333 ms, 0.391 ms), so deployment latency is not what rules them out. What rules
-  them out is that neither trained filter is competitive on accuracy. RKN's reference-default
+  (0.333 ms, 0.559 ms), so deployment latency is not what rules them out. RKN's reference-default
   paper sizing also shows that a faithfully-large version of this architecture
   family can blow the latency budget on CPU alone, before DLA/PVA are considered.
 - **Engineering cost**: the classical filters (EKF/UKF/IMM) total well under 500 lines and were
-  validated (38 unit tests, all passing, including five independent angle-wrap-boundary
+  validated (unit tests including five independent angle-wrap-boundary
   tests across every filter's code path and a from-first-principles verification of the Van Loan
   discretization against a textbook closed form) in a fraction of the effort spent getting either
   learned filter to train at all.
 
-This is a negative result for the learned filters, reported as one per the brief's
-instruction, with one positive finding inside it (RKN's calibration).
-It does not mean KalmanNet-family methods are never worth it. It means: (a) our from-scratch
-training of both vanilla KalmanNet and RKN did not converge to a filter competitive with a
-well-tuned IMM on accuracy, within a realistic time budget, for this
-maneuvering-target/az-el-range problem, which echoes the original paper's own documented
-BPTT-stability struggles ([#14](source-notes.md) sec. 1b); and (b) RKN's closed-form-`A_t`-plus-learned-Cholesky
-construction does what it claims on the calibration axis, just not (in our hands,
-at our compute budget) on accuracy.
+The earlier revision of this report called this a clean negative result for the learned filters.
+Since then: the IMM tuner extends edge-hit axes and searches `sigma_a^CT` (#52); RKN's covariance
+features are normalised per group (#86) and its gain lives in the line-of-sight frame (#94);
+RKN's NEES is whitened through `S` like the classical filters' (#98); vanilla KalmanNet was
+retrained on `train_knet.py`'s current defaults; and the divergence rule (#111) changed what a
+diverging filter's RMSE counts. This rerun does not isolate which change moved RKN from 798 m to
+1.49 m. The result is now a split one. Vanilla KalmanNet's from-scratch training still does not
+produce a stable filter, which echoes the original paper's own documented BPTT-stability struggles
+([#14](source-notes.md) sec. 1b). RKN trains to a stable filter within 1.6x of IMM everywhere and
+better than it on the regime IMM's model bank was not built for; its weakness is a covariance that
+does not follow a change in sensor noise.
 
 **Conditions under which the verdict could flip, and what would need to change:**
 
-1. **More training compute/data, or a different training curriculum, for RKN specifically.** Its
-   calibration result suggests the architecture is directionally sound; matching IMM's accuracy
-   would need solving the same closed-loop training-instability problem documented for vanilla
-   KalmanNet (sec. 2.2), now compounded by a second network whose loss couples into the first's
-   effective gradient (sec. 2.3).
+1. **RKN calibration that survives a noise shift.** Accuracy is no longer the obstacle. Training
+   across a range of measurement-noise levels, or feeding the known `R` into the covariance
+   network, would need to bring RKN's `high_noise` ANEES inside its bounds without giving back the
+   `high_maneuver` accuracy. If it did, RKN would trade ~0.3 m of nominal accuracy and ~0.3 ms
+   of CPU for better behavior under unmodeled maneuvers.
 2. **A motion-model family IMM cannot easily be extended to** (e.g. unknown, highly
    nonlinear maneuver classes with no small library of candidate models). IMM's mode bank is a
    limitation when a hand-designed model library doesn't cover the target's true behavior.
-   Nothing in our robustness sweep (turn-rate range 3x wider than nominal, 4x measurement noise,
-   heavy-tailed noise) stressed this enough to matter, but a sufficiently exotic maneuver profile
-   could.
+   The `high_maneuver` sweep (turn rates up to 2.4x the CT modes' nominal) is already enough for
+   RKN to pass IMM on accuracy; a target whose real maneuver envelope looks like that regime
+   rather than the nominal one is where this condition starts to bind.
 3. **A much larger gain network** where DLA's per-invocation dispatch overhead becomes negligible
    relative to compute. Not the case at the sizes (301k-526k params) that fit our CPU budget
    today, but the reference paper's own *default* RKN size (7.85M params) is already in the
    range where this tradeoff starts to matter.
 
-None of these conditions held in this benchmark as built. **Recommendation: ship the tuned IMM.**
+Condition 2 holds in part, on one regime, and condition 1 does not hold yet.
+**Recommendation: ship the tuned IMM;** RKN is the candidate worth the next round of work.
 
 ## 5. What was not completed, and why (priority-order accounting)
 
