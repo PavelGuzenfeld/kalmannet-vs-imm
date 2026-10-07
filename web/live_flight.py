@@ -89,7 +89,8 @@ def _readout(truth, err, nees=None, nis=None, *, snapshot):
 
 class LiveFlight:
     """scripts/replay.py's flight advanced one control row at a time: same seed draws, filters on nominal R.
-    A learned filter runs when weights_root holds its LEARNED_WEIGHTS .npz."""
+    A learned filter runs when weights_root holds its LEARNED_WEIGHTS .npz.
+    A start_spec draws on its own rng: replay of the exported explicit start draws none before the noise."""
 
     def __init__(self, setup, imm_best, weights_root):
         self.setup = {key: setup[key] for key in SETUP_KEYS if key in setup}
@@ -97,7 +98,11 @@ class LiveFlight:
         self.controls = []
         self._regime = REGIMES[setup["noise_regime"]]
         self._rng = np.random.default_rng(setup["seed"])
-        start = scenario_start(setup, self._rng, self._regime)
+        start_spec = setup.get("start_spec")
+        start_rng = np.random.default_rng(setup["seed"]) if start_spec else self._rng
+        start = scenario_start(setup, start_rng, self._regime)
+        if start_spec:
+            self.setup["start"] = {name: np.asarray(value).tolist() for name, value in start.items()}
         self._start_envelope = self._envelope = envelope = Envelope(**setup["envelope"])
         self._envelope_changes = {}
         self._scripted_envelopes = dict(setup.get("envelope_changes", []))
