@@ -5,7 +5,7 @@ from dataclasses import asdict
 import numpy as np
 
 from data.config import NOMINAL, REGIMES
-from data.fixed_wing import DEFAULT_PRESET, PRESETS, Envelope, fly_steps, full_control_row
+from data.fixed_wing import DEFAULT_PRESET, NEUTRAL_ROW, PRESETS, Envelope, fly_steps, full_control_row
 from data.trajectory_gen import measure, scenario_start
 from filters.ekf import EKF
 from filters.flags import (
@@ -26,6 +26,7 @@ from filters.state import POS, VEL
 from filters.ukf import UKF
 from scripts.eval import ekf_like_steps, imm_steps, knet_steps, rkn_steps
 from web.holds import Holds
+from web.manoeuvres import MANOEUVRES, manoeuvre_rows
 
 NOISE_REGIMES = ["nominal", "high_noise", "low_noise", "heavy_tailed"]
 FILTER_NAMES = ("EKF", "UKF", "IMM", "KalmanNet", "RKN")
@@ -39,6 +40,7 @@ def page_options():
     return {
         "presets": {name: asdict(envelope) for name, envelope in PRESETS.items()},
         "default_preset": DEFAULT_PRESET,
+        "manoeuvres": list(MANOEUVRES),
         "noise_regimes": NOISE_REGIMES,
         "default_thresholds": DEFAULT_THRESHOLDS,
         "nees_lower": NEES_LOWER_025_DOF9,
@@ -95,7 +97,9 @@ class LiveFlight:
         self._regime = REGIMES[setup["noise_regime"]]
         self._rng = np.random.default_rng(setup["seed"])
         start = scenario_start(setup, self._rng, self._regime)
-        envelope = Envelope(**setup["envelope"])
+        self._envelope = envelope = Envelope(**setup["envelope"])
+        self._manoeuvre_rows = None
+        self.manoeuvre = None
         position, velocity, latest_control = (
             start["position"],
             start["velocity"],
@@ -131,10 +135,24 @@ class LiveFlight:
         return state[POS], state[VEL]
 
     def toggle_hold(self, name):
+        self.cancel_manoeuvre()
         self.holds.toggle(name, *self._current_state())
+
+    def start_manoeuvre(self, name):
+        self.holds.disengage_axes(range(len(NEUTRAL_ROW)))
+        entry_velocity = self._current_state()[1]
+        self._manoeuvre_rows = manoeuvre_rows(
+            name, self._envelope, self._regime.dt, entry_velocity, lambda: self._truth[VEL]
+        )
+        self.manoeuvre = name
+
+    def cancel_manoeuvre(self):
+        self.manoeuvre = self._manoeuvre_rows = None
 
     def advance(self, control, manual_axes=()):
         self.holds.disengage_axes(manual_axes)
+        if self.manoeuvre:
+            control = next(self._manoeuvre_rows, None) or self._finish_manoeuvre(control)
         self.controls.append(self.holds.steer(full_control_row(control), *self._current_state()))
         self._truth, self._lift_direction = next(self._flight)
         self._z = measure(self._rng, self._truth[None], self._regime)[0]
@@ -142,6 +160,10 @@ class LiveFlight:
             scored = next(steps, None)
             if scored is not None:
                 self._scores[name].append(scored)
+
+    def _finish_manoeuvre(self, control):
+        self.cancel_manoeuvre()
+        return control
 
     def trips(self):
         return {name: self._trips(*zip(*scores)) for name, scores in self._scores.items()}
@@ -164,6 +186,7 @@ class LiveFlight:
         readouts = self.readouts()
         return {
             "step": len(self.controls),
+            "manoeuvre": self.manoeuvre,
             "truth_m": self._truth[POS].tolist(),
             "truth_velocity_m_s": self._truth[VEL].tolist(),
             "truth_lift_direction": self._lift_direction.tolist(),

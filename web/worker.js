@@ -23,6 +23,7 @@ const PYTHON_SOURCES = [
   "scripts/eval.py",
   "web/holds.py",
   "web/live_flight.py",
+  "web/manoeuvres.py",
 ];
 
 async function fetched(path) {
@@ -77,6 +78,11 @@ const handlers = {
     for (const control of controls) flight.advance(control, manualAxes);
     const stepCostMs = (performance.now() - begin) / controls.length;
     return fromWorker.frame(toJs(flight.frame()), stepCostMs);
+  },
+  async manoeuvre({ name }) {
+    if (name) flight.start_manoeuvre(name);
+    else flight.cancel_manoeuvre();
+    return null;
   },
   async setThresholds({ thresholds }) {
     const { pyodide } = await python;

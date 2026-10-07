@@ -17,6 +17,7 @@ WORKER_FETCHED_SOURCES = [
     "scripts/eval.py",
     "web/holds.py",
     "web/live_flight.py",
+    "web/manoeuvres.py",
     "web/index.html",
     "data/scenarios/overhead_pass.json",
 ]

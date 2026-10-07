@@ -414,6 +414,47 @@ def test_a_raw_error_threshold_far_under_the_peak_errors_diverges_no_filter(tmp_
     }
 
 
+MANOEUVRE_CRUISE_CONTROL = [0.0, 1.0, 0.6, 0.0, 0.0, 0.0]
+MANOEUVRE_START = {"position": [0.0, 0.0, 3000.0], "velocity": [150.0, 0.0, 0.0]}
+
+
+def manoeuvre_flight(tmp_path):
+    setup = {
+        "seed": SEED_SCENARIO_SEED,
+        "envelope": asdict(PRESETS[DEFAULT_PRESET]),
+        "noise_regime": "nominal",
+        "thresholds": DEFAULT_THRESHOLDS,
+        "start": MANOEUVRE_START,
+    }
+    return LiveFlight(setup, json.loads(PAGE_IMM_TUNING.read_text())["best"], tmp_path)
+
+
+def test_manoeuvre_runs_to_its_end_ignoring_the_pilot_rows_then_the_pilot_resumes(tmp_path):
+    flight = manoeuvre_flight(tmp_path)
+    flight.start_manoeuvre("split-S")
+    assert flight.manoeuvre == "split-S"
+    while flight.manoeuvre:
+        flight.advance(MANOEUVRE_CRUISE_CONTROL)
+    assert len(flight.controls) > 200
+    assert flight.controls[-1] == MANOEUVRE_CRUISE_CONTROL
+    assert MANOEUVRE_CRUISE_CONTROL not in flight.controls[:-1]
+    assert flight.frame()["manoeuvre"] is None
+    assert flight.frame()["truth_m"][2] < MANOEUVRE_START["position"][2] - 300.0
+
+
+def test_cancelled_manoeuvre_hands_the_very_next_step_back_to_the_pilot_row(tmp_path):
+    flight = manoeuvre_flight(tmp_path)
+    flight.start_manoeuvre("jink")
+    for _ in range(10):
+        flight.advance(MANOEUVRE_CRUISE_CONTROL)
+    assert flight.frame()["manoeuvre"] == "jink"
+    flight.cancel_manoeuvre()
+    flight.advance(MANOEUVRE_CRUISE_CONTROL)
+    assert flight.controls[-1] == MANOEUVRE_CRUISE_CONTROL
+    assert flight.frame()["manoeuvre"] is None
+    assert flight.controls[0][3] == PRESETS[DEFAULT_PRESET].max_side_load_factor
+
+
 SCRIPTED_DIVERGES_AT_STEP = 3
 SCRIPTED_PAGE_STEPS = 10
 
@@ -454,3 +495,19 @@ def test_page_does_not_trip_a_flag_that_would_only_trip_after_the_divergence_ste
     flight, _ = scripted_page_flight(monkeypatch, tmp_path)
 
     assert {name: found["track_loss"] for name, found in flight.trips().items()} == {"EKF": None, "UKF": None, "IMM": None}
+
+
+def test_starting_a_manoeuvre_drops_every_engaged_hold(tmp_path):
+    flight = manoeuvre_flight(tmp_path)
+    for name in ("heading", "altitude", "speed", "bank"):
+        flight.toggle_hold(name)
+    flight.start_manoeuvre("jink")
+    assert flight.holds.targets == {}
+
+
+def test_engaging_a_hold_cancels_the_running_manoeuvre(tmp_path):
+    flight = manoeuvre_flight(tmp_path)
+    flight.start_manoeuvre("jink")
+    flight.toggle_hold("heading")
+    assert flight.manoeuvre is None
+    assert "heading" in flight.holds.targets

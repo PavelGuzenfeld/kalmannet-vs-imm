@@ -281,3 +281,45 @@ check = "no-citation"
 file = "tests/test_plot_data.py"
 test = "test_plot_runner_pulls_a_diverged_filter_through_its_divergence_step_and_no_further"
 reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."
+
+[[waiver]]
+file = "web/manoeuvres.py"
+line = 55
+column = 14
+old = """self.turned_rad < target_rad"""
+new = """self.turned_rad <= target_rad"""
+reason = """turned_rad is a running sum of float arctan2 angles, so it never lands exactly on the target
+radian value; rebuilt with the mutant, all six manoeuvres fly bit-identical states and rows."""
+
+[[waiver]]
+file = "web/manoeuvres.py"
+line = 59
+column = 14
+old = """self._velocity[2] < 0.0"""
+new = """self._velocity[2] <= 0.0"""
+reason = """A flown vertical velocity is never exactly 0.0 at the level-off check; rebuilt with the mutant,
+all six manoeuvres fly bit-identical states and rows."""
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_manoeuvre_runs_to_its_end_ignoring_the_pilot_rows_then_the_pilot_resumes"
+reason = "The named manoeuvres are specified by decisions 14-16 in #106, which carry no MS-n line in the model spec; the author decides whether they join it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_cancelled_manoeuvre_hands_the_very_next_step_back_to_the_pilot_row"
+reason = "The named manoeuvres are specified by decisions 14-16 in #106, which carry no MS-n line in the model spec; the author decides whether they join it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_starting_a_manoeuvre_drops_every_engaged_hold"
+reason = "Holds and named manoeuvres are specified by decisions 11-16 in #106, which carry no MS-n line in the model spec; the author decides whether they join it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_engaging_a_hold_cancels_the_running_manoeuvre"
+reason = "Holds and named manoeuvres are specified by decisions 11-16 in #106, which carry no MS-n line in the model spec; the author decides whether they join it."
