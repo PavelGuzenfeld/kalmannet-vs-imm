@@ -82,6 +82,8 @@ def test_replay_of_a_held_flight_reproduces_it_bit_for_bit(tmp_path):
     for hold in (HEADING, ALTITUDE, SPEED):
         live.toggle_hold(hold)
     frames += fly(live, CRUISE, 300)
+    live.toggle_hold(BANK)
+    frames += fly(live, CRUISE, 100)
 
     states, _ = fly_scenario(json.loads(live.scenario_json()))
 
@@ -102,9 +104,10 @@ def test_manual_pull_disengages_altitude_hold_and_flies_the_pull(tmp_path):
     assert live.controls[-1][LOAD_FACTOR] == 3.0
 
 
-def test_manual_roll_disengages_heading_hold_only(tmp_path):
+@pytest.mark.parametrize("roll_hold", [HEADING, BANK])
+def test_manual_roll_disengages_the_roll_hold_only(roll_hold, tmp_path):
     live = flight("benchmark", tmp_path)
-    for hold in (HEADING, ALTITUDE, SPEED):
+    for hold in (roll_hold, ALTITUDE, SPEED):
         live.toggle_hold(hold)
 
     fly(live, [0.5, 1.0, 0.6], 1, manual_axes=[ROLL_RATE])
@@ -212,13 +215,16 @@ def test_speed_hold_through_a_two_g_turn_recovers_the_engaged_speed(preset, tmp_
 
 
 @pytest.mark.parametrize("preset", PRESETS)
-def test_bank_hold_engaged_mid_roll_stops_the_roll_on_the_next_step(preset, tmp_path):
+def test_bank_hold_engaged_mid_roll_overrides_the_residual_roll_and_stops_on_the_next_step(
+    preset, tmp_path
+):
     envelope = PRESETS[preset]
+    rolling = [envelope.max_roll_rate_rad_s, 1.0, 0.6]
     live = flight(preset, tmp_path)
-    fly(live, [envelope.max_roll_rate_rad_s, 1.0, 0.6], round(ROLL_IN_S / NOMINAL.dt))
+    fly(live, rolling, round(ROLL_IN_S / NOMINAL.dt))
 
     live.toggle_hold(BANK)
-    held = fly(live, CRUISE, round(CHECK_WINDOW_S / NOMINAL.dt))
+    held = fly(live, rolling, round(CHECK_WINDOW_S / NOMINAL.dt))
 
     assert {row[ROLL_RATE] for row in live.controls[-len(held) :]} == {0.0}
 
