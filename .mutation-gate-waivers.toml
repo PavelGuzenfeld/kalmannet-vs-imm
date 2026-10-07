@@ -197,3 +197,27 @@ old = "-1"
 new = "1"
 reason = """`np.sum(err[..., POS or VEL] ** 2, axis=-1)` on the counted steps, a 2-D [n,3] array after the
 boolean mask: axis=-1 and axis=1 are the same axis, so this mutant is equivalent and no test can tell them apart."""
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_plot_data.py"
+test = "test_trajectory_overlay_draws_no_filter_estimate_from_its_divergence_step_on"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_plot_data.py"
+test = "test_rmse_vs_time_averages_only_the_flights_still_running_and_ends_at_the_cut"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_plot_data.py"
+test = "test_anees_vs_time_ends_at_the_cut"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_plot_data.py"
+test = "test_animation_records_each_filter_through_its_divergence_step_and_no_further"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."

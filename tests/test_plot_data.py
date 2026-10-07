@@ -618,3 +618,199 @@ def test_latency_bench_builds_its_imm_from_all_six_tuned_values(monkeypatch, tmp
         "omega_ct": math.radians(20.0), "p_stay": 0.98, "ca_sigma_a": 1.5, "ca_tau": 3.0,
         "cv_sigma_a": 0.01, "ct_sigma_a": 0.7,
     }]
+
+
+RUNAWAY_DRIFT_M = 150.0
+RUNAWAY_STEPS = 5
+RUNAWAY_DIVERGENCE_STEP = 2
+RUNAWAY_IMM_KWARGS = {
+    "omega_ct_deg": 12.0, "p_stay": 0.9, "ca_sigma_a": 2.0, "ca_tau": 3.0, "cv_sigma_a": 0.1, "ct_sigma_a": 0.5,
+}
+RUNAWAY_POSITION_ERRORS_BEFORE_CUT = [np.sqrt(5.0), np.sqrt(152.0**2 + 1.0)]
+
+
+class _RunawayEKF:
+    def __init__(self, dt, R):
+        pass
+
+    def update(self, x, P, z):
+        return x, np.eye(9), np.zeros(3), np.eye(3)
+
+    def step(self, x, P, z):
+        return x + RUNAWAY_DRIFT_M * np.eye(9)[0], np.eye(9), np.zeros(3), np.eye(3)
+
+
+def _runaway_ukf_class():
+    from filters.ukf import UKF
+
+    class _RunawayUKF(UKF):
+        def __init__(self, dt, R):
+            pass
+
+        def _sigma_points(self, x, P):
+            return None
+
+        def update(self, x, P, pts, z):
+            return x, np.eye(9), np.zeros(3), np.eye(3)
+
+        def step(self, x, P, z):
+            return x + RUNAWAY_DRIFT_M * np.eye(9)[0], np.eye(9), np.zeros(3), np.eye(3)
+
+    return _RunawayUKF
+
+
+class _RunawayIMM:
+    def __init__(self, dt, R, **kwargs):
+        pass
+
+    def init_state(self, x, P):
+        return {"x": x, "P": P, "mu": np.full(4, 0.25), "steps": 0}
+
+    def step(self, state, z):
+        x = state["x"] + (RUNAWAY_DRIFT_M if state["steps"] else 0.0) * np.eye(9)[0]
+        return x, np.eye(9), {**state, "x": x, "steps": state["steps"] + 1}, np.zeros(3), np.eye(3)
+
+
+def _patch_runaway_classical_filters(make_module):
+    return (
+        patch.object(make_module, "EKF", _RunawayEKF),
+        patch.object(make_module, "UKF", _runaway_ukf_class()),
+        patch.object(make_module, "IMM", _RunawayIMM),
+    )
+
+
+def _runaway_flight():
+    states = np.zeros((2, RUNAWAY_STEPS, 9))
+    measurements = np.zeros((2, 1, RUNAWAY_STEPS, 3))
+    return states, measurements
+
+
+def _capture_axes(make_module):
+    captured = {}
+    real_subplots = make_module.plt.subplots
+
+    def _subplots(*a, **kw):
+        fig, ax = real_subplots(*a, **kw)
+        captured["ax"] = ax
+        return fig, ax
+
+    return captured, patch.object(make_module.plt, "subplots", side_effect=_subplots)
+
+
+def _run_with_runaway_filters(make_module, tmp_path, draw):
+    ekf, ukf, imm = _patch_runaway_classical_filters(make_module)
+    captured, subplots = _capture_axes(make_module)
+    tuning = tmp_path / "imm_tuning.json"
+    tuning.write_text(json.dumps({"best": RUNAWAY_IMM_KWARGS}))
+    with ekf, ukf, imm, subplots:
+        draw(str(tuning))
+    return {line.get_label(): line.get_ydata() for line in captured["ax"].lines}
+
+
+def test_trajectory_overlay_draws_no_filter_estimate_from_its_divergence_step_on(tmp_path):
+    from scripts import make_plots
+
+    dt, R = 0.1, np.eye(3)
+    states, measurements = _runaway_flight()
+
+    drawn = _run_with_runaway_filters(
+        make_plots,
+        tmp_path,
+        lambda tuning: make_plots.plot_trajectory_overlay(
+            tmp_path, dt, R, states, measurements, imm_tuning_json_path=tuning
+        ),
+    )
+
+    for label in ["EKF (CV-only)", "UKF (CV-only)", "IMM (tuned)"]:
+        assert np.isfinite(drawn[label][:RUNAWAY_DIVERGENCE_STEP]).all()
+        assert np.isnan(drawn[label][RUNAWAY_DIVERGENCE_STEP:]).all()
+    assert np.isfinite(drawn["ground truth"]).all()
+
+
+def test_rmse_vs_time_averages_only_the_flights_still_running_and_ends_at_the_cut(tmp_path):
+    from scripts import make_plots
+
+    dt, R = 0.1, np.eye(3)
+    states, measurements = _runaway_flight()
+
+    drawn = _run_with_runaway_filters(
+        make_plots,
+        tmp_path,
+        lambda tuning: make_plots.plot_rmse_vs_time(
+            tmp_path, dt, R, states, measurements, n_traj=2, imm_tuning_json_path=tuning
+        ),
+    )
+
+    for label in ["EKF", "UKF"]:
+        assert list(drawn[label][:RUNAWAY_DIVERGENCE_STEP]) == RUNAWAY_POSITION_ERRORS_BEFORE_CUT
+        assert np.isnan(drawn[label][RUNAWAY_DIVERGENCE_STEP:]).all()
+
+
+def test_anees_vs_time_ends_at_the_cut(tmp_path, monkeypatch):
+    from scripts import make_plots
+
+    dt, R = 0.1, np.eye(3)
+    states, measurements = _runaway_flight()
+    (tmp_path / "results").mkdir()
+    (tmp_path / "results" / "imm_tuning.json").write_text(json.dumps({"best": RUNAWAY_IMM_KWARGS}))
+    monkeypatch.chdir(tmp_path)
+    ekf, ukf, imm = _patch_runaway_classical_filters(make_plots)
+    captured, subplots = _capture_axes(make_plots)
+
+    with ekf, imm, subplots:
+        make_plots.plot_nees_with_bounds(tmp_path, dt, R, states, measurements)
+
+    anees = {line.get_label(): line.get_ydata() for line in captured["ax"].lines}
+    for label in ["EKF ANEES(t)", "IMM ANEES(t)"]:
+        assert list(anees[label][:RUNAWAY_DIVERGENCE_STEP]) == [5.0, 152.0**2 + 1.0]
+        assert np.isnan(anees[label][RUNAWAY_DIVERGENCE_STEP:]).all()
+
+
+def test_animation_records_each_filter_through_its_divergence_step_and_no_further(tmp_path, monkeypatch):
+    import torch
+
+    from filters.knet.gain_network import KalmanGainGRU
+    from filters.knet.rkn_network import RKNGainCovNetwork
+    from scripts import make_animation
+
+    class _RunawayKalmanNet:
+        def __init__(self, net, dt):
+            self.steps = 0
+
+        def init_sequence(self, x0, Q, Sigma, S):
+            pass
+
+        def step(self, z):
+            x = torch.zeros(1, 9, dtype=torch.float64)
+            x[0, 0] = RUNAWAY_DRIFT_M * self.steps
+            self.steps += 1
+            return x
+
+    class _RunawayRKN(_RunawayKalmanNet):
+        def init_sequence(self, x0, P0):
+            pass
+
+        def step(self, z):
+            return super().step(z), torch.eye(9, dtype=torch.float64).unsqueeze(0)
+
+    knet_ckpt, rkn_ckpt = tmp_path / "knet.pt", tmp_path / "rkn.pt"
+    torch.save(KalmanGainGRU().double().state_dict(), knet_ckpt)
+    torch.save(RKNGainCovNetwork(fc1_mult=1, hidden_mult=1, fc2_mult=1).double().state_dict(), rkn_ckpt)
+    (tmp_path / "results").mkdir()
+    (tmp_path / "results" / "imm_tuning.json").write_text(json.dumps({"best": RUNAWAY_IMM_KWARGS}))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(make_animation, "EKF", _RunawayEKF)
+    monkeypatch.setattr(make_animation, "UKF", _runaway_ukf_class())
+    monkeypatch.setattr(make_animation, "IMM", _RunawayIMM)
+    monkeypatch.setattr(make_animation, "KalmanNetFilter", _RunawayKalmanNet)
+    monkeypatch.setattr(make_animation, "RKNFilter", _RunawayRKN)
+
+    est, err, nees, mus = make_animation.run_all_filters(
+        np.zeros((RUNAWAY_STEPS, 9)), np.zeros((RUNAWAY_STEPS, 3)), 0.1, np.eye(3), knet_ckpt, rkn_ckpt, (1, 1, 1)
+    )
+
+    pulled = RUNAWAY_DIVERGENCE_STEP + 1
+    for name in make_animation.FILTERS:
+        assert np.isfinite(err[name][:pulled]).all() and err[name][RUNAWAY_DIVERGENCE_STEP] > 200.0
+        assert np.isnan(err[name][pulled:]).all()
+        assert np.isnan(est[name][pulled:]).all()
