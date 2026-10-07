@@ -16,6 +16,7 @@ const MAX_STEPS_PER_MESSAGE = 10;
 const PUSH_LOAD_FACTOR = -1;
 const CRUISE_THROTTLE = 0.6;
 const THROTTLE_RATE_PER_S = 0.5;
+const KEY_RAMP_PER_S = 0.5;
 const STICK_DEADZONE = 0.08;
 const STANDARD_LEFT_TRIGGER = 6;
 const STANDARD_RIGHT_TRIGGER = 7;
@@ -43,6 +44,8 @@ let awaitingWorker = true;
 let lastTick = performance.now();
 let throttle = CRUISE_THROTTLE;
 let latestControl = [0, 1, CRUISE_THROTTLE];
+const keyAxes = { roll: 0, pull: 0 };
+let steering = { roll: 0, pull: 0 };
 let trails = {};
 let stepCosts = [];
 let history = [];
@@ -117,24 +120,40 @@ async function startFromUrlOrUi() {
   startFlight(scenario.controls, scenario.start);
 }
 
-function stickInput() {
+const rampToward = (value, target, elapsedS) => value + clamp(target - value, -KEY_RAMP_PER_S * elapsedS, KEY_RAMP_PER_S * elapsedS);
+
+function stickInput(elapsedS) {
   const pad = [...(navigator.getGamepads?.() ?? [])].find((candidate) => candidate?.mapping === "standard");
   const axis = (index) => (pad && Math.abs(pad.axes[index]) > STICK_DEADZONE ? pad.axes[index] : 0);
   const trigger = (index) => pad?.buttons[index]?.value ?? 0;
   const key = (code) => (heldKeys.has(code) ? 1 : 0);
+  keyAxes.roll = rampToward(keyAxes.roll, key("ArrowRight") - key("ArrowLeft"), elapsedS);
+  keyAxes.pull = rampToward(keyAxes.pull, key("ArrowDown") - key("ArrowUp"), elapsedS);
   return {
-    roll: clamp(axis(0) + key("ArrowRight") - key("ArrowLeft"), -1, 1),
-    pull: clamp(axis(1) + key("ArrowDown") - key("ArrowUp"), -1, 1),
+    roll: clamp(axis(0) + keyAxes.roll, -1, 1),
+    pull: clamp(axis(1) + keyAxes.pull, -1, 1),
     throttleRate: trigger(STANDARD_RIGHT_TRIGGER) - trigger(STANDARD_LEFT_TRIGGER) + key("KeyW") - key("KeyS"),
   };
 }
 
 function readControl(elapsedS) {
-  const stick = stickInput();
+  const stick = stickInput(elapsedS);
+  steering = stick;
   const { max_roll_rate_rad_s, max_load_factor } = flightSetup.envelope;
   throttle = clamp(throttle + stick.throttleRate * THROTTLE_RATE_PER_S * elapsedS, 0, 1);
   const loadFactor = stick.pull >= 0 ? 1 + stick.pull * (max_load_factor - 1) : 1 + stick.pull * (1 - PUSH_LOAD_FACTOR);
   return [stick.roll * max_roll_rate_rad_s, loadFactor, throttle];
+}
+
+function renderSteeringHud() {
+  for (const code of STEERING_KEYS) byId("steering-hud").querySelector(`[data-hud-key="${code}"]`).dataset.held = String(heldKeys.has(code));
+  const percents = { roll: steering.roll * 100, pull: steering.pull * 100, throttle: throttle * 100 };
+  for (const [axis, percent] of Object.entries(percents)) {
+    const row = byId("steering-hud").querySelector(`[data-hud-axis="${axis}"]`);
+    row.dataset.percent = percent.toFixed(1);
+    row.querySelector("meter").value = percent;
+    row.querySelector("output").textContent = `${percent.toFixed(0)}%`;
+  }
 }
 
 function advance(steps) {
@@ -153,6 +172,7 @@ function tick(now) {
   lastTick = now;
   if (flightSetup) {
     latestControl = readControl(elapsedS);
+    renderSteeringHud();
     const [rollRate, loadFactor, throttleNow] = latestControl;
     byId("controls").textContent =
       `roll rate ${((rollRate * 180) / Math.PI).toFixed(0)} °/s, load factor ${loadFactor.toFixed(2)} g, throttle ${throttleNow.toFixed(2)}`;
