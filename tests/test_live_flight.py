@@ -508,3 +508,140 @@ def test_engaging_a_hold_cancels_the_running_manoeuvre(tmp_path):
     flight.toggle_hold("heading")
     assert flight.manoeuvre is None
     assert "heading" in flight.holds.targets
+
+
+BENCHMARK = PRESETS[DEFAULT_PRESET]
+LOWERED_MAX_LOAD_FACTOR = 3.0
+ROW_LOAD_FACTOR = 1
+
+
+def lowered(**fields):
+    return {**asdict(BENCHMARK), "max_load_factor": LOWERED_MAX_LOAD_FACTOR, **fields}
+
+
+def exported_changes(flight):
+    return json.loads(flight.scenario_json()).get("envelope_changes")
+
+
+def test_envelope_set_after_k_steps_is_exported_at_step_k_beside_the_starting_envelope(tmp_path):
+    """MS-41: a change governs row k onward and the export keeps the starting envelope."""
+    flight = page_flight(tmp_path, steps=LEVEL_RUN_IN_STEPS)
+
+    flight.set_envelope(lowered())
+    flight.advance(MANOEUVRE_CRUISE_CONTROL)
+
+    assert exported_changes(flight) == [[LEVEL_RUN_IN_STEPS, lowered()]]
+    assert json.loads(flight.scenario_json())["envelope"] == asdict(BENCHMARK)
+
+
+def test_envelopes_set_twice_before_one_step_record_only_the_last(tmp_path):
+    """MS-41: at most one change per step, the last one set."""
+    flight = page_flight(tmp_path, steps=LEVEL_RUN_IN_STEPS)
+
+    flight.set_envelope(lowered(max_load_factor=5.0))
+    flight.set_envelope(lowered())
+    flight.advance(MANOEUVRE_CRUISE_CONTROL)
+
+    assert exported_changes(flight) == [[LEVEL_RUN_IN_STEPS, lowered()]]
+
+
+def test_envelope_set_back_before_its_step_or_resent_unchanged_records_no_change(tmp_path):
+    """MS-41: a change never repeats the envelope already in effect."""
+    flight = page_flight(tmp_path, steps=LEVEL_RUN_IN_STEPS)
+
+    flight.set_envelope(lowered())
+    flight.set_envelope(asdict(BENCHMARK))
+    flight.advance(MANOEUVRE_CRUISE_CONTROL)
+    flight.set_envelope(asdict(BENCHMARK))
+    flight.advance(MANOEUVRE_CRUISE_CONTROL)
+
+    assert "envelope_changes" not in json.loads(flight.scenario_json())
+
+
+def test_returning_to_the_starting_envelope_a_step_later_is_a_second_change(tmp_path):
+    """MS-41: in effect means the previous row's envelope, not the starting one."""
+    flight = page_flight(tmp_path, steps=LEVEL_RUN_IN_STEPS)
+
+    flight.set_envelope(lowered())
+    flight.advance(MANOEUVRE_CRUISE_CONTROL)
+    flight.set_envelope(asdict(BENCHMARK))
+    flight.advance(MANOEUVRE_CRUISE_CONTROL)
+
+    assert exported_changes(flight) == [[LEVEL_RUN_IN_STEPS, lowered()], [LEVEL_RUN_IN_STEPS + 1, asdict(BENCHMARK)]]
+
+
+def flown_truth(flight, controls, change_at_step=None, envelope=None):
+    truths = []
+    for step, control in enumerate(controls):
+        if step == change_at_step:
+            flight.set_envelope(envelope)
+        flight.advance(control)
+        truths.append(flight.frame()["truth_m"] + flight.frame()["truth_velocity_m_s"])
+    return np.array(truths)
+
+
+def test_live_envelope_change_mid_pull_flies_the_truth_its_export_replays_bit_for_bit(tmp_path):
+    """MS-27, MS-41: page and replay fly one piecewise-constant envelope over steps."""
+    controls = break_turn_controls()
+    flight = page_flight(tmp_path, steps=0)
+
+    truth = flown_truth(flight, controls, change_at_step=LEVEL_RUN_IN_STEPS + 50, envelope=lowered())
+
+    states, _ = fly_scenario(json.loads(flight.scenario_json()))
+    assert exported_changes(flight) == [[LEVEL_RUN_IN_STEPS + 50, lowered()]]
+    assert truth.tobytes() == states[:, :6].tobytes()
+
+
+@pytest.mark.parametrize("committed", [SEED_SCENARIO, OVERHEAD_SCENARIO], ids=lambda path: path.stem)
+def test_committed_scenario_flown_live_with_its_envelope_resent_exports_no_change_and_the_same_truth(
+    committed, tmp_path
+):
+    """MS-41: a scenario without envelope_changes flies one envelope throughout, as before."""
+    scenario = json.loads(committed.read_text())
+    flight = LiveFlight(scenario, json.loads(PAGE_IMM_TUNING.read_text())["best"], tmp_path)
+    for control in scenario["controls"]:
+        flight.set_envelope(scenario["envelope"])
+        flight.advance(control)
+
+    exported = json.loads(flight.scenario_json())
+
+    assert "envelope_changes" not in exported
+    assert fly_scenario(exported)[0].tobytes() == fly_scenario(scenario)[0].tobytes()
+
+
+def test_altitude_hold_pushes_to_the_new_push_limit_from_the_step_the_envelope_changed(tmp_path):
+    """MS-41: holds steer row k in the envelope that governs it."""
+    flight = manoeuvre_flight(tmp_path)
+    flight.toggle_hold("altitude")
+    flight.holds.targets["altitude"] -= 1000.0
+
+    flight.advance(MANOEUVRE_CRUISE_CONTROL)
+    flight.set_envelope(lowered(max_negative_load_factor=-1.0))
+    flight.advance(MANOEUVRE_CRUISE_CONTROL)
+
+    assert [row[ROW_LOAD_FACTOR] for row in flight.controls] == [BENCHMARK.max_negative_load_factor, -1.0]
+
+
+def test_break_turn_in_progress_pulls_the_lowered_max_g_from_the_step_it_was_lowered(tmp_path):
+    """MS-41: a running manoeuvre generates row k from the envelope that governs it."""
+    flight = manoeuvre_flight(tmp_path)
+    flight.start_manoeuvre("break turn")
+    while not flight.controls or flight.controls[-1][ROW_LOAD_FACTOR] != BENCHMARK.max_load_factor:
+        flight.advance(MANOEUVRE_CRUISE_CONTROL)
+
+    flight.set_envelope(lowered())
+    flight.advance(MANOEUVRE_CRUISE_CONTROL)
+
+    assert flight.manoeuvre == "break turn"
+    assert flight.controls[-1][ROW_LOAD_FACTOR] == LOWERED_MAX_LOAD_FACTOR
+
+
+def test_break_turn_started_after_max_g_is_lowered_pulls_the_lowered_max_g(tmp_path):
+    """MS-41: a manoeuvre started after a change is planned in the new envelope."""
+    flight = manoeuvre_flight(tmp_path)
+    flight.set_envelope(lowered())
+    flight.start_manoeuvre("break turn")
+    while flight.manoeuvre or not flight.controls:
+        flight.advance(MANOEUVRE_CRUISE_CONTROL)
+
+    assert max(row[ROW_LOAD_FACTOR] for row in flight.controls) == LOWERED_MAX_LOAD_FACTOR

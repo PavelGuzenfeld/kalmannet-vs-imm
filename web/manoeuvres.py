@@ -27,11 +27,15 @@ def _row(roll_rate=0.0, load_factor=1.0, rudder=0.0) -> Row:
 class _Pilot:
     """Tracks the bank it has commanded and the flight-path angle turned since entry, from the latest velocity."""
 
-    def __init__(self, envelope: Envelope, dt_s: float, entry_velocity, read_velocity: Callable):
-        self.envelope, self.dt_s, self.read_velocity = envelope, dt_s, read_velocity
+    def __init__(self, read_envelope: Callable[[], Envelope], dt_s: float, entry_velocity, read_velocity: Callable):
+        self.read_envelope, self.dt_s, self.read_velocity = read_envelope, dt_s, read_velocity
         self.bank_rad = 0.0
         self.turned_rad = 0.0
         self._velocity = np.asarray(entry_velocity, dtype=np.float64)
+
+    @property
+    def envelope(self) -> Envelope:
+        return self.read_envelope()
 
     def _observe(self):
         velocity = np.asarray(self.read_velocity(), dtype=np.float64)
@@ -104,10 +108,13 @@ def _barrel_roll(pilot: _Pilot) -> Iterator[Row]:
     yield from pilot.level_off()
 
 
-def manoeuvre_rows(name: str, envelope: Envelope, dt_s: float, entry_velocity, read_velocity: Callable) -> Iterator[Row]:
+def manoeuvre_rows(
+    name: str, read_envelope: Callable[[], Envelope], dt_s: float, entry_velocity, read_velocity: Callable
+) -> Iterator[Row]:
     """Control rows for one named manoeuvre, flown to the right of the entry heading. Segment lengths come from
-    the latest velocity, so read_velocity must return the newest flown state's velocity."""
-    pilot = _Pilot(envelope, dt_s, entry_velocity, read_velocity)
+    the latest velocity, so read_velocity must return the newest flown state's velocity. Each row reads the
+    envelope as it is generated; a segment's bank target and roll step count keep the envelope it started in."""
+    pilot = _Pilot(read_envelope, dt_s, entry_velocity, read_velocity)
     flown = {
         "break turn": lambda: _break_turn(pilot, BREAK_TURN_DEGREES),
         "reversal": lambda: _reversal(pilot),

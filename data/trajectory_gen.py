@@ -129,5 +129,7 @@ def fly_scenario(scenario):
     rng = np.random.default_rng(scenario["seed"])
     start = scenario_start(scenario, rng, regime)
     controls = np.asarray(scenario["controls"], dtype=np.float64)
-    states = fly(Envelope(**scenario["envelope"]), start["position"], start["velocity"], 0.0, controls, regime.dt)
+    envelope_changes = {step: Envelope(**fields) for step, fields in scenario.get("envelope_changes", [])}
+    envelope = Envelope(**scenario["envelope"])
+    states = fly(envelope, start["position"], start["velocity"], 0.0, controls, regime.dt, envelope_changes)
     return states, measure(rng, states, regime)

@@ -16,8 +16,10 @@ from data.fixed_wing import (
     RUDDER,
     SPEED_BRAKE,
     THROTTLE,
+    UP,
     Envelope,
     fly,
+    fly_steps,
 )
 from data.trajectory_gen import measure
 
@@ -442,3 +444,75 @@ def test_positive_max_negative_load_factor_is_rejected(positive):
 
 def test_zero_max_negative_load_factor_is_accepted():
     replace(CONTROLS_ENVELOPE, max_negative_load_factor=0.0)
+
+
+SWITCH_STEP = 3
+SWITCH_ROWS = 6
+
+
+def flown_with_switch(envelope, changed, controls):
+    return list(fly_steps(envelope, ORIGIN, 100.0 * EAST, 0.0, controls, DT, {SWITCH_STEP: changed}))
+
+
+def pulled_g(row):
+    state, lift = row
+    return (state[6:9] + G * UP) @ lift / G
+
+
+def around_switch(values):
+    return [values[SWITCH_STEP - 1], values[SWITCH_STEP]]
+
+
+def test_envelope_change_leaves_the_rows_before_its_step_bit_for_bit():
+    """MS-27: an envelope change governs its own row onward, never an earlier one."""
+    controls = held_controls(SWITCH_ROWS, load_factor=4.0)
+    changed = replace(TEST_ENVELOPE, max_load_factor=2.0)
+
+    unchanged = fly_east(100.0, controls)
+    switched = np.array([state for state, _ in flown_with_switch(TEST_ENVELOPE, changed, controls)])
+
+    assert switched[:SWITCH_STEP].tobytes() == unchanged[:SWITCH_STEP].tobytes()
+    assert switched[SWITCH_STEP, 6:9].tobytes() != unchanged[SWITCH_STEP, 6:9].tobytes()
+
+
+def test_lowered_max_g_clamps_the_pull_from_exactly_its_step():
+    changed = replace(TEST_ENVELOPE, max_load_factor=2.0)
+
+    rows = flown_with_switch(TEST_ENVELOPE, changed, held_controls(SWITCH_ROWS, load_factor=4.0))
+
+    assert_step_acceleration(around_switch([pulled_g(row) for row in rows]), [4.0, 2.0])
+
+
+def test_raised_max_negative_g_clamps_the_push_from_exactly_its_step():
+    changed = replace(CONTROLS_ENVELOPE, max_negative_load_factor=-1.0)
+
+    rows = flown_with_switch(CONTROLS_ENVELOPE, changed, held_controls(SWITCH_ROWS, load_factor=-3.0))
+
+    assert_step_acceleration(around_switch([pulled_g(row) for row in rows]), [-2.0, -1.0])
+
+
+def test_raised_min_speed_caps_the_pull_by_its_lift_available_from_exactly_its_step():
+    changed = replace(TEST_ENVELOPE, min_speed_m_s=80.0)
+
+    rows = flown_with_switch(TEST_ENVELOPE, changed, held_controls(SWITCH_ROWS, load_factor=4.0))
+
+    speed = np.linalg.norm(rows[SWITCH_STEP][0][3:6])
+    assert_step_acceleration(around_switch([pulled_g(row) for row in rows]), [4.0, (speed / 80.0) ** 2])
+
+
+def level_drag_m_s2(envelope, speed_m_s):
+    glide_squared = envelope.min_speed_m_s * envelope.max_speed_m_s
+    return G / (2.0 * 10.0) * (speed_m_s**2 / glide_squared + glide_squared / speed_m_s**2)
+
+
+def test_lowered_max_speed_cuts_full_thrust_from_exactly_its_step():
+    """Level 1 g wings level: along-track acceleration is full thrust minus drag, both from the row's envelope."""
+    changed = replace(TEST_ENVELOPE, max_speed_m_s=150.0)
+
+    rows = flown_with_switch(TEST_ENVELOPE, changed, held_controls(SWITCH_ROWS, throttle=1.0))
+
+    expected = [
+        level_drag_m_s2(envelope, envelope.max_speed_m_s) - level_drag_m_s2(envelope, state[3])
+        for envelope, (state, _) in zip((TEST_ENVELOPE, changed), around_switch(rows))
+    ]
+    assert_step_acceleration(around_switch([state[6] for state, _ in rows]), expected)

@@ -31,6 +31,9 @@ DIVERGING_KNET_PT = "diverging_knet.pt"
 DIVERGING_KNET_DIVERGENCE = "diverging_knet_divergence.json"
 DIVERGING_KNET_SEED = 7
 DIVERGING_KNET_WEIGHT_SCALE = 0.1
+MAX_G_LOWERED_CASE = "break_turn_9g_max_g_lowered_mid_pull"
+MAX_G_LOWERED_STEP = 100
+MAX_G_LOWERED_TO = 3.0
 
 
 def native_flags(scenario):
@@ -57,6 +60,12 @@ def case_scenarios():
         "break_turn_9g_at_ekf_raw_error_trip": {
             **break_turn,
             "controls": break_turn["controls"][: trip_step + 1],
+        },
+        MAX_G_LOWERED_CASE: {
+            **break_turn,
+            "envelope_changes": [
+                [MAX_G_LOWERED_STEP, {**break_turn["envelope"], "max_load_factor": MAX_G_LOWERED_TO}]
+            ],
         },
     }
 

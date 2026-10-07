@@ -60,6 +60,7 @@ let lastTick = performance.now();
 let throttle = CRUISE_THROTTLE;
 let manoeuvreStep = null;
 let latestControl = [0, 1, CRUISE_THROTTLE, 0, 0, 0];
+let latestEnvelope = null;
 const keyAxes = { roll: 0, pull: 0, rudder: 0 };
 let steering = { roll: 0, pull: 0, rudder: 0, brake: 0, afterburner: 0, manualAxes: [] };
 let trails = {};
@@ -108,13 +109,14 @@ function thresholds() {
   );
 }
 
-function startFlight(scriptControls, recordedStart) {
+function startFlight(scriptControls, recordedStart, recordedEnvelopeChanges) {
   flightSetup = {
     seed: parseInt(byId("seed").value, 10),
     envelope: { ...envelope },
     noise_regime: byId("noise_regime").value,
     thresholds: thresholds(),
     ...(recordedStart && { start: recordedStart }),
+    ...(recordedEnvelopeChanges && { envelope_changes: recordedEnvelopeChanges }),
   };
   script = scriptControls;
   stepsSent = 0;
@@ -134,7 +136,7 @@ async function startFromUrlOrUi() {
   if (!scenarioUrl) return setStatus("paused: set the parameters and press Start");
   const scenario = await (await fetch(scenarioUrl)).json();
   applyScenarioToUi(scenario);
-  startFlight(scenario.controls, scenario.start);
+  startFlight(scenario.controls, scenario.start, scenario.envelope_changes);
 }
 
 const rampToward = (value, target, elapsedS) => value + clamp(target - value, -KEY_RAMP_PER_S * elapsedS, KEY_RAMP_PER_S * elapsedS);
@@ -192,7 +194,8 @@ function readControl(elapsedS) {
   const stick = stickInput(elapsedS);
   steering = stick;
   if (manoeuvreStep !== null && stick.manual) cancelManoeuvre();
-  const { max_roll_rate_rad_s, max_load_factor, max_side_load_factor, max_negative_load_factor } = flightSetup.envelope;
+  latestEnvelope = { ...envelope };
+  const { max_roll_rate_rad_s, max_load_factor, max_side_load_factor, max_negative_load_factor } = latestEnvelope;
   throttle = clamp(throttle + stick.throttleRate * THROTTLE_RATE_PER_S * elapsedS, 0, 1);
   const loadFactor = stick.pull >= 0 ? 1 + stick.pull * (max_load_factor - 1) : 1 + stick.pull * (1 - max_negative_load_factor);
   return [stick.roll * max_roll_rate_rad_s, loadFactor, throttle, stick.rudder * max_side_load_factor, stick.brake, stick.afterburner];
@@ -224,7 +227,7 @@ function advance(steps) {
   }
   stepsSent += controls.length;
   awaitingWorker = true;
-  worker.postMessage(toWorker.advance(controls, script ? [] : steering.manualAxes));
+  worker.postMessage(script ? toWorker.advance(controls) : toWorker.advance(controls, steering.manualAxes, latestEnvelope));
 }
 
 function tick(now) {

@@ -3,8 +3,9 @@
 Independent of filters/ so the truth it flies is never the filters' own motion model (MS-27).
 """
 
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 
 import numpy as np
 
@@ -55,6 +56,7 @@ PRESETS = {
     "light aircraft": Envelope(25.0, 70.0, 3.8, float(np.deg2rad(60.0)), 0.3, -1.5, 2.0, 1.0),
     "jet": Envelope(70.0, 300.0, 9.0, float(np.deg2rad(240.0)), 1.0, -3.0, 3.0, 1.5),
 }
+NO_ENVELOPE_CHANGES: Mapping[int, Envelope] = MappingProxyType({})
 
 
 def drag_m_s2(envelope: Envelope, speed_m_s: float, load_factor: float) -> float:
@@ -85,18 +87,21 @@ def fly_steps(
     bank_rad: float,
     controls: Iterable[Sequence[float]],
     dt_s: float,
+    envelope_changes: Mapping[int, Envelope] = NO_ENVELOPE_CHANGES,
 ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
-    """Yields (state row, unit lift direction) per control row as `controls` yields it; see fly."""
-    max_thrust_m_s2 = drag_m_s2(envelope, envelope.max_speed_m_s, 1.0)
+    """Yields (state row, unit lift direction) per control row as `controls` yields it; see fly.
+    envelope_changes[k] flies row k onward and is read as row k is flown, so a live caller may add it late."""
     position = np.asarray(position_m, dtype=np.float64)
     velocity = np.asarray(velocity_m_s, dtype=np.float64)
     wings_level_up = _initial_wings_level_up(velocity / np.linalg.norm(velocity))
-    push_limit = (
-        envelope.max_load_factor
-        if envelope.max_negative_load_factor is None
-        else -envelope.max_negative_load_factor
-    )
-    for control in controls:
+    for step, control in enumerate(controls):
+        envelope = envelope_changes.get(step, envelope)
+        max_thrust_m_s2 = drag_m_s2(envelope, envelope.max_speed_m_s, 1.0)
+        push_limit = (
+            envelope.max_load_factor
+            if envelope.max_negative_load_factor is None
+            else -envelope.max_negative_load_factor
+        )
         roll_rate, load_factor_command, throttle, rudder, speed_brake, afterburner = full_control_row(control)
         max_roll_rate = envelope.max_roll_rate_rad_s
         bank_rad = bank_rad + np.clip(roll_rate, -max_roll_rate, max_roll_rate) * dt_s
@@ -136,9 +141,10 @@ def fly(
     bank_rad: float,
     controls: np.ndarray,
     dt_s: float,
+    envelope_changes: Mapping[int, Envelope] = NO_ENVELOPE_CHANGES,
 ) -> np.ndarray:
     """controls[T, 3 or 6]: roll rate rad/s, load factor g, throttle [0, 1], rudder g to the right, brake, burner.
     bank_rad is from wings level at the start; wings level then turns with the flight path, not the horizon.
     Returns states[T, 9] = px py pz vx vy vz ax ay az; row t's acceleration carries it to row t + 1."""
-    states = [state for state, _ in fly_steps(envelope, position_m, velocity_m_s, bank_rad, controls, dt_s)]
+    states = [state for state, _ in fly_steps(envelope, position_m, velocity_m_s, bank_rad, controls, dt_s, envelope_changes)]
     return np.array(states).reshape(len(states), 9)

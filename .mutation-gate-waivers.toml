@@ -284,7 +284,7 @@ reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a L
 
 [[waiver]]
 file = "web/manoeuvres.py"
-line = 55
+line = 59
 column = 14
 old = """self.turned_rad < target_rad"""
 new = """self.turned_rad <= target_rad"""
@@ -293,7 +293,7 @@ radian value; rebuilt with the mutant, all six manoeuvres fly bit-identical stat
 
 [[waiver]]
 file = "web/manoeuvres.py"
-line = 59
+line = 63
 column = 14
 old = """self._velocity[2] < 0.0"""
 new = """self._velocity[2] <= 0.0"""
