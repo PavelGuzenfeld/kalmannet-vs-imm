@@ -24,7 +24,7 @@ CASE_NAMES = sorted(path.name.removesuffix(".expected.json") for path in CASES_D
 assert CASE_NAMES, f"no cases in {CASES_DIR}; run scripts/page_parity.py cases first"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def browser_context():
     with sync_api.sync_playwright() as playwright:
         browser = playwright.chromium.launch()
@@ -84,7 +84,7 @@ def test_chase_camera_sits_behind_the_truth_along_its_velocity(browser_context):
           const container = document.createElement("div");
           document.body.append(container);
           const scene = await (await import("/web/scene.js")).createScene(container);
-          scene.update({ truth_m: [0, 0, 400], truth_velocity_m_s: [100, 0, 0], filters: {} });
+          scene.update({ truth_m: [0, 0, 400], truth_velocity_m_s: [100, 0, 0], truth_lift_direction: [0, 0, 1], filters: {} });
           return container.dataset.cameraOffset.split(" ").map(Number);
         }"""
     )
@@ -221,6 +221,7 @@ def test_scene_hides_the_ellipsoid_of_a_diverged_filter(browser_context):
           scene.update({
             truth_m: [0, 0, 400],
             truth_velocity_m_s: [100, 0, 0],
+            truth_lift_direction: [0, 0, 1],
             filters: { EKF: readout(false), UKF: readout(true) },
           });
           return container.dataset.shownEllipsoids;
@@ -296,6 +297,7 @@ def test_scale_bar_is_a_one_two_five_value_whose_length_matches_metres_per_pixel
           scene.update({
             truth_m: [0, 0, 400],
             truth_velocity_m_s: [100, 0, 0],
+            truth_lift_direction: [0, 0, 1],
             filters: {},
           });
           scene.setMode(mode);
@@ -374,3 +376,65 @@ def test_scale_bar_rounds_down_to_a_one_two_five_value_and_switches_to_km_at_a_t
     )
 
     assert bar == {"metres": metres, "pixels": metres / metres_per_pixel, "label": label}
+
+
+WING_AXIS_ATOL = 1e-6
+BANKED_WING_Z_MIN = 0.3
+SCENE_FRAME_CASES = {
+    "level_east": ([100, 0, 0], [0, 0, 1]),
+    "banked_right_45deg_east": ([100, 0, 0], [0, -0.5**0.5, 0.5**0.5]),
+    "inverted_east": ([100, 0, 0], [0, 0, -1]),
+    "vertical_climb_lift_north": ([0, 0, 100], [0, 1, 0]),
+    "loop_top_inverted_west": ([-100, 0, 0], [0, 0, -1]),
+}
+
+
+def scene_wing_axis(page, velocity, lift):
+    return page.evaluate(
+        """async ([velocity, lift]) => {
+          const container = document.createElement("div");
+          document.body.append(container);
+          const scene = await (await import("/web/scene.js")).createScene(container);
+          scene.update({ truth_m: [0, 0, 400], truth_velocity_m_s: velocity, truth_lift_direction: lift, filters: {} });
+          return container.dataset.truthWingAxis.split(" ").map(Number);
+        }""",
+        [velocity, lift],
+    )
+
+
+@pytest.mark.parametrize("case", SCENE_FRAME_CASES)
+def test_truth_wing_axis_is_perpendicular_to_the_frames_lift_direction_and_velocity(browser_context, case):
+    velocity, lift = SCENE_FRAME_CASES[case]
+    page = module_page(browser_context)
+
+    wing_axis = scene_wing_axis(page, velocity, lift)
+
+    assert sum(w * v for w, v in zip(wing_axis, velocity)) == pytest.approx(0.0, abs=WING_AXIS_ATOL * 100)
+    assert sum(w * up for w, up in zip(wing_axis, lift)) == pytest.approx(0.0, abs=WING_AXIS_ATOL)
+    assert sum(w * w for w in wing_axis) == pytest.approx(1.0, abs=WING_AXIS_ATOL)
+
+
+def test_truth_wings_are_horizontal_in_level_flight(browser_context):
+    velocity, lift = SCENE_FRAME_CASES["level_east"]
+
+    wing_axis = scene_wing_axis(module_page(browser_context), velocity, lift)
+
+    assert wing_axis[2] == pytest.approx(0.0, abs=WING_AXIS_ATOL)
+
+
+def wing_axis_z(page):
+    axis = page.locator("#scene").get_attribute("data-truth-wing-axis")
+    return float(axis.split()[2]) if axis else None
+
+
+def test_flying_a_banked_turn_tilts_the_truth_wings_off_the_horizontal(browser_context):
+    page = loaded_page(browser_context)
+    page.click("#start")
+    page.wait_for_function("() => /^step [1-9]/.test(document.getElementById('clock').textContent)")
+    assert abs(wing_axis_z(page)) < WING_AXIS_ATOL
+
+    page.keyboard.down("ArrowRight")
+    page.wait_for_function(
+        f"() => Math.abs(Number(document.getElementById('scene').dataset.truthWingAxis.split(' ')[2])) > {BANKED_WING_Z_MIN}",
+        timeout=FLIGHT_TIMEOUT_MS,
+    )

@@ -10,9 +10,11 @@ import pytest
 import torch
 from scipy.stats import chi2
 
-from data.config import NOMINAL
-from data.trajectory_gen import fly_scenario
+from data.config import NOMINAL, REGIMES
+from data.fixed_wing import Envelope
+from data.trajectory_gen import fly_scenario, scenario_start
 from filters.ekf import EKF
+from filters.flags import DEFAULT_THRESHOLDS
 from filters.imm import IMM
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.rkn_network import RKNGainCovNetwork
@@ -23,6 +25,7 @@ from filters.state import STATE_DIM
 from filters.ukf import UKF
 from scripts import eval as bench_eval
 from scripts.replay import main as replay_main
+from tests import fixed_wing_before_controls
 
 REPO = Path(__file__).resolve().parents[1]
 SCENARIO_DIR = REPO / "data" / "scenarios"
@@ -54,6 +57,22 @@ CROSS_PLATFORM_ATOL = 1e-6
 UNINFORMATIVE_R = np.diag([1e6, 1e6, 1e12])
 INIT_OFFSET_EAST_SOUTH_M = [2.0, -1.0, 0.0]
 START_ATOL_M = 1e-6
+BENCHMARK_CONTROL_LIMITS_ISSUE_106 = {
+    "max_side_load_factor": 2.0,
+    "max_negative_load_factor": -4.5,
+    "brake_drag_multiplier": 3.0,
+    "afterburner_thrust_multiplier": 1.5,
+}
+G = 9.80665
+
+
+def recorded_today(committed):
+    """A committed 3-column scenario as a recording writes it since #107: full rows, every new input neutral."""
+    return {
+        **committed,
+        "envelope": {**committed["envelope"], **BENCHMARK_CONTROL_LIMITS_ISSUE_106},
+        "controls": [[*row, 0.0, 0.0, 0.0] for row in committed["controls"]],
+    }
 
 
 @pytest.fixture
@@ -94,7 +113,7 @@ def test_record_rewrites_the_committed_seed_scenario_and_the_flags_it_tripped(tm
     assert recorded.read_text().endswith("}\n")
     committed = json.loads(SEED_SCENARIO.read_text())
     assert set(committed) == {"controls", "seed", "envelope", "noise_regime", "thresholds", "git_tag", "tripped"}
-    assert json.loads(recorded.read_text()) == {**committed, "git_tag": "recorded-sha"}
+    assert json.loads(recorded.read_text()) == {**recorded_today(committed), "git_tag": "recorded-sha"}
 
 
 def test_record_overhead_rewrites_the_committed_overhead_scenario(tmp_path, monkeypatch):
@@ -107,7 +126,34 @@ def test_record_overhead_rewrites_the_committed_overhead_scenario(tmp_path, monk
     replay_main()
 
     committed = json.loads(OVERHEAD_SCENARIO.read_text())
-    assert json.loads(recorded.read_text()) == {**committed, "git_tag": "recorded-sha"}
+    assert json.loads(recorded.read_text()) == {**recorded_today(committed), "git_tag": "recorded-sha"}
+
+
+@pytest.mark.parametrize("committed", [SEED_SCENARIO, OVERHEAD_SCENARIO], ids=lambda path: path.stem)
+def test_committed_3_column_scenario_flies_bit_for_bit_the_truth_it_flew_before_the_wider_control_row(committed):
+    """MS-27, #107: old rows replay with every new input neutral and, lacking the field, today's push limit."""
+    scenario = json.loads(committed.read_text())
+    regime = REGIMES[scenario["noise_regime"]]
+    start = scenario_start(scenario, np.random.default_rng(scenario["seed"]), regime)
+    controls = np.asarray(scenario["controls"], dtype=np.float64)
+    envelope = Envelope(**scenario["envelope"])
+
+    before = fixed_wing_before_controls.fly(envelope, start["position"], start["velocity"], 0.0, controls, regime.dt)
+    states, _ = fly_scenario(scenario)
+
+    assert states.tobytes() == before.tobytes()
+
+
+def test_scenario_rudder_row_side_slips_the_overhead_pass_toward_the_right_wing_at_max_side_g():
+    """MS-27: replay reads the 6-column row. The pass flies east wings level, so the right wing is south.
+    rtol 1e-12: the acceleration column is a velocity difference over dt."""
+    scenario = json.loads(OVERHEAD_SCENARIO.read_text())
+    scenario["envelope"] = {**scenario["envelope"], **BENCHMARK_CONTROL_LIMITS_ISSUE_106}
+    scenario["controls"] = [[0.0, 1.0, 1.0, 2.5, 0.0, 0.0]]
+
+    states, _ = fly_scenario(scenario)
+
+    np.testing.assert_allclose(states[0, 7], -2.0 * G, rtol=1e-12)
 
 
 def test_model_change_silently_shifts_a_recorded_scenario():
@@ -280,3 +326,73 @@ def test_classical_filters_start_2_m_east_and_1_m_south_of_the_truth(run, make_f
     err, _, _ = run(make_filter(UNINFORMATIVE_R), truth, h(truth[0])[None])
 
     np.testing.assert_allclose(err[0, :3], INIT_OFFSET_EAST_SOUTH_M, rtol=0.0, atol=START_ATOL_M)
+
+
+DIVERGES_AT_STEP = 3
+SCRIPTED_STEPS = 40
+
+
+class ScriptedFilter:
+    """Estimates 1 m of position error, then 300 m from DIVERGES_AT_STEP on; its NIS would jump only after it."""
+
+    def __init__(self):
+        self.steps = 0
+
+    def update(self, x, P, z):
+        return self.step(x, P, z)
+
+    def step(self, x, P, z):
+        estimate, innovation = np.zeros(STATE_DIM), np.zeros(3)
+        estimate[0] = 1.0 if self.steps < DIVERGES_AT_STEP else 300.0
+        innovation[0] = 0.0 if self.steps <= DIVERGES_AT_STEP else 1e3
+        self.steps += 1
+        return estimate, np.eye(STATE_DIM), innovation, np.eye(3)
+
+    def init_state(self, x, P):
+        return {"mu": np.full(4, 0.25)}
+
+
+class ScriptedIMM(ScriptedFilter):
+    def __init__(self, dt, R, **tuned):
+        super().__init__()
+
+    def step(self, state, z):
+        estimate, P, innovation, S = super().step(None, None, z)
+        return estimate, P, state, innovation, S
+
+
+def scripted_replay(monkeypatch, imm_tuning):
+    from scripts import replay as replay_script
+
+    made = []
+
+    def scripted(*args, **kwargs):
+        made.append(ScriptedFilter())
+        return made[-1]
+
+    def scripted_imm(dt, R, **tuned):
+        made.append(ScriptedIMM(dt, R, **tuned))
+        return made[-1]
+
+    flight = (np.zeros((SCRIPTED_STEPS, STATE_DIM)), np.zeros((SCRIPTED_STEPS, 3)))
+    monkeypatch.setattr(replay_script, "fly_scenario", lambda scenario: flight)
+    monkeypatch.setattr(replay_script, "EKF", scripted)
+    monkeypatch.setattr(replay_script, "UKF", scripted)
+    monkeypatch.setattr(replay_script, "IMM", scripted_imm)
+    scenario = {"thresholds": {**DEFAULT_THRESHOLDS, "raw_error_m": 1e9}}
+    missing = imm_tuning.parent / "missing"
+    return replay_script.replay(scenario, imm_tuning, missing, missing), made
+
+
+def test_replay_pulls_each_diverged_filter_through_its_divergence_step_and_no_further(monkeypatch, imm_tuning):
+    _, made = scripted_replay(monkeypatch, imm_tuning)
+
+    assert [flt.steps for flt in made] == [DIVERGES_AT_STEP + 1] * 3
+
+
+def test_replay_does_not_trip_a_flag_that_would_only_trip_after_the_divergence_step(monkeypatch, imm_tuning):
+    """Past the divergence step the innovation reads 1e3 (track_loss) and NEES 9e4 for 25 steps (overconfidence)."""
+    tripped, _ = scripted_replay(monkeypatch, imm_tuning)
+
+    cut_flags = {"track_loss": None, "overconfidence": None, "raw_error": None, "diverged": DIVERGES_AT_STEP}
+    assert [tripped[name] for name in ("EKF", "UKF", "IMM")] == [cut_flags] * 3

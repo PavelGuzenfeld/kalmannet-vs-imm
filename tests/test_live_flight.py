@@ -22,6 +22,7 @@ from filters.torch_ops import export_npz
 from scripts.export_weights import main as export_weights_main
 from scripts.replay import SEED_SCENARIO_SEED, break_turn_controls, numpy_weights
 from tests.test_numpy_forward import knet_stand_in, rkn_stand_in
+from tests.test_replay import recorded_today
 from filters.state import POS
 from scripts.eval import ekf_like_steps, imm_steps, run_ekf_like
 from web.live_flight import (
@@ -124,7 +125,11 @@ def test_exported_break_turn_replays_to_the_page_preview_flags(learned, tmp_path
     assert lines == preview_lines(flight)
     assert [line.split(":")[0] for line in lines if " diverged=" in line] == ["KalmanNet", "RKN"]
     committed = json.loads(SEED_SCENARIO.read_text())
-    assert json.loads(exported.read_text()) == {**committed, "git_tag": "unknown", "tripped": flight.trips()}
+    assert json.loads(exported.read_text()) == {
+        **recorded_today(committed),
+        "git_tag": "unknown",
+        "tripped": flight.trips(),
+    }
     assert flight.trips()["EKF"] == committed["tripped"]["EKF"]
 
 
@@ -237,6 +242,31 @@ def test_scenario_with_a_recorded_start_flies_from_it_and_replays_to_the_page_pr
     assert flight.frame()["truth_m"] == fly_scenario(scenario)[0][-1, :3].tolist()
 
 
+def test_page_3_column_rows_export_as_full_rows_with_every_new_input_neutral(tmp_path):
+    """MS-27, #106 decision 4: a recording writes the full control row whatever width the page sent."""
+    scenario = json.loads(OVERHEAD_SCENARIO.read_text())
+    flight = LiveFlight(scenario, json.loads(PAGE_IMM_TUNING.read_text())["best"], tmp_path)
+    for control in scenario["controls"]:
+        flight.advance(control)
+
+    assert json.loads(flight.scenario_json())["controls"] == recorded_today(scenario)["controls"]
+
+
+def test_page_6_column_rows_fly_the_new_inputs_and_export_them_unchanged(tmp_path):
+    """MS-27: the live flight is the replayed flight, rudder, brake and afterburner included."""
+    scenario = {**json.loads(OVERHEAD_SCENARIO.read_text()), "envelope": asdict(PRESETS[DEFAULT_PRESET])}
+    scenario["controls"] = [[0.0, 1.0, 1.0, 2.0, 1.0, 1.0]] * 3 + [[0.0, 1.0, 1.0, -1.0, 0.0, 1.0]] * 3
+    flight = LiveFlight(scenario, json.loads(PAGE_IMM_TUNING.read_text())["best"], tmp_path)
+    for control in scenario["controls"]:
+        flight.advance(control)
+
+    exported = json.loads(flight.scenario_json())
+    assert exported["controls"] == scenario["controls"]
+    assert flight.frame()["truth_m"] == fly_scenario(exported)[0][-1, :3].tolist()
+    neutral = {**scenario, "controls": [row[:3] for row in scenario["controls"]]}
+    assert flight.frame()["truth_m"] != fly_scenario(neutral)[0][-1, :3].tolist()
+
+
 def test_ellipsoid_of_an_axis_aligned_position_covariance_has_the_95_percent_semi_axes_and_identity_axes():
     """Scaled by the pinned chi-square(3) 95% quantile; sqrt of exact binary variances, so atol only absorbs it."""
     P = np.diag([4.0, 16.0, 64.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
@@ -303,6 +333,45 @@ def test_frame_truth_velocity_is_the_flown_state_velocity(seed_frame):
     assert seed_frame["truth_velocity_m_s"] == states[-1, 3:6].tolist()
 
 
+def lift_frame(roll_rate_rad_s, steps):
+    setup = {
+        "seed": SEED_SCENARIO_SEED,
+        "envelope": asdict(PRESETS[DEFAULT_PRESET]),
+        "noise_regime": "nominal",
+        "thresholds": DEFAULT_THRESHOLDS,
+    }
+    flight = LiveFlight(setup, json.loads(PAGE_IMM_TUNING.read_text())["best"], REPO / "no_weights")
+    for _ in range(steps):
+        flight.advance([roll_rate_rad_s, 0.0, 1.0])
+    return flight.frame()
+
+
+def test_frame_lift_direction_is_a_unit_vector_perpendicular_to_the_velocity_and_level_flight_has_horizontal_wings():
+    """MS-38: unit lift, perpendicular to the velocity; wings along velocity x lift are horizontal at zero bank."""
+    frame = lift_frame(0.0, 20)
+    lift, velocity = np.array(frame["truth_lift_direction"]), np.array(frame["truth_velocity_m_s"])
+
+    wing_axis = np.cross(velocity, lift)
+
+    assert np.linalg.norm(lift) == pytest.approx(1.0, abs=1e-12)
+    assert lift @ velocity == pytest.approx(0.0, abs=1e-9)
+    assert wing_axis[2] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_frame_lift_direction_is_rolled_from_the_level_lift_by_the_bank_angle():
+    """MS-38: positive roll banks the lift toward the right wing, velocity x level lift, by the integrated angle."""
+    steps, roll_rate = 20, 0.5
+    bank_rad = roll_rate * NOMINAL.dt * steps
+    level_frame, banked_frame = lift_frame(0.0, steps), lift_frame(roll_rate, steps)
+    level = np.array(level_frame["truth_lift_direction"])
+    velocity = np.array(level_frame["truth_velocity_m_s"])
+    right_wing = np.cross(velocity / np.linalg.norm(velocity), level)
+
+    assert banked_frame["truth_lift_direction"] == pytest.approx(
+        (np.cos(bank_rad) * level + np.sin(bank_rad) * right_wing).tolist(), abs=1e-9
+    )
+
+
 def test_ekf_snapshot_holds_the_covariance_the_last_nees_was_scored_with():
     states, z = fly_scenario(json.loads(SEED_SCENARIO.read_text()))
     snapshot = {}
@@ -343,3 +412,45 @@ def test_a_raw_error_threshold_far_under_the_peak_errors_diverges_no_filter(tmp_
         "UKF": False,
         "IMM": False,
     }
+
+
+SCRIPTED_DIVERGES_AT_STEP = 3
+SCRIPTED_PAGE_STEPS = 10
+
+
+def scripted_filter_steps(pulled):
+    def steps(*args, **kwargs):
+        count = [0]
+        pulled.append(count)
+        for step in range(SCRIPTED_PAGE_STEPS * 2):
+            count[0] += 1
+            error_m = 1.0 if step < SCRIPTED_DIVERGES_AT_STEP else 300.0
+            err = np.zeros(9)
+            err[0] = error_m
+            yield err, error_m**2, 0.0 if step <= SCRIPTED_DIVERGES_AT_STEP else 1e3
+
+    return steps
+
+
+def scripted_page_flight(monkeypatch, tmp_path):
+    from web import live_flight
+
+    pulled = []
+    monkeypatch.setattr(live_flight, "ekf_like_steps", scripted_filter_steps(pulled))
+    monkeypatch.setattr(live_flight, "imm_steps", scripted_filter_steps(pulled))
+    thresholds = {**DEFAULT_THRESHOLDS, "raw_error_m": 1e9}
+    return page_flight(tmp_path, thresholds=thresholds, steps=SCRIPTED_PAGE_STEPS), pulled
+
+
+def test_page_pulls_each_diverged_filter_through_its_divergence_step_and_no_further(monkeypatch, tmp_path):
+    flight, pulled = scripted_page_flight(monkeypatch, tmp_path)
+
+    assert [count[0] for count in pulled] == [SCRIPTED_DIVERGES_AT_STEP + 1] * 3
+    assert {r["diverged_step"] for r in flight.readouts().values()} == {SCRIPTED_DIVERGES_AT_STEP}
+
+
+def test_page_does_not_trip_a_flag_that_would_only_trip_after_the_divergence_step(monkeypatch, tmp_path):
+    """Past the divergence step the innovation reads 1e3, which would trip track_loss at the next step."""
+    flight, _ = scripted_page_flight(monkeypatch, tmp_path)
+
+    assert {name: found["track_loss"] for name, found in flight.trips().items()} == {"EKF": None, "UKF": None, "IMM": None}

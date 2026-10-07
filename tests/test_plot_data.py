@@ -844,7 +844,7 @@ def test_anees_between_two_flights_cuts_averages_only_the_flight_still_running(t
         )
 
 
-def test_animation_records_each_filter_through_its_divergence_step_and_no_further(tmp_path, monkeypatch):
+def _scripted_animation_run(tmp_path, monkeypatch):
     import torch
 
     from filters.knet.gain_network import KalmanGainGRU
@@ -887,8 +887,62 @@ def test_animation_records_each_filter_through_its_divergence_step_and_no_furthe
         np.zeros((RUNAWAY_STEPS, 9)), np.full((RUNAWAY_STEPS, 3), RUNAWAY_DRIFT_M), 0.1, np.eye(3), knet_ckpt, rkn_ckpt, (1, 1, 1)
     )
 
+    return make_animation, est, err, nees, mus
+
+
+def test_animation_records_each_filter_through_its_divergence_step_and_no_further(tmp_path, monkeypatch):
+    make_animation, est, err, _, _ = _scripted_animation_run(tmp_path, monkeypatch)
+
     pulled = RUNAWAY_DIVERGENCE_STEP + 1
     for name in make_animation.FILTERS:
         assert np.isfinite(err[name][:pulled]).all() and err[name][RUNAWAY_DIVERGENCE_STEP] > 200.0
         assert np.isnan(err[name][pulled:]).all()
         assert np.isnan(est[name][pulled:]).all()
+
+
+def test_animation_records_the_estimate_error_nees_and_mode_probabilities_each_filter_produced(tmp_path, monkeypatch):
+    _, est, err, nees, mus = _scripted_animation_run(tmp_path, monkeypatch)
+
+    first_steps = {"EKF": [2.0, 152.0], "UKF": [2.0, 152.0], "IMM": [2.0, 152.0], "KalmanNet": [0.0, 150.0], "RKN": [0.0, 150.0]}
+    for name, x in first_steps.items():
+        y = -1.0 if name in ("EKF", "UKF", "IMM") else 0.0
+        np.testing.assert_array_equal(est[name][:2], [[x[0], y, 0.0], [x[1], y, 0.0]])
+        np.testing.assert_array_equal(err[name][:2], [np.hypot(x[0], y), np.hypot(x[1], y)])
+    for name in ("EKF", "UKF", "IMM"):
+        np.testing.assert_array_equal(nees[name][:2], [5.0, 152.0**2 + 1.0])
+    np.testing.assert_array_equal(nees["RKN"][:2], [0.0, 150.0**2])
+    assert np.isnan(nees["KalmanNet"]).all()
+    np.testing.assert_array_equal(mus[:2], np.full((2, 4), 0.25))
+
+
+def test_scene_limits_ignore_the_rows_of_a_stopped_filter(tmp_path):
+    from scripts import make_animation
+
+    states = np.array([[0.0, 0.0, 0.0], [2000.0, 1000.0, 500.0]])
+    stopped = np.array([[100.0, 0.0, 0.0], [np.nan, np.nan, np.nan]])
+    est = {name: stopped for name in make_animation.FILTERS}
+
+    centre, half = make_animation.scene_limits(states, est, max_side_m=1500.0)
+
+    np.testing.assert_array_equal(centre, [1000.0, 500.0, 250.0])
+    assert half == 750.0
+
+
+def test_plot_runner_pulls_a_diverged_filter_through_its_divergence_step_and_no_further():
+    from scripts import make_plots
+
+    pulled = []
+
+    def steps(*args):
+        for step in range(RUNAWAY_STEPS * 4):
+            pulled.append(step)
+            err = np.zeros(9)
+            err[0] = 1.0 if step < RUNAWAY_DIVERGENCE_STEP else 300.0
+            yield err, 1.0, 1.0
+
+    with patch.object(make_plots, "ekf_like_steps", steps), patch.object(make_plots, "imm_steps", steps):
+        make_plots._run_ekf_like(None, np.zeros((RUNAWAY_STEPS * 4, 9)), None)
+        ekf_pulled, pulled[:] = len(pulled), []
+        make_plots._run_imm(None, np.zeros((RUNAWAY_STEPS * 4, 9)), None)
+
+    assert (ekf_pulled, len(pulled)) == (RUNAWAY_DIVERGENCE_STEP + 1,) * 2

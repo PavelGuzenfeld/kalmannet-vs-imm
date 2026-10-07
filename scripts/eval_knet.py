@@ -19,7 +19,7 @@ from data.trajectory_gen import fly_scenario
 from filters.flags import until_diverged
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.knet_filter import KalmanNetFilter
-from filters.metrics import counted_span, divergence_steps, divergence_summary
+from filters.metrics import counted_mean, counted_span, divergence_steps, divergence_summary
 from filters.motion_models import cv_model
 from filters.state import STATE_DIM
 
@@ -59,8 +59,8 @@ def regime_row(regime_name, runs):
 def position_velocity_rmse(errors):
     """errors: [n,9]. Returns (pos_rmse, vel_rmse)."""
     return (
-        float(np.sqrt(np.mean(np.sum(errors[:, :3] ** 2, axis=-1)))),
-        float(np.sqrt(np.mean(np.sum(errors[:, 3:6] ** 2, axis=-1)))),
+        float(np.sqrt(counted_mean(np.sum(errors[:, :3] ** 2, axis=-1)))),
+        float(np.sqrt(counted_mean(np.sum(errors[:, 3:6] ** 2, axis=-1)))),
     )
 
 
