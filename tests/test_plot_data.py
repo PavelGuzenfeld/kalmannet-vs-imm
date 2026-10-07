@@ -630,6 +630,8 @@ RUNAWAY_POSITION_ERRORS_BEFORE_CUT = [np.sqrt(5.0), np.sqrt(152.0**2 + 1.0)]
 
 
 class _RunawayEKF:
+    drift_scale = 1.0
+
     def __init__(self, dt, R):
         pass
 
@@ -637,13 +639,15 @@ class _RunawayEKF:
         return x, np.eye(9), np.zeros(3), np.eye(3)
 
     def step(self, x, P, z):
-        return x + RUNAWAY_DRIFT_M * np.eye(9)[0], np.eye(9), np.zeros(3), np.eye(3)
+        return x + z[0] * self.drift_scale * np.eye(9)[0], np.eye(9), np.zeros(3), np.eye(3)
 
 
-def _runaway_ukf_class():
+def _runaway_ukf_class(drift_scale=1.0):
     from filters.ukf import UKF
 
     class _RunawayUKF(UKF):
+        scale = drift_scale
+
         def __init__(self, dt, R):
             pass
 
@@ -654,12 +658,14 @@ def _runaway_ukf_class():
             return x, np.eye(9), np.zeros(3), np.eye(3)
 
         def step(self, x, P, z):
-            return x + RUNAWAY_DRIFT_M * np.eye(9)[0], np.eye(9), np.zeros(3), np.eye(3)
+            return x + z[0] * self.scale * np.eye(9)[0], np.eye(9), np.zeros(3), np.eye(3)
 
     return _RunawayUKF
 
 
 class _RunawayIMM:
+    drift_scale = 1.0
+
     def __init__(self, dt, R, **kwargs):
         pass
 
@@ -667,21 +673,22 @@ class _RunawayIMM:
         return {"x": x, "P": P, "mu": np.full(4, 0.25), "steps": 0}
 
     def step(self, state, z):
-        x = state["x"] + (RUNAWAY_DRIFT_M if state["steps"] else 0.0) * np.eye(9)[0]
+        x = state["x"] + (z[0] * self.drift_scale if state["steps"] else 0.0) * np.eye(9)[0]
         return x, np.eye(9), {**state, "x": x, "steps": state["steps"] + 1}, np.zeros(3), np.eye(3)
 
 
-def _patch_runaway_classical_filters(make_module):
+def _patch_runaway_classical_filters(make_module, ukf_drift_scale=1.0):
     return (
         patch.object(make_module, "EKF", _RunawayEKF),
-        patch.object(make_module, "UKF", _runaway_ukf_class()),
+        patch.object(make_module, "UKF", _runaway_ukf_class(ukf_drift_scale)),
         patch.object(make_module, "IMM", _RunawayIMM),
     )
 
 
-def _runaway_flight():
+def _runaway_flight(drifts=(RUNAWAY_DRIFT_M, RUNAWAY_DRIFT_M)):
     states = np.zeros((2, RUNAWAY_STEPS, 9))
     measurements = np.zeros((2, 1, RUNAWAY_STEPS, 3))
+    measurements[:, 0, :, 0] = np.array(drifts)[:, None]
     return states, measurements
 
 
@@ -697,8 +704,8 @@ def _capture_axes(make_module):
     return captured, patch.object(make_module.plt, "subplots", side_effect=_subplots)
 
 
-def _run_with_runaway_filters(make_module, tmp_path, draw):
-    ekf, ukf, imm = _patch_runaway_classical_filters(make_module)
+def _run_with_runaway_filters(make_module, tmp_path, draw, ukf_drift_scale=1.0):
+    ekf, ukf, imm = _patch_runaway_classical_filters(make_module, ukf_drift_scale)
     captured, subplots = _capture_axes(make_module)
     tuning = tmp_path / "imm_tuning.json"
     tuning.write_text(json.dumps({"best": RUNAWAY_IMM_KWARGS}))
@@ -766,6 +773,77 @@ def test_anees_vs_time_ends_at_the_cut(tmp_path, monkeypatch):
         assert np.isnan(anees[label][RUNAWAY_DIVERGENCE_STEP:]).all()
 
 
+SLOW_RUNAWAY_DRIFT_M = 60.0
+SLOW_RUNAWAY_DIVERGENCE_STEP = 4
+MIXED_DRIFTS = (RUNAWAY_DRIFT_M, SLOW_RUNAWAY_DRIFT_M)
+
+
+def test_overlay_cuts_each_filter_at_its_own_divergence_step(tmp_path):
+    from scripts import make_plots
+
+    states, measurements = _runaway_flight()
+    slow_ukf_scale = SLOW_RUNAWAY_DRIFT_M / RUNAWAY_DRIFT_M
+
+    drawn = _run_with_runaway_filters(
+        make_plots,
+        tmp_path,
+        lambda tuning: make_plots.plot_trajectory_overlay(
+            tmp_path, 0.1, np.eye(3), states, measurements, imm_tuning_json_path=tuning
+        ),
+        ukf_drift_scale=slow_ukf_scale,
+    )
+
+    assert np.isnan(drawn["EKF (CV-only)"][RUNAWAY_DIVERGENCE_STEP:]).all()
+    assert np.isfinite(drawn["EKF (CV-only)"][:RUNAWAY_DIVERGENCE_STEP]).all()
+    assert np.isnan(drawn["IMM (tuned)"][RUNAWAY_DIVERGENCE_STEP:]).all()
+    assert np.isfinite(drawn["UKF (CV-only)"][:SLOW_RUNAWAY_DIVERGENCE_STEP]).all()
+    assert np.isnan(drawn["UKF (CV-only)"][SLOW_RUNAWAY_DIVERGENCE_STEP:]).all()
+
+
+def test_rmse_between_two_flights_cuts_averages_only_the_flight_still_running(tmp_path):
+    from scripts import make_plots
+
+    states, measurements = _runaway_flight(MIXED_DRIFTS)
+    expected = [
+        np.sqrt(5.0),
+        np.sqrt((152.0**2 + 1.0 + 62.0**2 + 1.0) / 2),
+        np.sqrt(122.0**2 + 1.0),
+        np.sqrt(182.0**2 + 1.0),
+        np.nan,
+    ]
+
+    drawn = _run_with_runaway_filters(
+        make_plots,
+        tmp_path,
+        lambda tuning: make_plots.plot_rmse_vs_time(
+            tmp_path, 0.1, np.eye(3), states, measurements, n_traj=2, imm_tuning_json_path=tuning
+        ),
+    )
+
+    for label in ["EKF", "UKF", "IMM"]:
+        np.testing.assert_array_equal(drawn[label], expected)
+
+
+def test_anees_between_two_flights_cuts_averages_only_the_flight_still_running(tmp_path, monkeypatch):
+    from scripts import make_plots
+
+    states, measurements = _runaway_flight(MIXED_DRIFTS)
+    (tmp_path / "results").mkdir()
+    (tmp_path / "results" / "imm_tuning.json").write_text(json.dumps({"best": RUNAWAY_IMM_KWARGS}))
+    monkeypatch.chdir(tmp_path)
+    ekf, _, imm = _patch_runaway_classical_filters(make_plots)
+    captured, subplots = _capture_axes(make_plots)
+
+    with ekf, imm, subplots:
+        make_plots.plot_nees_with_bounds(tmp_path, 0.1, np.eye(3), states, measurements)
+
+    anees = {line.get_label(): line.get_ydata() for line in captured["ax"].lines}
+    for label in ["EKF ANEES(t)", "IMM ANEES(t)"]:
+        np.testing.assert_array_equal(
+            anees[label], [5.0, (152.0**2 + 1.0 + 62.0**2 + 1.0) / 2, 122.0**2 + 1.0, 182.0**2 + 1.0, np.nan]
+        )
+
+
 def test_animation_records_each_filter_through_its_divergence_step_and_no_further(tmp_path, monkeypatch):
     import torch
 
@@ -806,7 +884,7 @@ def test_animation_records_each_filter_through_its_divergence_step_and_no_furthe
     monkeypatch.setattr(make_animation, "RKNFilter", _RunawayRKN)
 
     est, err, nees, mus = make_animation.run_all_filters(
-        np.zeros((RUNAWAY_STEPS, 9)), np.zeros((RUNAWAY_STEPS, 3)), 0.1, np.eye(3), knet_ckpt, rkn_ckpt, (1, 1, 1)
+        np.zeros((RUNAWAY_STEPS, 9)), np.full((RUNAWAY_STEPS, 3), RUNAWAY_DRIFT_M), 0.1, np.eye(3), knet_ckpt, rkn_ckpt, (1, 1, 1)
     )
 
     pulled = RUNAWAY_DIVERGENCE_STEP + 1
