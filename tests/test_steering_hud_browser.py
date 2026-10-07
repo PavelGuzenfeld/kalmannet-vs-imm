@@ -190,15 +190,15 @@ def test_full_push_records_minus_the_preset_max_negative_g(browser):
     assert recorded_rows(page)[-1][1] == -4.5
 
 
-@pytest.mark.parametrize("preset", PRESET_SLIDERS)
-def test_selecting_a_preset_sets_the_four_new_sliders(browser_context, preset):
-    page = browser_context.new_page()
-    page.goto(f"{PAGE_BASE_URL}/web/index.html")
-    page.wait_for_function("document.getElementById('status').textContent.startsWith('paused')", polling=200, timeout=BOOT_TIMEOUT_MS)
+def test_selecting_each_preset_sets_the_four_new_sliders(browser):
+    page = boot_paused(browser)
 
-    page.select_option("#preset", preset)
+    shown = {}
+    for preset in PRESET_SLIDERS:
+        page.select_option("#preset", preset)
+        shown[preset] = tuple(float(page.input_value(f"#{slider}")) for slider in SLIDER_IDS)
 
-    assert tuple(float(page.input_value(f"#{slider}")) for slider in SLIDER_IDS) == PRESET_SLIDERS[preset]
+    assert shown == PRESET_SLIDERS
 
 
 def test_holding_w_reaches_exactly_full_throttle_in_the_recorded_row(browser):
@@ -223,15 +223,9 @@ def test_holding_shift_at_full_throttle_keeps_the_afterburner_column_set(browser
 
 
 def test_moving_the_max_negative_g_slider_changes_the_full_push_row(browser):
-    page = browser_context.new_page()
-    page.clock.install()
-    page.goto(f"{PAGE_BASE_URL}/web/index.html")
-    page.wait_for_function("document.getElementById('status').textContent.startsWith('paused')", polling=200, timeout=BOOT_TIMEOUT_MS)
+    page = boot_paused(browser)
     page.fill("#max_negative_load_factor", "-6")
-    page.click("#start")
-    page.wait_for_function("document.getElementById('status').textContent.startsWith('flying')", polling=200, timeout=BOOT_TIMEOUT_MS)
-    page.bring_to_front()
-    page.clock.pause_at(page.evaluate("Date.now()") + FRAME_MS)
+    start_flight(page)
 
     press_and_wait_for_keydown(page, "ArrowUp")
     page.clock.run_for(int(2 * RAMP_S * 1000))
