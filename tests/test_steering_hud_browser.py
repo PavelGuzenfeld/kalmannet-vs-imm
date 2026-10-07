@@ -27,8 +27,10 @@ def browser():
         chromium.close()
 
 
-def boot_paused(browser):
+def boot_paused(browser, init_script=None):
     page = browser.new_context().new_page()
+    if init_script:
+        page.add_init_script(init_script)
     page.clock.install(time=0)
     page.clock.pause_at(FRAME_MS)
     page.goto(f"{PAGE_BASE_URL}/web/index.html")
@@ -42,8 +44,8 @@ def start_flight(page):
     page.bring_to_front()
 
 
-def flying_page(browser):
-    page = boot_paused(browser)
+def flying_page(browser, init_script=None):
+    page = boot_paused(browser, init_script)
     start_flight(page)
     return page
 
@@ -323,3 +325,63 @@ def test_j_engages_altitude_hold_and_pulling_the_stick_disengages_it(browser):
     assert run_until(page, hold_engaged_js("altitude", False))
     page.clock.run_for(HOLD_MS)
     assert recorded_rows(page)[-1][ROW_LOAD_FACTOR] > 1
+
+
+BUTTON_A, BUTTON_B, LEFT_BUMPER, RIGHT_BUMPER = 0, 1, 4, 5
+STANDARD_BUTTON_COUNT = 17
+
+
+def gamepad_script(*held):
+    return f"""
+        const held = new Set({list(held)});
+        const buttons = Array.from({{ length: {STANDARD_BUTTON_COUNT} }}, (_, index) => ({{ pressed: held.has(index), value: held.has(index) ? 1 : 0 }}));
+        navigator.getGamepads = () => [{{ mapping: "standard", axes: [0, 0, 0, 0], buttons }}];
+    """
+
+
+def test_right_bumper_reads_full_right_rudder_and_records_full_side_g(browser):
+    page = flying_page(browser, gamepad_script(RIGHT_BUMPER))
+
+    page.clock.run_for(HOLD_MS)
+
+    assert hud_percent(page, "rudder") == 100
+    assert recorded_rows(page)[-1][ROW_RUDDER] == BENCHMARK_MAX_SIDE_G
+
+
+def test_left_bumper_reads_full_left_rudder_and_records_negative_side_g(browser):
+    page = flying_page(browser, gamepad_script(LEFT_BUMPER))
+
+    page.clock.run_for(HOLD_MS)
+
+    assert hud_percent(page, "rudder") == -100
+    assert recorded_rows(page)[-1][ROW_RUDDER] == -BENCHMARK_MAX_SIDE_G
+
+
+def test_both_bumpers_cancel_to_zero_rudder(browser):
+    page = flying_page(browser, gamepad_script(LEFT_BUMPER, RIGHT_BUMPER))
+
+    page.clock.run_for(HOLD_MS)
+
+    assert hud_percent(page, "rudder") == 0
+
+
+def test_gamepad_b_reads_full_brake_and_records_brake_one_afterburner_zero(browser):
+    page = flying_page(browser, gamepad_script(BUTTON_B))
+
+    page.clock.run_for(HOLD_MS)
+
+    row = recorded_rows(page)[-1]
+    assert hud_percent(page, "brake") == 100
+    assert row[ROW_BRAKE] == 1
+    assert row[ROW_AFTERBURNER] == 0
+
+
+def test_gamepad_a_reads_full_afterburner_and_records_afterburner_one_brake_zero(browser):
+    page = flying_page(browser, gamepad_script(BUTTON_A))
+
+    page.clock.run_for(HOLD_MS)
+
+    row = recorded_rows(page)[-1]
+    assert hud_percent(page, "afterburner") == 100
+    assert row[ROW_AFTERBURNER] == 1
+    assert row[ROW_BRAKE] == 0
