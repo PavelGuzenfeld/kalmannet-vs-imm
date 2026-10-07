@@ -8,10 +8,13 @@ import pytest
 
 from data.config import NOMINAL
 from data.fixed_wing import (
+    AFTERBURNER,
     LOAD_FACTOR,
     DEFAULT_PRESET,
     PRESETS,
     ROLL_RATE,
+    RUDDER,
+    SPEED_BRAKE,
     THROTTLE,
     Envelope,
     fly,
@@ -25,11 +28,28 @@ ORIGIN = np.array([0.0, 0.0, 1000.0])
 TEST_ENVELOPE = Envelope(min_speed_m_s=20.0, max_speed_m_s=200.0, max_load_factor=4.0, max_roll_rate_rad_s=2.0)
 
 
-def held_controls(steps, roll_rate_rad_s=0.0, load_factor=1.0, throttle=0.0):
-    controls = np.zeros((steps, 3))
+CONTROLS_ENVELOPE = Envelope(
+    min_speed_m_s=20.0,
+    max_speed_m_s=200.0,
+    max_load_factor=4.0,
+    max_roll_rate_rad_s=2.0,
+    max_side_load_factor=1.0,
+    max_negative_load_factor=-2.0,
+    brake_drag_multiplier=3.0,
+    afterburner_thrust_multiplier=1.5,
+)
+
+
+def held_controls(
+    steps, roll_rate_rad_s=0.0, load_factor=1.0, throttle=0.0, rudder=0.0, speed_brake=0.0, afterburner=0.0
+):
+    controls = np.zeros((steps, 6))
     controls[:, ROLL_RATE] = roll_rate_rad_s
     controls[:, LOAD_FACTOR] = load_factor
     controls[:, THROTTLE] = throttle
+    controls[:, RUDDER] = rudder
+    controls[:, SPEED_BRAKE] = speed_brake
+    controls[:, AFTERBURNER] = afterburner
     return controls
 
 
@@ -111,8 +131,106 @@ def test_load_factor_command_below_max_g_is_not_clamped():
 
 
 def test_negative_load_factor_command_beyond_max_g_is_clamped_to_minus_max_g():
+    """An envelope without max_negative_load_factor, as recorded before #107, keeps the symmetric push."""
     states = fly_east(100.0, held_controls(1, load_factor=-4.5))
     assert_step_acceleration(states[0, 8], -4.0 * G - G)
+
+
+def fly_east_with_controls(speed_m_s, controls, bank_rad=0.0, envelope=CONTROLS_ENVELOPE):
+    return fly_east(speed_m_s, controls, bank_rad, envelope)
+
+
+def test_push_at_max_negative_g_pushes_exactly_max_negative_g():
+    states = fly_east_with_controls(100.0, held_controls(1, load_factor=-2.0))
+    assert_step_acceleration(states[0, 8], -2.0 * G - G)
+
+
+def test_push_beyond_max_negative_g_is_clipped_to_max_negative_g_not_minus_max_g():
+    at_limit = fly_east_with_controls(100.0, held_controls(20, load_factor=-2.0))
+    beyond = fly_east_with_controls(100.0, held_controls(20, load_factor=-2.5))
+    assert np.array_equal(beyond, at_limit)
+
+
+def test_push_short_of_max_negative_g_is_not_clipped():
+    states = fly_east_with_controls(100.0, held_controls(1, load_factor=-1.5))
+    assert_step_acceleration(states[0, 8], -1.5 * G - G)
+
+
+def test_push_is_capped_by_lift_available_at_1_25_times_stall_speed():
+    """(25 / 20)^2 = 1.5625 g, short of the 2 g push limit."""
+    states = fly_east_with_controls(25.0, held_controls(1, load_factor=-2.0))
+    assert_step_acceleration(states[0, 8], -1.5625 * G - G)
+
+
+def test_right_rudder_at_max_side_g_slips_toward_the_right_wing_south_at_exactly_max_side_g():
+    states = fly_east_with_controls(100.0, held_controls(1, rudder=1.0))
+    assert_step_acceleration(states[0, 7], -1.0 * G)
+
+
+def test_rudder_short_of_max_side_g_is_not_clipped():
+    states = fly_east_with_controls(100.0, held_controls(1, rudder=0.5))
+    assert_step_acceleration(states[0, 7], -0.5 * G)
+
+
+def test_right_rudder_beyond_max_side_g_is_clipped_to_max_side_g():
+    at_limit = fly_east_with_controls(100.0, held_controls(20, rudder=1.0))
+    beyond = fly_east_with_controls(100.0, held_controls(20, rudder=1.5))
+    assert np.array_equal(beyond, at_limit)
+
+
+def test_left_rudder_beyond_max_side_g_slips_north_at_exactly_max_side_g():
+    states = fly_east_with_controls(100.0, held_controls(1, rudder=-1.5))
+    assert_step_acceleration(states[0, 7], 1.0 * G)
+
+
+def test_rudder_is_capped_by_lift_available_at_1_25_times_stall_speed():
+    """(25 / 20)^2 = 1.5625 g, short of a 2 g side limit."""
+    envelope = Envelope(20.0, 200.0, 4.0, 2.0, max_side_load_factor=2.0)
+    states = fly_east_with_controls(25.0, held_controls(1, rudder=2.0), envelope=envelope)
+    assert_step_acceleration(states[0, 7], -1.5625 * G)
+
+
+def test_right_rudder_banked_90_deg_right_pushes_along_the_banked_right_wing_down():
+    """Zero load factor isolates the rudder from lift. atol 1e-12: cos(pi / 2) leaves about 1e-16 g along south."""
+    controls = held_controls(1, load_factor=0.0, rudder=1.0)
+    states = fly_east_with_controls(100.0, controls, bank_rad=np.pi / 2.0)
+    np.testing.assert_allclose(states[0, 7:9], [0.0, -2.0 * G], rtol=1e-12, atol=1e-12)
+
+
+def test_speed_brake_multiplies_drag_by_the_brake_factor():
+    """Zero throttle, wings level: the whole x acceleration is drag."""
+    states = fly_east_with_controls(100.0, held_controls(1, speed_brake=1.0))
+    assert_step_acceleration(states[0, 6], -3.0 * drag_m_s2(100.0, 1.0))
+
+
+def test_speed_brake_leaves_full_thrust_untouched():
+    states = fly_east_with_controls(100.0, held_controls(1, throttle=1.0, speed_brake=1.0))
+    assert_step_acceleration(states[0, 6], drag_m_s2(200.0, 1.0) - 3.0 * drag_m_s2(100.0, 1.0))
+
+
+def test_afterburner_at_full_throttle_multiplies_max_thrust_by_the_afterburner_factor():
+    states = fly_east_with_controls(100.0, held_controls(1, throttle=1.0, afterburner=1.0))
+    assert_step_acceleration(states[0, 6], 1.5 * drag_m_s2(200.0, 1.0) - drag_m_s2(100.0, 1.0))
+
+
+@pytest.mark.parametrize("throttle", [0.875, np.nextafter(1.0, 0.0)])
+def test_afterburner_short_of_full_throttle_adds_no_thrust(throttle):
+    with_afterburner = fly_east_with_controls(100.0, held_controls(1, throttle=throttle, afterburner=1.0))
+    without = fly_east_with_controls(100.0, held_controls(1, throttle=throttle))
+    assert np.array_equal(with_afterburner, without)
+
+
+def test_afterburner_with_throttle_above_full_burns_as_at_full_throttle():
+    above = fly_east_with_controls(100.0, held_controls(1, throttle=1.5, afterburner=1.0))
+    full = fly_east_with_controls(100.0, held_controls(1, throttle=1.0, afterburner=1.0))
+    assert np.array_equal(above, full)
+
+
+def test_3_column_row_flies_bit_for_bit_as_the_full_row_with_every_new_input_neutral():
+    """Under an envelope whose new limits all act, so a non-neutral pad would show."""
+    controls = held_controls(20, roll_rate_rad_s=1.5, load_factor=-1.5, throttle=1.0)
+    short = fly_east_with_controls(100.0, controls[:, :3])
+    assert short.tobytes() == fly_east_with_controls(100.0, controls).tobytes()
 
 
 def test_load_factor_is_capped_by_lift_available_at_twice_stall_speed():
@@ -236,10 +354,10 @@ def test_default_preset_spans_the_benchmark_speed_envelope():
 def test_named_presets_pin_the_values_recorded_in_issue_2_decision_49():
     """Scenarios record the envelope by value, so this guards the preset table itself, not any replay."""
     assert {name: astuple(envelope) for name, envelope in PRESETS.items()} == {
-        "benchmark": (20.0, 250.0, 9.0, np.deg2rad(180.0)),
-        "small aerial object": (12.0, 45.0, 4.0, np.deg2rad(120.0)),
-        "light aircraft": (25.0, 70.0, 3.8, np.deg2rad(60.0)),
-        "jet": (70.0, 300.0, 9.0, np.deg2rad(240.0)),
+        "benchmark": (20.0, 250.0, 9.0, np.deg2rad(180.0), 2.0, -4.5, 3.0, 1.5),
+        "small aerial object": (12.0, 45.0, 4.0, np.deg2rad(120.0), 0.5, -2.0, 2.0, 1.0),
+        "light aircraft": (25.0, 70.0, 3.8, np.deg2rad(60.0), 0.3, -1.5, 2.0, 1.0),
+        "jet": (70.0, 300.0, 9.0, np.deg2rad(240.0), 1.0, -3.0, 3.0, 1.5),
     }
 
 

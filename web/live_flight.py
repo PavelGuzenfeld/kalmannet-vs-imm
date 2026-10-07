@@ -5,7 +5,7 @@ from dataclasses import asdict
 import numpy as np
 
 from data.config import NOMINAL, REGIMES
-from data.fixed_wing import DEFAULT_PRESET, PRESETS, Envelope, fly_steps
+from data.fixed_wing import DEFAULT_PRESET, PRESETS, Envelope, fly_steps, full_control_row
 from data.trajectory_gen import measure, scenario_start
 from filters.ekf import EKF
 from filters.flags import (
@@ -129,7 +129,7 @@ class LiveFlight:
         self._scores = {name: [] for name in self._filters}
 
     def advance(self, control):
-        self.controls.append([float(value) for value in control])
+        self.controls.append([float(value) for value in full_control_row(control)])
         self._truth, self._lift_direction = next(self._flight)
         self._z = measure(self._rng, self._truth[None], self._regime)[0]
         for name, steps in self._filters.items():

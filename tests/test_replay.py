@@ -10,8 +10,9 @@ import pytest
 import torch
 from scipy.stats import chi2
 
-from data.config import NOMINAL
-from data.trajectory_gen import fly_scenario
+from data.config import NOMINAL, REGIMES
+from data.fixed_wing import Envelope
+from data.trajectory_gen import fly_scenario, scenario_start
 from filters.ekf import EKF
 from filters.imm import IMM
 from filters.knet.gain_network import KalmanGainGRU
@@ -23,6 +24,7 @@ from filters.state import STATE_DIM
 from filters.ukf import UKF
 from scripts import eval as bench_eval
 from scripts.replay import main as replay_main
+from tests import fixed_wing_before_controls
 
 REPO = Path(__file__).resolve().parents[1]
 SCENARIO_DIR = REPO / "data" / "scenarios"
@@ -54,6 +56,22 @@ CROSS_PLATFORM_ATOL = 1e-6
 UNINFORMATIVE_R = np.diag([1e6, 1e6, 1e12])
 INIT_OFFSET_EAST_SOUTH_M = [2.0, -1.0, 0.0]
 START_ATOL_M = 1e-6
+BENCHMARK_CONTROL_LIMITS_ISSUE_106 = {
+    "max_side_load_factor": 2.0,
+    "max_negative_load_factor": -4.5,
+    "brake_drag_multiplier": 3.0,
+    "afterburner_thrust_multiplier": 1.5,
+}
+G = 9.80665
+
+
+def recorded_today(committed):
+    """A committed 3-column scenario as a recording writes it since #107: full rows, every new input neutral."""
+    return {
+        **committed,
+        "envelope": {**committed["envelope"], **BENCHMARK_CONTROL_LIMITS_ISSUE_106},
+        "controls": [[*row, 0.0, 0.0, 0.0] for row in committed["controls"]],
+    }
 
 
 @pytest.fixture
@@ -94,7 +112,7 @@ def test_record_rewrites_the_committed_seed_scenario_and_the_flags_it_tripped(tm
     assert recorded.read_text().endswith("}\n")
     committed = json.loads(SEED_SCENARIO.read_text())
     assert set(committed) == {"controls", "seed", "envelope", "noise_regime", "thresholds", "git_tag", "tripped"}
-    assert json.loads(recorded.read_text()) == {**committed, "git_tag": "recorded-sha"}
+    assert json.loads(recorded.read_text()) == {**recorded_today(committed), "git_tag": "recorded-sha"}
 
 
 def test_record_overhead_rewrites_the_committed_overhead_scenario(tmp_path, monkeypatch):
@@ -107,7 +125,34 @@ def test_record_overhead_rewrites_the_committed_overhead_scenario(tmp_path, monk
     replay_main()
 
     committed = json.loads(OVERHEAD_SCENARIO.read_text())
-    assert json.loads(recorded.read_text()) == {**committed, "git_tag": "recorded-sha"}
+    assert json.loads(recorded.read_text()) == {**recorded_today(committed), "git_tag": "recorded-sha"}
+
+
+@pytest.mark.parametrize("committed", [SEED_SCENARIO, OVERHEAD_SCENARIO], ids=lambda path: path.stem)
+def test_committed_3_column_scenario_flies_bit_for_bit_the_truth_it_flew_before_the_wider_control_row(committed):
+    """MS-27, #107: old rows replay with every new input neutral and, lacking the field, today's push limit."""
+    scenario = json.loads(committed.read_text())
+    regime = REGIMES[scenario["noise_regime"]]
+    start = scenario_start(scenario, np.random.default_rng(scenario["seed"]), regime)
+    controls = np.asarray(scenario["controls"], dtype=np.float64)
+    envelope = Envelope(**scenario["envelope"])
+
+    before = fixed_wing_before_controls.fly(envelope, start["position"], start["velocity"], 0.0, controls, regime.dt)
+    states, _ = fly_scenario(scenario)
+
+    assert states.tobytes() == before.tobytes()
+
+
+def test_scenario_rudder_row_side_slips_the_overhead_pass_toward_the_right_wing_at_max_side_g():
+    """MS-27: replay reads the 6-column row. The pass flies east wings level, so the right wing is south.
+    rtol 1e-12: the acceleration column is a velocity difference over dt."""
+    scenario = json.loads(OVERHEAD_SCENARIO.read_text())
+    scenario["envelope"] = {**scenario["envelope"], **BENCHMARK_CONTROL_LIMITS_ISSUE_106}
+    scenario["controls"] = [[0.0, 1.0, 1.0, 2.5, 0.0, 0.0]]
+
+    states, _ = fly_scenario(scenario)
+
+    np.testing.assert_allclose(states[0, 7], -2.0 * G, rtol=1e-12)
 
 
 def test_model_change_silently_shifts_a_recorded_scenario():
