@@ -25,6 +25,7 @@ from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import POS, VEL
 from filters.ukf import UKF
 from scripts.eval import ekf_like_steps, imm_steps, knet_steps, rkn_steps
+from web.holds import Holds
 
 NOISE_REGIMES = ["nominal", "high_noise", "low_noise", "heavy_tailed"]
 FILTER_NAMES = ("EKF", "UKF", "IMM", "KalmanNet", "RKN")
@@ -101,6 +102,8 @@ class LiveFlight:
             _latest(lambda: self.controls[-1]),
         )
         self._flight = fly_steps(envelope, position, velocity, 0.0, latest_control, self._regime.dt)
+        self._start = np.concatenate((position, velocity))
+        self.holds = Holds(envelope, self._regime.dt)
         self._truth, self._lift_direction, self._z = None, None, None
         truth, z = _latest(lambda: self._truth), _latest(lambda: self._z)
         R, dt = NOMINAL.R(), NOMINAL.dt
@@ -123,8 +126,16 @@ class LiveFlight:
         self._filters = {name: until_diverged(steps) for name, steps in self._filters.items()}
         self._scores = {name: [] for name in self._filters}
 
-    def advance(self, control):
-        self.controls.append([float(value) for value in full_control_row(control)])
+    def _current_state(self):
+        state = self._start if self._truth is None else self._truth
+        return state[POS], state[VEL]
+
+    def toggle_hold(self, name):
+        self.holds.toggle(name, *self._current_state())
+
+    def advance(self, control, manual_axes=()):
+        self.holds.disengage_axes(manual_axes)
+        self.controls.append(self.holds.steer(full_control_row(control), *self._current_state()))
         self._truth, self._lift_direction = next(self._flight)
         self._z = measure(self._rng, self._truth[None], self._regime)[0]
         for name, steps in self._filters.items():
@@ -156,6 +167,8 @@ class LiveFlight:
             "truth_m": self._truth[POS].tolist(),
             "truth_velocity_m_s": self._truth[VEL].tolist(),
             "truth_lift_direction": self._lift_direction.tolist(),
+            "holds": dict(self.holds.targets),
+            "control": self.controls[-1],
             "filters": readouts,
             "trips": trips,
             "flags": {
