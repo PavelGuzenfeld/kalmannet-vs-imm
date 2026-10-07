@@ -38,6 +38,10 @@ class Envelope:
     brake_drag_multiplier: float = 1.0
     afterburner_thrust_multiplier: float = 1.0
 
+    def __post_init__(self) -> None:
+        if self.max_negative_load_factor is not None and self.max_negative_load_factor > 0.0:
+            raise ValueError(f"max_negative_load_factor is signed negative, got {self.max_negative_load_factor}")
+
     @property
     def best_glide_speed_m_s(self) -> float:
         """Geometric mean of the speed range: a simplification until per-airframe polars are needed."""

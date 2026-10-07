@@ -1,7 +1,7 @@
 import os
 import subprocess
 import sys
-from dataclasses import astuple
+from dataclasses import astuple, replace
 
 import numpy as np
 import pytest
@@ -432,3 +432,13 @@ def test_coasting_climb_trades_speed_for_height_at_g_sin_path_angle():
     assert_step_acceleration(states[0, 6:9] @ climb_direction, -G / 2.0)
     assert np.all(np.diff(speeds(states)) < 0.0)
     assert np.all(np.diff(states[:, 2]) > 0.0)
+
+
+@pytest.mark.parametrize("positive", [2.0, 1e-9])
+def test_positive_max_negative_load_factor_is_rejected(positive):
+    with pytest.raises(ValueError):
+        replace(CONTROLS_ENVELOPE, max_negative_load_factor=positive)
+
+
+def test_zero_max_negative_load_factor_is_accepted():
+    replace(CONTROLS_ENVELOPE, max_negative_load_factor=0.0)
