@@ -412,6 +412,8 @@ def test_a_raw_error_threshold_far_under_the_peak_errors_diverges_no_filter(tmp_
         "UKF": False,
         "IMM": False,
     }
+
+
 MANOEUVRE_CRUISE_CONTROL = [0.0, 1.0, 0.6, 0.0, 0.0, 0.0]
 MANOEUVRE_START = {"position": [0.0, 0.0, 3000.0], "velocity": [150.0, 0.0, 0.0]}
 
