@@ -29,6 +29,12 @@ const STANDARD_B = 1;
 const STANDARD_LEFT_BUMPER = 4;
 const STANDARD_RIGHT_BUMPER = 5;
 const LEGACY_ENVELOPE = { max_side_load_factor: 0, brake_drag_multiplier: 1, afterburner_thrust_multiplier: 1 };
+const ROW_ROLL_RATE = 0;
+const ROW_LOAD_FACTOR = 1;
+const ROW_THROTTLE = 2;
+const ROW_SPEED_BRAKE = 4;
+const ROW_AFTERBURNER = 5;
+const HOLD_KEYS = { KeyH: "heading", KeyJ: "altitude", KeyK: "speed", KeyL: "bank" };
 const STEP_COST_WINDOW = 100;
 const STEP_BUDGET_MS = 20;
 const TRAIL_LENGTH = 3000;
@@ -55,7 +61,7 @@ let throttle = CRUISE_THROTTLE;
 let manoeuvreStep = null;
 let latestControl = [0, 1, CRUISE_THROTTLE, 0, 0, 0];
 const keyAxes = { roll: 0, pull: 0, rudder: 0 };
-let steering = { roll: 0, pull: 0, rudder: 0, brake: 0, afterburner: 0 };
+let steering = { roll: 0, pull: 0, rudder: 0, brake: 0, afterburner: 0, manualAxes: [] };
 let trails = {};
 let stepCosts = [];
 let history = [];
@@ -143,14 +149,25 @@ function stickInput(elapsedS) {
   keyAxes.rudder = rampToward(keyAxes.rudder, key("KeyD") - key("KeyA"), elapsedS);
   const padActive = Boolean(pad) && (pad.axes.some((value) => Math.abs(value) > STICK_DEADZONE) || pad.buttons.some((pressed) => pressed.pressed || pressed.value > 0));
   const button = (index) => (pad?.buttons[index]?.pressed ? 1 : 0);
+  const throttleRate = trigger(STANDARD_RIGHT_TRIGGER) - trigger(STANDARD_LEFT_TRIGGER) + key("KeyW") - key("KeyS");
+  const brake = Math.max(button(STANDARD_B), key("Space"));
+  const afterburner = Math.max(button(STANDARD_A), key("ShiftLeft"), key("ShiftRight"));
+  const touched = {
+    [ROW_ROLL_RATE]: axis(0) || key("ArrowRight") || key("ArrowLeft"),
+    [ROW_LOAD_FACTOR]: axis(1) || key("ArrowDown") || key("ArrowUp"),
+    [ROW_THROTTLE]: throttleRate,
+    [ROW_SPEED_BRAKE]: brake,
+    [ROW_AFTERBURNER]: afterburner,
+  };
   return {
     manual: heldKeys.size > 0 || padActive,
+    manualAxes: Object.keys(touched).filter((column) => touched[column]).map(Number),
     rudder: clamp(button(STANDARD_RIGHT_BUMPER) - button(STANDARD_LEFT_BUMPER) + keyAxes.rudder, -1, 1),
-    brake: Math.max(button(STANDARD_B), key("Space")),
-    afterburner: Math.max(button(STANDARD_A), key("ShiftLeft"), key("ShiftRight")),
+    brake,
+    afterburner,
     roll: clamp(axis(0) + keyAxes.roll, -1, 1),
     pull: clamp(axis(1) + keyAxes.pull, -1, 1),
-    throttleRate: trigger(STANDARD_RIGHT_TRIGGER) - trigger(STANDARD_LEFT_TRIGGER) + key("KeyW") - key("KeyS"),
+    throttleRate,
   };
 }
 
@@ -192,6 +209,13 @@ function renderSteeringHud() {
   }
 }
 
+function renderHolds(frame) {
+  for (const name of Object.values(HOLD_KEYS)) {
+    byId("steering-hud").querySelector(`[data-hud-hold="${name}"]`).dataset.engaged = String(name in frame.holds);
+  }
+  if ("speed" in frame.holds) throttle = frame.control[ROW_THROTTLE];
+}
+
 function advance(steps) {
   const controls = script ? script.slice(stepsSent, stepsSent + steps) : Array(steps).fill(latestControl);
   if (!controls.length) {
@@ -200,7 +224,7 @@ function advance(steps) {
   }
   stepsSent += controls.length;
   awaitingWorker = true;
-  worker.postMessage(toWorker.advance(controls));
+  worker.postMessage(toWorker.advance(controls, script ? [] : steering.manualAxes));
 }
 
 function tick(now) {
@@ -326,6 +350,7 @@ const replies = {
     renderViews(frame);
     renderClock(frame);
     renderManoeuvre(frame);
+    renderHolds(frame);
   },
   scenario({ json }) {
     const link = document.createElement("a");
@@ -386,6 +411,11 @@ for (const tab of document.querySelectorAll("[data-tab]")) {
 }
 byId("export").addEventListener("click", () => stepsSent && worker.postMessage(toWorker.exportScenario()));
 addEventListener("keydown", (event) => {
+  if (event.code in HOLD_KEYS && flying && !script && !event.repeat && !event.target.matches("input, select")) {
+    worker.postMessage(toWorker.toggleHold(HOLD_KEYS[event.code]));
+    event.preventDefault();
+    return;
+  }
   if (MANOEUVRE_KEYS.includes(event.code) && !event.target.matches("input, select")) startManoeuvre(MANOEUVRE_KEYS.indexOf(event.code));
   if (!STEERING_KEYS.has(event.code) || event.target.matches("input, select")) return;
   heldKeys.add(event.code);

@@ -28,6 +28,7 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection
 from scipy.stats import chi2
 
 from filters.ekf import EKF
+from filters.flags import until_diverged
 from filters.imm import IMM
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.knet_filter import KalmanNetFilter
@@ -37,9 +38,9 @@ from filters.motion_models import LABEL_NAMES, cv_model
 from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import STATE_DIM
 from filters.ukf import UKF
+from scripts.eval import ekf_like_steps, imm_steps
 
 _INIT_OFFSET = np.array([2.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-_P0_CLASSICAL = np.diag([50.0, 50.0, 50.0, 5.0, 5.0, 5.0, 1.0, 1.0, 1.0])
 
 # Filter display order, labels, colors. Ground truth is drawn separately.
 FILTERS = ["EKF", "UKF", "IMM", "KalmanNet", "RKN"]
@@ -78,8 +79,8 @@ def run_all_filters(states, z, dt, R, knet_ckpt, rkn_ckpt, rkn_mults):
     est[name][T,3] positions, err[name][T] position error, nees[name][T]
     (nan where unavailable), and mus[T,4] IMM mode probabilities."""
     T = states.shape[0]
-    est = {n: np.zeros((T, 3)) for n in FILTERS}
-    err = {n: np.zeros(T) for n in FILTERS}
+    est = {n: np.full((T, 3), np.nan) for n in FILTERS}
+    err = {n: np.full(T, np.nan) for n in FILTERS}
     nees = {n: np.full(T, np.nan) for n in FILTERS}
     mus = np.zeros((T, 4))
 
@@ -91,32 +92,25 @@ def run_all_filters(states, z, dt, R, knet_ckpt, rkn_ckpt, rkn_mults):
         if P is not None:
             nees[name][t] = _nees(e, P)
 
-    # --- EKF ---
-    ekf = EKF(dt, R)
-    x, P = states[0] + _INIT_OFFSET, _P0_CLASSICAL.copy()
-    for t in range(T):
-        x, P, _, _ = ekf.update(x, P, z[t]) if t == 0 else ekf.step(x, P, z[t])
-        record("EKF", t, x, P)
+    def record_run(name, estimates):
+        scored = ((x_est - states[t], x_est, P) for t, (x_est, P) in enumerate(estimates))
+        for t, (_, x_est, P) in enumerate(until_diverged(scored)):
+            record(name, t, x_est, P)
 
-    # --- UKF ---
-    ukf = UKF(dt, R)
-    x, P = states[0] + _INIT_OFFSET, _P0_CLASSICAL.copy()
-    for t in range(T):
-        if t == 0:
-            pts = ukf._sigma_points(x, P)
-            x, P, _, _ = ukf.update(x, P, pts, z[t])
-        else:
-            x, P, _, _ = ukf.step(x, P, z[t])
-        record("UKF", t, x, P)
+    def record_scored(name, steps, snapshot=None):
+        for t, (e, step_nees, _) in enumerate(until_diverged(steps)):
+            est[name][t] = states[t, :3] + e[:3]
+            err[name][t] = np.linalg.norm(e[:3])
+            nees[name][t] = step_nees
+            if snapshot:
+                mus[t] = snapshot["mu"]
 
-    # --- IMM (tuned) ---
+    record_scored("EKF", ekf_like_steps(EKF(dt, R), states, z))
+    record_scored("UKF", ekf_like_steps(UKF(dt, R), states, z))
     imm_best = json.loads(Path("results/imm_tuning.json").read_text())["best"]
+    imm_snapshot = {}
     imm = IMM(dt, R, **imm_kwargs_from_tuning(imm_best))
-    state = imm.init_state(states[0] + _INIT_OFFSET, _P0_CLASSICAL.copy())
-    for t in range(T):
-        x, P, state, _, _ = imm.step(state, z[t])
-        record("IMM", t, x, P)
-        mus[t] = state["mu"]
+    record_scored("IMM", imm_steps(imm, states, z, imm_snapshot), imm_snapshot)
 
     # --- vanilla KalmanNet (no covariance -> no NEES) ---
     _, Q = cv_model(dt)
@@ -131,9 +125,7 @@ def run_all_filters(states, z, dt, R, knet_ckpt, rkn_ckpt, rkn_mults):
     kflt.init_sequence(x0, prior_Q, prior_Sigma, prior_S)
     z_t = torch.tensor(z, dtype=torch.float64)
     with torch.no_grad():
-        for t in range(T):
-            x_est = kflt.step(z_t[t].unsqueeze(0))[0].numpy()
-            record("KalmanNet", t, x_est)
+        record_run("KalmanNet", ((kflt.step(z_t[t].unsqueeze(0))[0].numpy(), None) for t in range(T)))
 
     # --- Recursive KalmanNet ---
     rnet = RKNGainCovNetwork(fc1_mult=rkn_mults[0], hidden_mult=rkn_mults[1], fc2_mult=rkn_mults[2]).double()
@@ -144,9 +136,8 @@ def run_all_filters(states, z, dt, R, knet_ckpt, rkn_ckpt, rkn_mults):
     P0 = torch.eye(STATE_DIM, dtype=torch.float64).unsqueeze(0) * 100.0
     rflt.init_sequence(x0, P0)
     with torch.no_grad():
-        for t in range(T):
-            x_est, P_est = rflt.step(z_t[t].unsqueeze(0))
-            record("RKN", t, x_est[0].numpy(), P_est[0].numpy())
+        stepped = (rflt.step(z_t[t].unsqueeze(0)) for t in range(T))
+        record_run("RKN", ((x_est[0].numpy(), P_est[0].numpy()) for x_est, P_est in stepped))
 
     return est, err, nees, mus
 
@@ -157,8 +148,8 @@ def scene_limits(states, est, max_side_m):
     ones to a dot (it clips instead -- an honest 'lost it' signal)."""
     pts = [states[:, :3]] + [est[n] for n in FILTERS]
     allp = np.concatenate(pts, axis=0)
-    ctr = 0.5 * (allp.min(axis=0) + allp.max(axis=0))
-    span = (allp.max(axis=0) - allp.min(axis=0)).max() * 1.1
+    ctr = 0.5 * (np.nanmin(allp, axis=0) + np.nanmax(allp, axis=0))
+    span = (np.nanmax(allp, axis=0) - np.nanmin(allp, axis=0)).max() * 1.1
     side = min(max(span, 1000.0), max_side_m)
     half = side / 2.0
     return ctr, half
@@ -235,14 +226,17 @@ def build_animation(states, est, err, nees, mus, labels, dt, args):
         ax_err.set_yticks(range(len(FILTERS))); ax_err.set_yticklabels(FILTERS, fontsize=8)
         ax_err.invert_yaxis()
         ax_err.set_title("position error (m, log)", fontsize=9)
-        for i, v in enumerate(vals):
-            ax_err.text(v, i, f" {v:.1f}", va="center", fontsize=7)
+        for i, (n, v) in enumerate(zip(FILTERS, vals)):
+            label = " stopped: diverged" if np.isnan(err[n][t]) else f" {v:.1f}"
+            ax_err.text(0.15 if np.isnan(v) else v, i, label, va="center", fontsize=7)
 
         # HUD: NEES bars (log) with chi-square band; KalmanNet -> N/A
         ax_nees.clear()
         ax_nees.axvspan(_CHI2_LO, _CHI2_HI, color="gray", alpha=0.25)
         for i, n in enumerate(FILTERS):
-            if HAS_NEES[n]:
+            if np.isnan(err[n][t]):
+                ax_nees.text(0.15, i, "stopped: diverged", va="center", fontsize=7, color=COLORS[n])
+            elif HAS_NEES[n]:
                 v = max(nees[n][t], 1e-2) if np.isfinite(nees[n][t]) else 1e-2
                 ax_nees.barh(i, v, color=COLORS[n])
                 ax_nees.text(v, i, f" {v:.1f}", va="center", fontsize=7)

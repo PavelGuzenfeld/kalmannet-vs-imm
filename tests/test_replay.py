@@ -14,6 +14,7 @@ from data.config import NOMINAL, REGIMES
 from data.fixed_wing import Envelope
 from data.trajectory_gen import fly_scenario, scenario_start
 from filters.ekf import EKF
+from filters.flags import DEFAULT_THRESHOLDS
 from filters.imm import IMM
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.rkn_network import RKNGainCovNetwork
@@ -325,3 +326,73 @@ def test_classical_filters_start_2_m_east_and_1_m_south_of_the_truth(run, make_f
     err, _, _ = run(make_filter(UNINFORMATIVE_R), truth, h(truth[0])[None])
 
     np.testing.assert_allclose(err[0, :3], INIT_OFFSET_EAST_SOUTH_M, rtol=0.0, atol=START_ATOL_M)
+
+
+DIVERGES_AT_STEP = 3
+SCRIPTED_STEPS = 40
+
+
+class ScriptedFilter:
+    """Estimates 1 m of position error, then 300 m from DIVERGES_AT_STEP on; its NIS would jump only after it."""
+
+    def __init__(self):
+        self.steps = 0
+
+    def update(self, x, P, z):
+        return self.step(x, P, z)
+
+    def step(self, x, P, z):
+        estimate, innovation = np.zeros(STATE_DIM), np.zeros(3)
+        estimate[0] = 1.0 if self.steps < DIVERGES_AT_STEP else 300.0
+        innovation[0] = 0.0 if self.steps <= DIVERGES_AT_STEP else 1e3
+        self.steps += 1
+        return estimate, np.eye(STATE_DIM), innovation, np.eye(3)
+
+    def init_state(self, x, P):
+        return {"mu": np.full(4, 0.25)}
+
+
+class ScriptedIMM(ScriptedFilter):
+    def __init__(self, dt, R, **tuned):
+        super().__init__()
+
+    def step(self, state, z):
+        estimate, P, innovation, S = super().step(None, None, z)
+        return estimate, P, state, innovation, S
+
+
+def scripted_replay(monkeypatch, imm_tuning):
+    from scripts import replay as replay_script
+
+    made = []
+
+    def scripted(*args, **kwargs):
+        made.append(ScriptedFilter())
+        return made[-1]
+
+    def scripted_imm(dt, R, **tuned):
+        made.append(ScriptedIMM(dt, R, **tuned))
+        return made[-1]
+
+    flight = (np.zeros((SCRIPTED_STEPS, STATE_DIM)), np.zeros((SCRIPTED_STEPS, 3)))
+    monkeypatch.setattr(replay_script, "fly_scenario", lambda scenario: flight)
+    monkeypatch.setattr(replay_script, "EKF", scripted)
+    monkeypatch.setattr(replay_script, "UKF", scripted)
+    monkeypatch.setattr(replay_script, "IMM", scripted_imm)
+    scenario = {"thresholds": {**DEFAULT_THRESHOLDS, "raw_error_m": 1e9}}
+    missing = imm_tuning.parent / "missing"
+    return replay_script.replay(scenario, imm_tuning, missing, missing), made
+
+
+def test_replay_pulls_each_diverged_filter_through_its_divergence_step_and_no_further(monkeypatch, imm_tuning):
+    _, made = scripted_replay(monkeypatch, imm_tuning)
+
+    assert [flt.steps for flt in made] == [DIVERGES_AT_STEP + 1] * 3
+
+
+def test_replay_does_not_trip_a_flag_that_would_only_trip_after_the_divergence_step(monkeypatch, imm_tuning):
+    """Past the divergence step the innovation reads 1e3 (track_loss) and NEES 9e4 for 25 steps (overconfidence)."""
+    tripped, _ = scripted_replay(monkeypatch, imm_tuning)
+
+    cut_flags = {"track_loss": None, "overconfidence": None, "raw_error": None, "diverged": DIVERGES_AT_STEP}
+    assert [tripped[name] for name in ("EKF", "UKF", "IMM")] == [cut_flags] * 3

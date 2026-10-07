@@ -6,7 +6,7 @@ test_paths = ["tests"]
 # back by absolute path, and /work-rooted paths never match.
 test_command = "docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONPATH=$PWD -v $PWD:$PWD -w $PWD kalmannet-bench:cpu pytest -q -p no:cacheprovider {tests}"
 # --cov takes packages, not file paths: `--cov=filters/imm.py` collects nothing.
-coverage_command = "docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONPATH=$PWD -v $PWD:$PWD -w $PWD kalmannet-bench:cpu pytest -q -p no:cacheprovider --cov=filters --cov=data --cov-context=test --cov-report= {tests}"
+coverage_command = "docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e PYTHONPATH=$PWD -v $PWD:$PWD -w $PWD kalmannet-bench:cpu pytest -q -p no:cacheprovider --cov=filters --cov=data --cov=web --cov-context=test --cov-report= {tests}"
 
 # Model-V&V scope (dotfiles#56). Declared, not inferred: a diff here needs
 # issue #1 (pinned) and a diff-touched test importing one of these must cite

@@ -284,3 +284,32 @@ def test_a_legacy_scenario_gets_neutral_defaults_for_the_new_limits(browser):
     flown = json.loads(Path(download.value.path()).read_text())["envelope"]
     assert shown == (0.0, -LEGACY_MAX_LOAD_FACTOR, 1.0, 1.0)
     assert tuple(flown[key] for key in SLIDER_IDS) == shown
+
+
+WORKER_REPLY_POLLS = 600
+WORKER_REPLY_POLL_MS = 50
+
+
+def run_until(page, condition):
+    for _ in range(WORKER_REPLY_POLLS):
+        page.clock.run_for(4 * FRAME_MS)
+        if page.evaluate(condition):
+            return True
+        page.wait_for_timeout(WORKER_REPLY_POLL_MS)
+    return False
+
+
+def hold_engaged_js(name, engaged):
+    return f"document.querySelector('[data-hud-hold=\"{name}\"]').dataset.engaged === '{str(engaged).lower()}'"
+
+
+def test_j_engages_altitude_hold_and_pulling_the_stick_disengages_it(browser):
+    page = flying_page(browser)
+
+    page.keyboard.press("KeyJ")
+    assert run_until(page, hold_engaged_js("altitude", True))
+
+    press_and_wait_for_keydown(page, "ArrowDown")
+    assert run_until(page, hold_engaged_js("altitude", False))
+    page.clock.run_for(HOLD_MS)
+    assert recorded_rows(page)[-1][ROW_LOAD_FACTOR] > 1

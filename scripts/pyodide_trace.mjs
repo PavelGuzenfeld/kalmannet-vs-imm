@@ -5,7 +5,7 @@ const [pyodideModule, outPath, ...scenarioPaths] = process.argv.slice(2);
 const { loadPyodide } = await import(pyodideModule);
 const SITE_DIR = "/repo";
 const PYTHON_TREES = ["data", "filters"];
-const PYTHON_FILES = ["scripts/eval.py", "web/live_flight.py", "web/manoeuvres.py"];
+const PYTHON_FILES = ["scripts/eval.py", "web/holds.py", "web/live_flight.py", "web/manoeuvres.py"];
 
 function sourceFiles() {
   const trees = PYTHON_TREES.flatMap((tree) => walk(tree));
