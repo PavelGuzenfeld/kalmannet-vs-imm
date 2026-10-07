@@ -16,6 +16,7 @@ const ENVELOPE_SLIDERS = {
   max_roll_rate_rad_s: { id: "max_roll_rate_deg_s", toSlider: (rad) => (rad * 180) / Math.PI, fromSlider: (deg) => (deg * Math.PI) / 180 },
 };
 const STEERING_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "KeyW", "KeyS", "KeyA", "KeyD", "Space", "ShiftLeft", "ShiftRight"]);
+const MANOEUVRE_KEYS = ["Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6"];
 const MAX_STEPS_PER_MESSAGE = 10;
 const CRUISE_THROTTLE = 0.6;
 const THROTTLE_RATE_PER_S = 0.5;
@@ -51,6 +52,7 @@ let owedSteps = 0;
 let awaitingWorker = true;
 let lastTick = performance.now();
 let throttle = CRUISE_THROTTLE;
+let manoeuvreStep = null;
 let latestControl = [0, 1, CRUISE_THROTTLE, 0, 0, 0];
 const keyAxes = { roll: 0, pull: 0, rudder: 0 };
 let steering = { roll: 0, pull: 0, rudder: 0, brake: 0, afterburner: 0 };
@@ -139,8 +141,10 @@ function stickInput(elapsedS) {
   keyAxes.roll = rampToward(keyAxes.roll, key("ArrowRight") - key("ArrowLeft"), elapsedS);
   keyAxes.pull = rampToward(keyAxes.pull, key("ArrowDown") - key("ArrowUp"), elapsedS);
   keyAxes.rudder = rampToward(keyAxes.rudder, key("KeyD") - key("KeyA"), elapsedS);
+  const padActive = Boolean(pad) && (pad.axes.some((value) => Math.abs(value) > STICK_DEADZONE) || pad.buttons.some((pressed) => pressed.pressed || pressed.value > 0));
   const button = (index) => (pad?.buttons[index]?.pressed ? 1 : 0);
   return {
+    manual: heldKeys.size > 0 || padActive,
     rudder: clamp(button(STANDARD_RIGHT_BUMPER) - button(STANDARD_LEFT_BUMPER) + keyAxes.rudder, -1, 1),
     brake: Math.max(button(STANDARD_B), key("Space")),
     afterburner: Math.max(button(STANDARD_A), key("ShiftLeft"), key("ShiftRight")),
@@ -150,9 +154,27 @@ function stickInput(elapsedS) {
   };
 }
 
+function cancelManoeuvre() {
+  manoeuvreStep = null;
+  worker.postMessage(toWorker.manoeuvre(null));
+}
+
+function startManoeuvre(index) {
+  if (!flying || script || !options.manoeuvres[index]) return;
+  manoeuvreStep = stepsSent;
+  worker.postMessage(toWorker.manoeuvre(options.manoeuvres[index]));
+}
+
+function renderManoeuvre(frame) {
+  if (manoeuvreStep !== null && frame.manoeuvre === null && frame.step > manoeuvreStep) manoeuvreStep = null;
+  byId("manoeuvre-hud").dataset.manoeuvre = frame.manoeuvre ?? "";
+  byId("manoeuvre-hud").textContent = frame.manoeuvre ?? "";
+}
+
 function readControl(elapsedS) {
   const stick = stickInput(elapsedS);
   steering = stick;
+  if (manoeuvreStep !== null && stick.manual) cancelManoeuvre();
   const { max_roll_rate_rad_s, max_load_factor, max_side_load_factor, max_negative_load_factor } = flightSetup.envelope;
   throttle = clamp(throttle + stick.throttleRate * THROTTLE_RATE_PER_S * elapsedS, 0, 1);
   const loadFactor = stick.pull >= 0 ? 1 + stick.pull * (max_load_factor - 1) : 1 + stick.pull * (1 - max_negative_load_factor);
@@ -303,6 +325,7 @@ const replies = {
     renderPlan(frame);
     renderViews(frame);
     renderClock(frame);
+    renderManoeuvre(frame);
   },
   scenario({ json }) {
     const link = document.createElement("a");
@@ -363,6 +386,7 @@ for (const tab of document.querySelectorAll("[data-tab]")) {
 }
 byId("export").addEventListener("click", () => stepsSent && worker.postMessage(toWorker.exportScenario()));
 addEventListener("keydown", (event) => {
+  if (MANOEUVRE_KEYS.includes(event.code) && !event.target.matches("input, select")) startManoeuvre(MANOEUVRE_KEYS.indexOf(event.code));
   if (!STEERING_KEYS.has(event.code) || event.target.matches("input, select")) return;
   heldKeys.add(event.code);
   event.preventDefault();

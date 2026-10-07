@@ -412,3 +412,42 @@ def test_a_raw_error_threshold_far_under_the_peak_errors_diverges_no_filter(tmp_
         "UKF": False,
         "IMM": False,
     }
+MANOEUVRE_CRUISE_CONTROL = [0.0, 1.0, 0.6, 0.0, 0.0, 0.0]
+MANOEUVRE_START = {"position": [0.0, 0.0, 3000.0], "velocity": [150.0, 0.0, 0.0]}
+
+
+def manoeuvre_flight(tmp_path):
+    setup = {
+        "seed": SEED_SCENARIO_SEED,
+        "envelope": asdict(PRESETS[DEFAULT_PRESET]),
+        "noise_regime": "nominal",
+        "thresholds": DEFAULT_THRESHOLDS,
+        "start": MANOEUVRE_START,
+    }
+    return LiveFlight(setup, json.loads(PAGE_IMM_TUNING.read_text())["best"], tmp_path)
+
+
+def test_manoeuvre_runs_to_its_end_ignoring_the_pilot_rows_then_the_pilot_resumes(tmp_path):
+    flight = manoeuvre_flight(tmp_path)
+    flight.start_manoeuvre("split-S")
+    assert flight.manoeuvre == "split-S"
+    while flight.manoeuvre:
+        flight.advance(MANOEUVRE_CRUISE_CONTROL)
+    assert len(flight.controls) > 200
+    assert flight.controls[-1] == MANOEUVRE_CRUISE_CONTROL
+    assert MANOEUVRE_CRUISE_CONTROL not in flight.controls[:-1]
+    assert flight.frame()["manoeuvre"] is None
+    assert flight.frame()["truth_m"][2] < MANOEUVRE_START["position"][2] - 300.0
+
+
+def test_cancelled_manoeuvre_hands_the_very_next_step_back_to_the_pilot_row(tmp_path):
+    flight = manoeuvre_flight(tmp_path)
+    flight.start_manoeuvre("jink")
+    for _ in range(10):
+        flight.advance(MANOEUVRE_CRUISE_CONTROL)
+    assert flight.frame()["manoeuvre"] == "jink"
+    flight.cancel_manoeuvre()
+    flight.advance(MANOEUVRE_CRUISE_CONTROL)
+    assert flight.controls[-1] == MANOEUVRE_CRUISE_CONTROL
+    assert flight.frame()["manoeuvre"] is None
+    assert flight.controls[0][3] == PRESETS[DEFAULT_PRESET].max_side_load_factor
