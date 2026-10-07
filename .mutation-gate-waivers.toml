@@ -239,3 +239,27 @@ check = "no-citation"
 file = "tests/test_plot_data.py"
 test = "test_anees_between_two_flights_cuts_averages_only_the_flight_still_running"
 reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_page_pulls_each_diverged_filter_through_its_divergence_step_and_no_further"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the path applies it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_page_does_not_trip_a_flag_that_would_only_trip_after_the_divergence_step"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the path applies it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_replay.py"
+test = "test_replay_pulls_each_diverged_filter_through_its_divergence_step_and_no_further"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the path applies it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_replay.py"
+test = "test_replay_does_not_trip_a_flag_that_would_only_trip_after_the_divergence_step"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the path applies it."

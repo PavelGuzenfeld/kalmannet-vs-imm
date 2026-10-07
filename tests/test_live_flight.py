@@ -412,3 +412,45 @@ def test_a_raw_error_threshold_far_under_the_peak_errors_diverges_no_filter(tmp_
         "UKF": False,
         "IMM": False,
     }
+
+
+SCRIPTED_DIVERGES_AT_STEP = 3
+SCRIPTED_PAGE_STEPS = 10
+
+
+def scripted_filter_steps(pulled):
+    def steps(*args, **kwargs):
+        count = [0]
+        pulled.append(count)
+        for step in range(SCRIPTED_PAGE_STEPS * 2):
+            count[0] += 1
+            error_m = 1.0 if step < SCRIPTED_DIVERGES_AT_STEP else 300.0
+            err = np.zeros(9)
+            err[0] = error_m
+            yield err, error_m**2, 0.0 if step <= SCRIPTED_DIVERGES_AT_STEP else 1e3
+
+    return steps
+
+
+def scripted_page_flight(monkeypatch, tmp_path):
+    from web import live_flight
+
+    pulled = []
+    monkeypatch.setattr(live_flight, "ekf_like_steps", scripted_filter_steps(pulled))
+    monkeypatch.setattr(live_flight, "imm_steps", scripted_filter_steps(pulled))
+    thresholds = {**DEFAULT_THRESHOLDS, "raw_error_m": 1e9}
+    return page_flight(tmp_path, thresholds=thresholds, steps=SCRIPTED_PAGE_STEPS), pulled
+
+
+def test_page_pulls_each_diverged_filter_through_its_divergence_step_and_no_further(monkeypatch, tmp_path):
+    flight, pulled = scripted_page_flight(monkeypatch, tmp_path)
+
+    assert [count[0] for count in pulled] == [SCRIPTED_DIVERGES_AT_STEP + 1] * 3
+    assert {r["diverged_step"] for r in flight.readouts().values()} == {SCRIPTED_DIVERGES_AT_STEP}
+
+
+def test_page_does_not_trip_a_flag_that_would_only_trip_after_the_divergence_step(monkeypatch, tmp_path):
+    """Past the divergence step the innovation reads 1e3, which would trip track_loss at the next step."""
+    flight, _ = scripted_page_flight(monkeypatch, tmp_path)
+
+    assert {name: found["track_loss"] for name, found in flight.trips().items()} == {"EKF": None, "UKF": None, "IMM": None}
