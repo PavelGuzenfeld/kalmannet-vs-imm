@@ -200,12 +200,13 @@ numbers mean the same thing as before.
 Full CSV: `results/results_table.csv`
 (classical filters) + `results/knet_test_rmse.csv` / `results/rkn_test_rmse.csv` (learned filters);
 full high-MC JSON: `results/anees_highmc.json` (classical) + `results/rkn_eval.json` (RKN); plots
-(`scripts/make_plots.py`, which does not apply the divergence rule) in `results/plots/`:
-`trajectory_overlay.png` (a maneuvering test trajectory — IMM tracks the turn the CV-only floor
-cuts the corner on), `rmse_vs_time.png` (EKF/UKF grow steadily from ~1 m to ~280 m over 15 s as
-maneuvers accumulate; IMM stays flat near 1 m throughout), `nees_vs_time.png` (EKF's ANEES reaches
-~10^7 against an expected value of 9; IMM's oscillates around the expected value near the
-chi-square band), `coverage.png` (EKF/UKF near zero, IMM near nominal, RKN in between),
+(`scripts/make_plots.py`, which stops each run at its divergence step like the evaluators) in
+`results/plots/`: `trajectory_overlay.png` (a maneuvering test trajectory — IMM tracks the turn the
+CV-only floor cuts the corner on), `rmse_vs_time.png` (EKF/UKF grow from ~1 m to ~85 m by 7.5 s as
+maneuvers accumulate, then saw-tooth between ~60 m and ~85 m as runs that pass 200 m drop out of
+the average; IMM stays flat near 1 m throughout), `nees_vs_time.png` (EKF's ANEES peaks at
+~4x10^6 near 8 s against an expected value of 9, stepping down as diverged runs drop out; IMM's
+oscillates around the expected value near the chi-square band), `coverage.png` (EKF/UKF near zero, IMM near nominal, RKN in between),
 `accuracy_vs_intensity.png` (RKN within ~1.3x of IMM everywhere and below it on `high_maneuver`;
 vanilla KalmanNet and EKF/UKF two orders of magnitude above both), `latency_vs_parameters.png` (the
 reference-default RKN sizing sits far above the 2 ms line; every trained/deployed variant sits
