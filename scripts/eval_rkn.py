@@ -18,12 +18,23 @@ from data.config import NOMINAL
 from data.trajectory_gen import fly_scenario
 from filters.knet.rkn_filter import RKNFilter
 from filters.knet.rkn_network import RKNGainCovNetwork
-from filters.metrics import anees_with_bounds, empirical_coverage, fraction_inside_bounds
+from filters.flags import until_diverged
+from filters.metrics import (
+    anees_over_counted,
+    counted_mean,
+    anees_with_bounds,
+    counted_mask,
+    counted_span,
+    divergence_steps,
+    divergence_summary,
+    empirical_coverage,
+)
 from filters.state import POS, STATE_DIM, VEL
 from scripts.eval import error_and_nees
 
 _INIT_OFFSET = torch.tensor([2.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=torch.float64)
 _BURN_IN = 20
+CSV_SUMMARY_KEYS = ("pos_rmse", "vel_rmse", "diverged_fraction", "median_divergence_step")
 
 
 def evaluate_dataset(net, dt, states, measurements):
@@ -33,8 +44,8 @@ def evaluate_dataset(net, dt, states, measurements):
     way the classical filters' S is; NEES/coverage is the calibration
     signal this evaluation targets, matching the brief's headline metric.)"""
     N, mc, T, _ = measurements.shape
-    err = np.zeros((N, mc, T, STATE_DIM))
-    nees = np.zeros((N, mc, T))
+    err = np.full((N, mc, T, STATE_DIM), np.nan)
+    nees = np.full((N, mc, T), np.nan)
 
     with torch.no_grad():
         for i in range(N):
@@ -45,28 +56,32 @@ def evaluate_dataset(net, dt, states, measurements):
                 x0 = x_true[:, 0, :] + _INIT_OFFSET
                 P0 = torch.eye(STATE_DIM, dtype=torch.float64).unsqueeze(0) * 100.0
                 flt.init_sequence(x0, P0)
-                for t in range(T):
-                    x_upd, _ = flt.step(z[:, t, :])
-                    err[i, m, t], nees[i, m, t] = error_and_nees(
-                        x_upd[0].numpy(), flt.S[0].numpy(), x_true[0, t].numpy()
-                    )
+                steps = (
+                    error_and_nees(flt.step(z[:, t, :])[0][0].numpy(), flt.S[0].numpy(), x_true[0, t].numpy())
+                    for t in range(T)
+                )
+                for t, (step_err, step_nees) in enumerate(until_diverged(steps)):
+                    err[i, m, t], nees[i, m, t] = step_err, step_nees
     return {"err": err, "nees": nees}
 
 
-def summarize(result, burn_in=_BURN_IN):
-    err = result["err"][:, :, burn_in:, :]
-    pos_rmse = float(np.sqrt(np.mean(np.sum(err[..., POS] ** 2, axis=-1))))
-    vel_rmse = float(np.sqrt(np.mean(np.sum(err[..., VEL] ** 2, axis=-1))))
+def summarize(result, burn_in=_BURN_IN, divergence=None):
+    """divergence: the runs' divergence steps when result pools them already cut; read from result otherwise."""
+    counted = counted_mask(result["err"])[:, :, burn_in:]
+    err = result["err"][:, :, burn_in:, :][counted]
+    pos_rmse = float(np.sqrt(counted_mean(np.sum(err[..., POS] ** 2, axis=-1))))
+    vel_rmse = float(np.sqrt(counted_mean(np.sum(err[..., VEL] ** 2, axis=-1))))
 
     nees = result["nees"][:, :, burn_in:]
     mc = nees.shape[1]
-    anees, bounds = anees_with_bounds(nees, dim=STATE_DIM, mc_axis=1)
-    frac_in_95 = fraction_inside_bounds(anees, bounds)
-    coverage = empirical_coverage(nees.reshape(-1), dim=STATE_DIM, levels=(0.68, 0.95))
+    _, bounds = anees_with_bounds(nees, dim=STATE_DIM, mc_axis=1)
+    anees, frac_in_95 = anees_over_counted(nees, counted, dim=STATE_DIM, mc_axis=1)
+    coverage = empirical_coverage(nees[counted], dim=STATE_DIM, levels=(0.68, 0.95))
 
     return {
         "pos_rmse": pos_rmse, "vel_rmse": vel_rmse,
-        "anees_mean": float(np.mean(anees)), "anees_bounds": bounds,
+        **divergence_summary(divergence_steps(result["err"]) if divergence is None else divergence),
+        "anees_mean": float(counted_mean(anees)), "anees_bounds": bounds,
         "anees_fraction_inside_95": frac_in_95,
         "coverage_68": coverage[0.68], "coverage_95": coverage[0.95],
         "n_mc": mc,
@@ -104,7 +119,7 @@ def main():
         result = evaluate_dataset(net, dt, d["states"], d["measurements"])
         summary = summarize(result)
         results[regime_name] = summary
-        csv_rows.append({"filter": "RKN", "regime": regime_name, "pos_rmse": summary["pos_rmse"], "vel_rmse": summary["vel_rmse"]})
+        csv_rows.append({"filter": "RKN", "regime": regime_name, **{key: summary[key] for key in CSV_SUMMARY_KEYS}})
         print(f"{regime_name}: pos_rmse={summary['pos_rmse']:.2f}m vel_rmse={summary['vel_rmse']:.2f}m/s "
               f"ANEES={summary['anees_mean']:.2f} (bounds {summary['anees_bounds'][0]:.2f}-{summary['anees_bounds'][1]:.2f}) "
               f"frac_in_95={summary['anees_fraction_inside_95']:.3f} coverage68={summary['coverage_68']:.3f} coverage95={summary['coverage_95']:.3f}",
@@ -113,10 +128,11 @@ def main():
     flights = [fly_scenario(json.loads(p.read_text())) for p in sorted(Path(args.scenario_dir).glob("*.json"))]
     if flights:
         runs = [evaluate_dataset(net, NOMINAL.dt, states[None], z[None, None]) for states, z in flights]
-        pooled = {key: np.concatenate([run[key][0, 0, _BURN_IN:] for run in runs])[None, None] for key in runs[0]}
-        summary = summarize(pooled, burn_in=0)
+        spans = [counted_span(run["err"][0, 0], _BURN_IN) for run in runs]
+        pooled = {key: np.concatenate([run[key][0, 0, span] for run, span in zip(runs, spans)])[None, None] for key in runs[0]}
+        summary = summarize(pooled, burn_in=0, divergence=[divergence_steps(run["err"][0, 0]) for run in runs])
         results["scenarios"] = summary
-        csv_rows.append({"filter": "RKN", "regime": "scenarios", "pos_rmse": summary["pos_rmse"], "vel_rmse": summary["vel_rmse"]})
+        csv_rows.append({"filter": "RKN", "regime": "scenarios", **{key: summary[key] for key in CSV_SUMMARY_KEYS}})
         print(f"scenarios: pos_rmse={summary['pos_rmse']:.2f}m vel_rmse={summary['vel_rmse']:.2f}m/s "
               f"ANEES={summary['anees_mean']:.2f} frac_in_95={summary['anees_fraction_inside_95']:.3f}", flush=True)
 
@@ -131,7 +147,7 @@ def main():
 
     Path(args.out).write_text(json.dumps(results, indent=2))
     with open(args.out_csv, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["filter", "regime", "pos_rmse", "vel_rmse"])
+        writer = csv.DictWriter(f, fieldnames=["filter", "regime", *CSV_SUMMARY_KEYS])
         writer.writeheader()
         writer.writerows(csv_rows)
     print(f"wrote {args.out} and {args.out_csv}")

@@ -26,6 +26,8 @@
   #steering-hud { position: absolute; top: 8px; right: 8px; padding: 6px 8px; background: rgba(255, 255, 255, 0.8); border: 1px solid #ccc; border-radius: 4px; font: 12px monospace; pointer-events: none; }
   #hud-keys span { display: inline-block; width: 1.6em; margin-right: 2px; text-align: center; border: 1px solid #999; border-radius: 3px; }
   #hud-keys span[data-held=true] { background: #2a7d2e; color: #fff; }
+  #hud-holds span { display: inline-block; margin-right: 2px; padding: 0 3px; border: 1px solid #999; border-radius: 3px; color: #999; }
+  #hud-holds span[data-engaged=true] { background: #1f5fa8; border-color: #1f5fa8; color: #fff; }
   #steering-hud output { display: inline-block; width: 4em; text-align: right; }
   #status, #clock { font-family: monospace; }
   .badge { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 8px; background: #b00020; color: #fff; font-size: 11px; }
@@ -113,7 +115,13 @@
           <span data-hud-key="ShiftLeft" data-held="false">⇧</span>
           <span data-hud-key="ShiftRight" data-held="false">⇧</span>
         </div>
-        <div data-hud-axis="roll" data-percent="0">roll <meter min="-100" max="100" value="0"></meter> <output>0%</output></div>
+        <div id="hud-holds">
+          <span data-hud-hold="heading" data-engaged="false">H hdg</span>
+          <span data-hud-hold="altitude" data-engaged="false">J alt</span>
+          <span data-hud-hold="speed" data-engaged="false">K spd</span>
+          <span data-hud-hold="bank" data-engaged="false">L bank</span>
+        </div>
+        <div data-hud-axis="roll"data-percent="0">roll <meter min="-100" max="100" value="0"></meter> <output>0%</output></div>
         <div data-hud-axis="pull" data-percent="0">pull <meter min="-100" max="100" value="0"></meter> <output>0%</output></div>
         <div data-hud-axis="rudder" data-percent="0">rudder <meter min="-100" max="100" value="0"></meter> <output>0%</output></div>
         <div data-hud-axis="brake" data-percent="0">brake <meter min="0" max="100" value="0"></meter> <output>0%</output></div>

@@ -14,8 +14,10 @@ from filters.flags import (
     FLAGS,
     NEES_LOWER_025_DOF9,
     UNGATED_REASONS,
+    divergence_step,
     first_trips,
     shown,
+    until_diverged,
 )
 from filters.imm import IMM
 from filters.knet.numpy_forward import load_weights
@@ -23,13 +25,14 @@ from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import POS, VEL
 from filters.ukf import UKF
 from scripts.eval import ekf_like_steps, imm_steps, knet_steps, rkn_steps
+from web.holds import Holds
 
 NOISE_REGIMES = ["nominal", "high_noise", "low_noise", "heavy_tailed"]
 FILTER_NAMES = ("EKF", "UKF", "IMM", "KalmanNet", "RKN")
 LEARNED_WEIGHTS = {"KalmanNet": "results/knet_vanilla/best.npz", "RKN": "results/rkn/best.npz"}
 SETUP_KEYS = ("seed", "envelope", "noise_regime", "start")
 UNKNOWN_GIT_TAG = "unknown"
-DIVERGED_POSITION_ERROR_M = 1e5
+STOPPED_READOUT = dict.fromkeys(("ellipsoid", "mode_probabilities", "estimate_m", "error_m", "nees", "nis"))
 
 
 def page_options():
@@ -81,14 +84,6 @@ def _readout(truth, err, nees=None, nis=None, *, snapshot):
     }
 
 
-def diverged(position_error_m):
-    """Diverged once any position error so far is non-finite or above DIVERGED_POSITION_ERROR_M, whatever the
-    raw-error threshold; the page keeps a diverged filter out of its plot scales."""
-    return bool(
-        not np.isfinite(position_error_m).all() or position_error_m.max() > DIVERGED_POSITION_ERROR_M
-    )
-
-
 class LiveFlight:
     """scripts/replay.py's flight advanced one control row at a time: same seed draws, filters on nominal R.
     A learned filter runs when weights_root holds its LEARNED_WEIGHTS .npz."""
@@ -107,6 +102,8 @@ class LiveFlight:
             _latest(lambda: self.controls[-1]),
         )
         self._flight = fly_steps(envelope, position, velocity, 0.0, latest_control, self._regime.dt)
+        self._start = np.concatenate((position, velocity))
+        self.holds = Holds(envelope, self._regime.dt)
         self._truth, self._lift_direction, self._z = None, None, None
         truth, z = _latest(lambda: self._truth), _latest(lambda: self._z)
         R, dt = NOMINAL.R(), NOMINAL.dt
@@ -126,14 +123,25 @@ class LiveFlight:
             self._filters["KalmanNet"] = ((err,) for err in knet)
         if "RKN" in weights:
             self._filters["RKN"] = rkn_steps(load_weights(weights["RKN"]), dt, truth, z, snapshots["RKN"])
+        self._filters = {name: until_diverged(steps) for name, steps in self._filters.items()}
         self._scores = {name: [] for name in self._filters}
 
-    def advance(self, control):
-        self.controls.append([float(value) for value in full_control_row(control)])
+    def _current_state(self):
+        state = self._start if self._truth is None else self._truth
+        return state[POS], state[VEL]
+
+    def toggle_hold(self, name):
+        self.holds.toggle(name, *self._current_state())
+
+    def advance(self, control, manual_axes=()):
+        self.holds.disengage_axes(manual_axes)
+        self.controls.append(self.holds.steer(full_control_row(control), *self._current_state()))
         self._truth, self._lift_direction = next(self._flight)
         self._z = measure(self._rng, self._truth[None], self._regime)[0]
         for name, steps in self._filters.items():
-            self._scores[name].append(next(steps))
+            scored = next(steps, None)
+            if scored is not None:
+                self._scores[name].append(scored)
 
     def trips(self):
         return {name: self._trips(*zip(*scores)) for name, scores in self._scores.items()}
@@ -142,13 +150,13 @@ class LiveFlight:
         return first_trips(_position_errors_m(err), *nees_and_nis, thresholds=self.thresholds)
 
     def readouts(self):
-        return {
-            name: {
-                **_readout(self._truth, *scores[-1], snapshot=self._snapshots[name]),
-                "diverged": diverged(_position_errors_m([err for err, *_ in scores])),
-            }
-            for name, scores in self._scores.items()
-        }
+        return {name: self._readout(name, scores) for name, scores in self._scores.items()}
+
+    def _readout(self, name, scores):
+        step = divergence_step(_position_errors_m([err for err, *_ in scores]))
+        stopped = len(scores) < len(self.controls)
+        readout = STOPPED_READOUT if stopped else _readout(self._truth, *scores[-1], snapshot=self._snapshots[name])
+        return {**readout, "diverged": step is not None, "diverged_step": step}
 
     def frame(self):
         trips = self.trips()
@@ -159,6 +167,8 @@ class LiveFlight:
             "truth_m": self._truth[POS].tolist(),
             "truth_velocity_m_s": self._truth[VEL].tolist(),
             "truth_lift_direction": self._lift_direction.tolist(),
+            "holds": dict(self.holds.targets),
+            "control": self.controls[-1],
             "filters": readouts,
             "trips": trips,
             "flags": {

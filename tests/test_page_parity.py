@@ -1,10 +1,11 @@
 import json
 import sys
 
-import numpy as np
 import pytest
 
+from filters.flags import DIVERGED_POSITION_ERROR_M
 from scripts.page_parity import (
+    DIVERGING_KNET_DIVERGENCE,
     DIVERGING_KNET_NPZ,
     DRIFT_QUANTITIES,
     IMM_TUNING,
@@ -163,20 +164,32 @@ def test_main_cases_writes_the_scenario_and_expected_files(tmp_path, monkeypatch
     assert (tmp_path / "overhead_pass.json").exists() and (tmp_path / "overhead_pass.expected.json").exists()
 
 
-def test_diverging_knet_weights_case_runs_kalmannet_alone_away_with_a_finite_estimate(cases, tmp_path):
-    """Finite matters: the plots and plan view drop non-finite points, so only a huge finite estimate shows
-    whether a diverged filter is kept out of their scales."""
+def diverging_knet_flight(cases, tmp_path):
     knet_npz = tmp_path / LEARNED_WEIGHTS["KalmanNet"]
     knet_npz.parent.mkdir(parents=True)
     knet_npz.write_bytes((cases / DIVERGING_KNET_NPZ).read_bytes())
     scenario = json.loads((cases / "break_turn_9g.json").read_text())
     flight = LiveFlight(scenario, json.loads(IMM_TUNING.read_text())["best"], tmp_path)
+    frames = []
     for control in scenario["controls"]:
         flight.advance(control)
-    readouts = flight.readouts()
+        frames.append(flight.frame())
+    return frames
 
-    assert np.isfinite(readouts["KalmanNet"]["estimate_m"]).all()
-    assert {name: readout["diverged"] for name, readout in readouts.items()} == {
+
+def test_page_stops_a_diverged_filter_at_the_step_native_replay_reports_and_shows_no_estimate_after_it(cases, tmp_path):
+    native_step = json.loads((cases / DIVERGING_KNET_DIVERGENCE).read_text())["KalmanNet"]
+    frames = diverging_knet_flight(cases, tmp_path)
+    knet = [frame["filters"]["KalmanNet"] for frame in frames]
+
+    assert 0 < native_step < len(frames) - 1
+    assert (knet[native_step - 1]["diverged"], knet[native_step]["diverged"]) == (False, True)
+    assert knet[native_step]["diverged_step"] == native_step
+    assert knet[native_step]["error_m"] > DIVERGED_POSITION_ERROR_M
+    assert all(readout["estimate_m"] is None and readout["error_m"] is None for readout in knet[native_step + 1 :])
+    assert frames[-1]["flags"]["KalmanNet"] == frames[native_step]["flags"]["KalmanNet"]
+    assert frames[-1]["trips"]["KalmanNet"] == frames[native_step]["trips"]["KalmanNet"]
+    assert {name: readout["diverged"] for name, readout in frames[-1]["filters"].items()} == {
         "EKF": False,
         "UKF": False,
         "IMM": False,

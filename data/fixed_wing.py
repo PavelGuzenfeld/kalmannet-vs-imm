@@ -38,6 +38,10 @@ class Envelope:
     brake_drag_multiplier: float = 1.0
     afterburner_thrust_multiplier: float = 1.0
 
+    def __post_init__(self) -> None:
+        if self.max_negative_load_factor is not None and self.max_negative_load_factor > 0.0:
+            raise ValueError(f"max_negative_load_factor is signed negative, got {self.max_negative_load_factor}")
+
     @property
     def best_glide_speed_m_s(self) -> float:
         """Geometric mean of the speed range: a simplification until per-airframe polars are needed."""
@@ -53,7 +57,7 @@ PRESETS = {
 }
 
 
-def _drag_m_s2(envelope: Envelope, speed_m_s: float, load_factor: float) -> float:
+def drag_m_s2(envelope: Envelope, speed_m_s: float, load_factor: float) -> float:
     speed_ratio = speed_m_s / envelope.best_glide_speed_m_s
     return STANDARD_GRAVITY_M_S2 / (2.0 * MAX_LIFT_TO_DRAG) * (speed_ratio**2 + (load_factor / speed_ratio) ** 2)
 
@@ -83,7 +87,7 @@ def fly_steps(
     dt_s: float,
 ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
     """Yields (state row, unit lift direction) per control row as `controls` yields it; see fly."""
-    max_thrust_m_s2 = _drag_m_s2(envelope, envelope.max_speed_m_s, 1.0)
+    max_thrust_m_s2 = drag_m_s2(envelope, envelope.max_speed_m_s, 1.0)
     position = np.asarray(position_m, dtype=np.float64)
     velocity = np.asarray(velocity_m_s, dtype=np.float64)
     wings_level_up = _initial_wings_level_up(velocity / np.linalg.norm(velocity))
@@ -107,7 +111,7 @@ def fly_steps(
         throttle = np.clip(throttle, 0.0, 1.0)
         thrust_multiplier = envelope.afterburner_thrust_multiplier if afterburner and throttle == 1.0 else 1.0
         drag_multiplier = envelope.brake_drag_multiplier if speed_brake else 1.0
-        drag = _drag_m_s2(envelope, speed, load_factor) * drag_multiplier
+        drag = drag_m_s2(envelope, speed, load_factor) * drag_multiplier
         tangential = throttle * max_thrust_m_s2 * thrust_multiplier - drag
         lift_direction = _lift_direction(unit_velocity, wings_level_up, bank_rad)
         acceleration = (

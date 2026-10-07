@@ -16,8 +16,10 @@ import torch
 
 from data.config import NOMINAL
 from data.trajectory_gen import fly_scenario
+from filters.flags import until_diverged
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.knet_filter import KalmanNetFilter
+from filters.metrics import counted_mean, counted_span, divergence_steps, divergence_summary
 from filters.motion_models import cv_model
 from filters.state import STATE_DIM
 
@@ -35,27 +37,30 @@ def _priors(dt, R):
 
 
 def flight_errors(net, dt, R, x_true, z):
-    """x_true: [T,9], z: [T,3]. Returns the errors [T - burn-in, 9]."""
+    """x_true: [T,9], z: [T,3]. Returns the errors [T',9], T' <= T as the run stops at its divergence step."""
     prior_Q, prior_Sigma, prior_S = _priors(dt, R)
     x_true = torch.tensor(x_true, dtype=torch.float64).unsqueeze(0)
     z = torch.tensor(z, dtype=torch.float64).unsqueeze(0)
     flt = KalmanNetFilter(net, dt)
     flt.init_sequence(x_true[:, 0, :] + _INIT_OFFSET, prior_Q, prior_Sigma, prior_S)
-    errors = []
     with torch.no_grad():
-        for t in range(z.shape[1]):
-            x_upd = flt.step(z[:, t, :])
-            if t >= _BURN_IN:
-                err = (x_upd[0] - x_true[0, t]).numpy()
-                errors.append(np.nan_to_num(err, nan=1e5, posinf=1e5, neginf=-1e5))
-    return np.array(errors)
+        steps = ((flt.step(z[:, t, :])[0].numpy() - x_true[0, t].numpy(),) for t in range(z.shape[1]))
+        return np.array([err for err, in until_diverged(steps)])
+
+
+def regime_row(regime_name, runs):
+    """runs: each flight's errors as flight_errors returns them; RMSE over their counted steps."""
+    pos_rmse, vel_rmse = position_velocity_rmse(np.concatenate([err[counted_span(err, _BURN_IN)] for err in runs]))
+    print(f"{regime_name}: pos_rmse={pos_rmse:.2f}m vel_rmse={vel_rmse:.2f}m/s", flush=True)
+    divergence = divergence_summary([divergence_steps(err) for err in runs])
+    return {"filter": "KalmanNet-vanilla", "regime": regime_name, "pos_rmse": pos_rmse, "vel_rmse": vel_rmse, **divergence}
 
 
 def position_velocity_rmse(errors):
     """errors: [n,9]. Returns (pos_rmse, vel_rmse)."""
     return (
-        float(np.sqrt(np.mean(np.sum(errors[:, :3] ** 2, axis=-1)))),
-        float(np.sqrt(np.mean(np.sum(errors[:, 3:6] ** 2, axis=-1)))),
+        float(np.sqrt(counted_mean(np.sum(errors[:, :3] ** 2, axis=-1)))),
+        float(np.sqrt(counted_mean(np.sum(errors[:, 3:6] ** 2, axis=-1)))),
     )
 
 
@@ -86,26 +91,21 @@ def main():
         R = np.diag([r["sigma_az_rad"] ** 2, r["sigma_el_rad"] ** 2, r["sigma_range_m"] ** 2])
         dt = r["dt"]
 
-        errors = [
+        runs = [
             flight_errors(net, dt, R, states[i], measurements[i, m])
             for i in range(measurements.shape[0])
             for m in range(measurements.shape[1])
         ]
-        pos_rmse, vel_rmse = position_velocity_rmse(np.concatenate(errors))
-        print(f"{regime_name}: pos_rmse={pos_rmse:.2f}m vel_rmse={vel_rmse:.2f}m/s", flush=True)
-        rows.append({"filter": "KalmanNet-vanilla", "regime": regime_name, "pos_rmse": pos_rmse, "vel_rmse": vel_rmse})
+        rows.append(regime_row(regime_name, runs))
 
     flights = [fly_scenario(json.loads(p.read_text())) for p in sorted(Path(args.scenario_dir).glob("*.json"))]
     if flights:
-        errors = np.concatenate([flight_errors(net, NOMINAL.dt, NOMINAL.R(), states, z) for states, z in flights])
-        pos_rmse, vel_rmse = position_velocity_rmse(errors)
-        print(f"scenarios: pos_rmse={pos_rmse:.2f}m vel_rmse={vel_rmse:.2f}m/s", flush=True)
-        rows.append({"filter": "KalmanNet-vanilla", "regime": "scenarios", "pos_rmse": pos_rmse, "vel_rmse": vel_rmse})
+        rows.append(regime_row("scenarios", [flight_errors(net, NOMINAL.dt, NOMINAL.R(), *flight) for flight in flights]))
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["filter", "regime", "pos_rmse", "vel_rmse"])
+        writer = csv.DictWriter(f, fieldnames=["filter", "regime", "pos_rmse", "vel_rmse", "diverged_fraction", "median_divergence_step"])
         writer.writeheader()
         writer.writerows(rows)
     print(f"wrote {out}")
