@@ -199,7 +199,7 @@ function readControl(elapsedS) {
 }
 
 function renderSteeringHud() {
-  for (const code of STEERING_KEYS) byId("steering-hud").querySelector(`[data-hud-key="${code}"]`).dataset.held = String(heldKeys.has(code));
+  for (const chip of byId("steering-hud").querySelectorAll("[data-hud-key]")) chip.dataset.held = String(chip.dataset.hudKey.split(" ").some((code) => heldKeys.has(code)));
   const percents = { roll: steering.roll * 100, pull: steering.pull * 100, rudder: steering.rudder * 100, brake: steering.brake * 100, afterburner: steering.afterburner * 100, throttle: throttle * 100 };
   for (const [axis, percent] of Object.entries(percents)) {
     const row = byId("steering-hud").querySelector(`[data-hud-axis="${axis}"]`);

@@ -24,7 +24,8 @@
   #scene { min-width: 320px; min-height: 120px; }
   #scene-view { position: relative; }
   #steering-hud { position: absolute; top: 8px; right: 8px; padding: 6px 8px; background: rgba(255, 255, 255, 0.8); border: 1px solid #ccc; border-radius: 4px; font: 12px monospace; pointer-events: none; }
-  #hud-keys span { display: inline-block; width: 1.6em; margin-right: 2px; text-align: center; border: 1px solid #999; border-radius: 3px; }
+  #controls-table td, #controls-table th { text-align: left; }
+  #hud-keys span { display: inline-block; padding: 0 3px; margin-right: 2px; text-align: center; border: 1px solid #999; border-radius: 3px; }
   #hud-keys span[data-held=true] { background: #2a7d2e; color: #fff; }
   #hud-holds span { display: inline-block; margin-right: 2px; padding: 0 3px; border: 1px solid #999; border-radius: 3px; color: #999; }
   #hud-holds span[data-engaged=true] { background: #1f5fa8; border-color: #1f5fa8; color: #fff; }
@@ -85,7 +86,28 @@
   </fieldset>
 
   <button id="export">export scenario JSON</button>
-  <p>Keyboard: ←/→ roll, ↓ pull, ↑ push, W/S throttle. Gamepad (standard mapping): left stick roll and pitch, triggers throttle.</p>
+  <table id="controls-table">
+    <caption>Controls (gamepad: standard mapping, Xbox layout)</caption>
+    <thead><tr><th>action</th><th>keyboard</th><th>gamepad</th></tr></thead>
+    <tbody>
+      <tr><td>roll</td><td><kbd data-code="ArrowLeft">←</kbd> <kbd data-code="ArrowRight">→</kbd></td><td>left stick X</td></tr>
+      <tr><td>pull / push</td><td><kbd data-code="ArrowDown">↓</kbd> <kbd data-code="ArrowUp">↑</kbd></td><td>left stick Y</td></tr>
+      <tr><td>throttle</td><td><kbd data-code="KeyW">W</kbd> <kbd data-code="KeyS">S</kbd></td><td>RT / LT</td></tr>
+      <tr><td>rudder</td><td><kbd data-code="KeyA">A</kbd> <kbd data-code="KeyD">D</kbd></td><td>LB / RB</td></tr>
+      <tr><td>speed brake</td><td><kbd data-code="Space">Space</kbd></td><td>B</td></tr>
+      <tr><td>afterburner</td><td><kbd data-code="ShiftLeft">Left Shift</kbd> <kbd data-code="ShiftRight">Right Shift</kbd></td><td>A</td></tr>
+      <tr><td>hold heading</td><td><kbd data-code="KeyH">H</kbd></td><td>—</td></tr>
+      <tr><td>hold altitude</td><td><kbd data-code="KeyJ">J</kbd></td><td>—</td></tr>
+      <tr><td>hold speed</td><td><kbd data-code="KeyK">K</kbd></td><td>—</td></tr>
+      <tr><td>hold bank</td><td><kbd data-code="KeyL">L</kbd></td><td>—</td></tr>
+      <tr><td>break turn</td><td><kbd data-code="Digit1">1</kbd></td><td>—</td></tr>
+      <tr><td>reversal</td><td><kbd data-code="Digit2">2</kbd></td><td>—</td></tr>
+      <tr><td>split-S</td><td><kbd data-code="Digit3">3</kbd></td><td>—</td></tr>
+      <tr><td>jink</td><td><kbd data-code="Digit4">4</kbd></td><td>—</td></tr>
+      <tr><td>weave</td><td><kbd data-code="Digit5">5</kbd></td><td>—</td></tr>
+      <tr><td>barrel roll</td><td><kbd data-code="Digit6">6</kbd></td><td>—</td></tr>
+    </tbody>
+  </table>
   <p id="controls"></p>
 </aside>
 
@@ -103,17 +125,16 @@
       <div id="scene"></div>
       <div id="steering-hud">
         <div id="hud-keys">
-          <span data-hud-key="ArrowUp" data-held="false">↑</span>
-          <span data-hud-key="ArrowLeft" data-held="false">←</span>
-          <span data-hud-key="ArrowDown" data-held="false">↓</span>
-          <span data-hud-key="ArrowRight" data-held="false">→</span>
-          <span data-hud-key="KeyW" data-held="false">W</span>
-          <span data-hud-key="KeyS" data-held="false">S</span>
-          <span data-hud-key="KeyA" data-held="false">A</span>
-          <span data-hud-key="KeyD" data-held="false">D</span>
-          <span data-hud-key="Space" data-held="false">␣</span>
-          <span data-hud-key="ShiftLeft" data-held="false">⇧</span>
-          <span data-hud-key="ShiftRight" data-held="false">⇧</span>
+          <span data-hud-key="ArrowUp" data-held="false">↑ push</span>
+          <span data-hud-key="ArrowLeft" data-held="false">← roll</span>
+          <span data-hud-key="ArrowDown" data-held="false">↓ pull</span>
+          <span data-hud-key="ArrowRight" data-held="false">→ roll</span>
+          <span data-hud-key="KeyW" data-held="false">W thr</span>
+          <span data-hud-key="KeyS" data-held="false">S thr</span>
+          <span data-hud-key="KeyA" data-held="false">A rud</span>
+          <span data-hud-key="KeyD" data-held="false">D rud</span>
+          <span data-hud-key="Space" data-held="false">␣ brake</span>
+          <span data-hud-key="ShiftLeft ShiftRight" data-held="false">⇧ AB</span>
         </div>
         <div id="manoeuvre-hud" data-manoeuvre=""></div>
         <div id="hud-holds">
