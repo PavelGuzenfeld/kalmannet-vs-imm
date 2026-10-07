@@ -12,7 +12,6 @@ from scripts.page_parity import (
     DRIFT_QUANTITIES,
     IMM_TUNING,
     MAX_G_LOWERED_CASE,
-    MAX_G_LOWERED_STEP,
     NO_WEIGHTS,
     SCENARIOS_DIR,
     TIGHT_THRESHOLDS,
@@ -222,6 +221,6 @@ def test_max_g_lowered_mid_pull_case_flies_the_page_truth_and_leaves_the_break_t
     ]
     assert np.array(page_truth).tobytes() == states[:, :6].tobytes()
     assert json.loads(flight.scenario_json())["envelope_changes"] == scenario["envelope_changes"]
-    after = MAX_G_LOWERED_STEP + 1
+    after = MID_PULL_STEP + 1
     assert states[:after, :6].tobytes() == break_turn[:after, :6].tobytes()
     assert not np.array_equal(states[after, :6], break_turn[after, :6])

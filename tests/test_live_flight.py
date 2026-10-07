@@ -588,6 +588,7 @@ def test_live_envelope_change_mid_pull_flies_the_truth_its_export_replays_bit_fo
     truth = flown_truth(flight, controls, change_at_step=LEVEL_RUN_IN_STEPS + 50, envelope=lowered())
 
     states, _ = fly_scenario(json.loads(flight.scenario_json()))
+    assert exported_changes(flight) == [[LEVEL_RUN_IN_STEPS + 50, lowered()]]
     assert truth.tobytes() == states[:, :6].tobytes()
 
 

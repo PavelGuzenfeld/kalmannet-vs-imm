@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -468,3 +469,26 @@ def test_max_g_moved_while_paused_applies_from_the_first_step_after_resume(brows
     assert [[step, envelope["max_load_factor"]] for step, envelope in changes] == [
         [paused_at_step, LOWERED_MAX_LOAD_FACTOR]
     ]
+
+
+LIGHT_AIRCRAFT_ENVELOPE = {
+    "min_speed_m_s": 25.0,
+    "max_speed_m_s": 70.0,
+    "max_load_factor": 3.8,
+    "max_roll_rate_rad_s": math.radians(60.0),
+    "max_side_load_factor": 0.3,
+    "max_negative_load_factor": -1.5,
+    "brake_drag_multiplier": 2.0,
+    "afterburner_thrust_multiplier": 1.0,
+}
+
+
+def test_choosing_a_preset_mid_flight_records_its_whole_envelope_from_the_next_step(browser):
+    page = flying_page(browser)
+    page.clock.run_for(HOLD_MS)
+    chosen_at_step = len(exported_scenario(page)["controls"])
+
+    page.select_option("#preset", "light aircraft")
+    page.clock.run_for(HOLD_MS)
+
+    assert exported_scenario(page)["envelope_changes"] == [[chosen_at_step, LIGHT_AIRCRAFT_ENVELOPE]]
