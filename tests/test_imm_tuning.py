@@ -188,7 +188,7 @@ def test_web_imm_tuning_json_holds_the_ms12_selected_values():
             "omega_ct_deg": 25.0,
             "ca_sigma_a": 2.0,
             "ca_tau": 2.0,
-            "ct_sigma_a": 0.3,
+            "ct_sigma_a": 1.0,
             "cv_sigma_a": 0.05,
         }
     }

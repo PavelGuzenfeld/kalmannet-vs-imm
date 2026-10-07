@@ -89,7 +89,9 @@ winner re-verified on the full 200-trajectory validation set. Full search log:
 `results/imm_tuning.json`.
 
 **Chosen**: `p_stay=0.99`, `omega_CT=25 deg/s`, `sigma_a^CA=2 m/s^2`, `tau^CA=2 s`,
-`sigma_a^CT=1.0 m/s^2` — full-val-set position RMSE **1.19 m**.
+`sigma_a^CT=1.0 m/s^2` — position RMSE 1.11 m on the 30-trajectory search subset
+(`best.val_pos_rmse`), **1.19 m** on the full 200-trajectory validation set
+(`best_full_val_pos_rmse`). The same values drive the page (`web/imm_tuning.json`).
 
 ### 1.5 KalmanNet architecture and training (`filters/knet/`, `scripts/train_knet.py`)
 
