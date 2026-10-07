@@ -12,8 +12,9 @@ from playwright import sync_api  # noqa: E402
 
 BOOT_TIMEOUT_MS = 240_000
 FRAME_MS = 16
-RAMP_S = 2.0
+RAMP_S = 0.5
 HOLD_MS = 1000
+HALF_RAMP_MS = int(RAMP_S * 500)
 KEYDOWN_POLL_MS = 100
 KEYDOWN_POLLS = 100
 FRAME_STEP_PERCENT = 100 * FRAME_MS / 1000 / RAMP_S
@@ -70,33 +71,33 @@ def key_lit(page, code):
     return page.locator(f'[data-hud-key="{code}"]').get_attribute("data-held") == "true"
 
 
-def test_holding_right_arrow_for_one_second_reads_half_roll_with_the_key_lit(browser):
+def test_holding_right_arrow_for_a_quarter_second_reads_half_roll_with_the_key_lit(browser):
     page = flying_page(browser)
 
     press_and_wait_for_keydown(page, "ArrowRight")
-    page.clock.run_for(HOLD_MS)
+    page.clock.run_for(HALF_RAMP_MS)
 
     assert hud_percent(page, "roll") == pytest.approx(50, abs=FRAME_STEP_PERCENT)
     assert key_lit(page, "ArrowRight")
 
 
-def test_releasing_right_arrow_unlights_the_key_and_ramps_roll_back_to_zero_within_one_second(browser):
+def test_releasing_right_arrow_unlights_the_key_and_ramps_roll_back_to_zero_within_half_a_second(browser):
     page = flying_page(browser)
     press_and_wait_for_keydown(page, "ArrowRight")
     page.clock.run_for(HOLD_MS)
 
     page.keyboard.up("ArrowRight")
-    page.clock.run_for(HOLD_MS + 2 * FRAME_MS)
+    page.clock.run_for(int(RAMP_S * 1000) + 2 * FRAME_MS)
 
     assert not key_lit(page, "ArrowRight")
     assert hud_percent(page, "roll") == pytest.approx(0, abs=FRAME_STEP_PERCENT)
 
 
-def test_holding_d_for_one_second_reads_half_rudder_with_the_key_lit(browser):
+def test_holding_d_for_a_quarter_second_reads_half_rudder_with_the_key_lit(browser):
     page = flying_page(browser)
 
     press_and_wait_for_keydown(page, "KeyD")
-    page.clock.run_for(HOLD_MS)
+    page.clock.run_for(HALF_RAMP_MS)
 
     assert hud_percent(page, "rudder") == pytest.approx(50, abs=FRAME_STEP_PERCENT)
     assert key_lit(page, "KeyD")
@@ -106,7 +107,7 @@ def test_holding_a_reads_negative_rudder(browser):
     page = flying_page(browser)
 
     press_and_wait_for_keydown(page, "KeyA")
-    page.clock.run_for(HOLD_MS)
+    page.clock.run_for(HALF_RAMP_MS)
 
     assert hud_percent(page, "rudder") == pytest.approx(-50, abs=FRAME_STEP_PERCENT)
 
@@ -153,11 +154,11 @@ def recorded_rows(page):
     return json.loads(Path(download.value.path()).read_text())["controls"]
 
 
-def test_holding_d_for_one_second_records_half_of_max_side_g_in_the_rudder_column(browser):
+def test_holding_d_for_a_quarter_second_records_half_of_max_side_g_in_the_rudder_column(browser):
     page = flying_page(browser)
 
     press_and_wait_for_keydown(page, "KeyD")
-    page.clock.run_for(HOLD_MS)
+    page.clock.run_for(HALF_RAMP_MS)
 
     rudder_fraction = recorded_rows(page)[-1][ROW_RUDDER] / BENCHMARK_MAX_SIDE_G
     assert rudder_fraction == pytest.approx(0.5, abs=EXPORT_LAG_FRAMES * FRAME_STEP_PERCENT / 100)
@@ -259,7 +260,7 @@ def test_rudder_column_climbs_the_ramp_in_exact_frame_steps(browser):
     page = flying_page(browser)
 
     press_and_wait_for_keydown(page, "KeyD")
-    page.clock.run_for(HOLD_MS)
+    page.clock.run_for(HALF_RAMP_MS)
 
     fractions = [row[ROW_RUDDER] / BENCHMARK_MAX_SIDE_G for row in recorded_rows(page)]
     frame_steps = sorted({fraction / (FRAME_STEP_PERCENT / 100) for fraction in fractions})
