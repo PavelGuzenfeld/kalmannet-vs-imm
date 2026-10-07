@@ -19,7 +19,7 @@ KEYDOWN_POLLS = 100
 FRAME_STEP_PERCENT = 100 * FRAME_MS / 1000 / RAMP_S
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def browser():
     with sync_api.sync_playwright() as playwright:
         chromium = playwright.chromium.launch()
