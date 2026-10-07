@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from scipy.stats import chi2
 
 from filters.state import STATE_DIM
 from scripts import eval_rkn
@@ -32,3 +33,15 @@ def test_nees_is_whitened_through_s_when_p_rounds_to_singular(monkeypatch):
     result = eval_rkn.evaluate_dataset(None, 0.02, states, measurements)
 
     assert result["nees"][0, 0, 0] == 2.0**60
+
+
+def test_rkn_anees_cells_average_over_the_monte_carlo_runs_with_bounds_for_the_run_count():
+    """Averaged over the two runs each step reads 0, 0 and 30: outside the two-run band. Averaged over the three
+    steps instead it would read 10, inside the three-step band."""
+    alpha = 1 - 0.95
+    result = {"err": np.zeros((1, 2, 3, STATE_DIM)), "nees": np.array([[[0.0, 0.0, 30.0]] * 2])}
+
+    summary = eval_rkn.summarize(result, burn_in=0)
+
+    assert summary["anees_fraction_inside_95"] == 0.0
+    assert summary["anees_bounds"] == (chi2.ppf(alpha / 2, df=18) / 2, chi2.ppf(1 - alpha / 2, df=18) / 2)

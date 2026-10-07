@@ -24,15 +24,12 @@ from scripts.replay import SEED_SCENARIO_SEED, break_turn_controls, numpy_weight
 from tests.test_numpy_forward import knet_stand_in, rkn_stand_in
 from filters.state import POS
 from scripts.eval import ekf_like_steps, imm_steps, run_ekf_like
-from web import live_flight
 from web.live_flight import (
     FILTER_NAMES,
     LEARNED_WEIGHTS,
     LiveFlight,
     _ellipsoid,
-    diverged,
     page_options,
-    trace,
 )
 
 REPO = Path(__file__).resolve().parents[1]
@@ -42,6 +39,7 @@ PAGE_IMM_TUNING = REPO / "web" / "imm_tuning.json"
 RAW_ERROR_LIMIT_OFFSET_M = {"just_below_peak": 0.0, "just_above_peak": 1.0}
 KNET_INIT_OFFSET = np.array([2.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 ESTIMATE_ROUND_TRIP_ATOL_M = 1e-9
+LEVEL_RUN_IN_STEPS = 50
 
 
 @pytest.fixture
@@ -62,7 +60,7 @@ def seed_frame(tmp_path_factory):
     return page_flight(tmp_path_factory.mktemp("no_weights")).frame()
 
 
-def page_flight(weights_root, noise_regime="nominal", thresholds=DEFAULT_THRESHOLDS, preset=DEFAULT_PRESET):
+def page_flight(weights_root, noise_regime="nominal", thresholds=DEFAULT_THRESHOLDS, preset=DEFAULT_PRESET, steps=None):
     setup = {
         "seed": SEED_SCENARIO_SEED,
         "envelope": asdict(PRESETS[preset]),
@@ -70,7 +68,7 @@ def page_flight(weights_root, noise_regime="nominal", thresholds=DEFAULT_THRESHO
         "thresholds": thresholds,
     }
     flight = LiveFlight(setup, json.loads(PAGE_IMM_TUNING.read_text())["best"], weights_root)
-    for control in break_turn_controls():
+    for control in break_turn_controls()[:steps]:
         flight.advance(control)
     return flight
 
@@ -103,8 +101,14 @@ def ekf_position_errors_m(flight):
 
 
 def preview_lines(flight):
-    flags = flight.frame()["flags"]
-    return [f"{name}: " + " ".join(f"{flag}={flags[name][flag]}" for flag in FLAGS) for name in FILTER_NAMES]
+    frame = flight.frame()
+    steps = {name: readout["diverged_step"] for name, readout in frame["filters"].items()}
+    return [
+        f"{name}: "
+        + " ".join(f"{flag}={frame['flags'][name][flag]}" for flag in FLAGS)
+        + ("" if steps.get(name) is None else f" diverged={steps[name]}")
+        for name in FILTER_NAMES
+    ]
 
 
 def test_exported_break_turn_replays_to_the_page_preview_flags(learned, tmp_path):
@@ -194,7 +198,8 @@ def test_export_weights_writes_the_npz_the_page_loads_beside_each_checkpoint(tmp
 
 def test_plotted_zero_gain_kalmannet_estimate_is_open_loop_cv_from_the_start_offset(tmp_path):
     """MS-10: KalmanNet keeps CV f and learns only the gain, so zero gain dead-reckons. The page plots truth +
-    error; at km positions that round trip loses ~1e-13 m, so atol 1e-9 m."""
+    error; at km positions that round trip loses ~1e-13 m, so atol 1e-9 m. Over the level run-in only: the turn
+    takes dead reckoning past the 200 m divergence limit, where the page stops plotting it."""
     net = KalmanGainGRU().double()
     for parameter in net.parameters():
         torch.nn.init.zeros_(parameter)
@@ -204,10 +209,10 @@ def test_plotted_zero_gain_kalmannet_estimate_is_open_loop_cv_from_the_start_off
     states, _ = fly_scenario(json.loads(SEED_SCENARIO.read_text()))
     F, _ = cv_model(NOMINAL.dt)
     dead_reckoned = states[0] + KNET_INIT_OFFSET
-    for _ in states:
+    for _ in states[:LEVEL_RUN_IN_STEPS]:
         dead_reckoned = F @ dead_reckoned
 
-    plotted = page_flight(tmp_path).frame()["filters"]["KalmanNet"]["estimate_m"]
+    plotted = page_flight(tmp_path, steps=LEVEL_RUN_IN_STEPS).frame()["filters"]["KalmanNet"]["estimate_m"]
 
     np.testing.assert_allclose(plotted, dead_reckoned[:3], rtol=0.0, atol=ESTIMATE_ROUND_TRIP_ATOL_M)
 
@@ -273,9 +278,9 @@ def test_frame_carries_ellipsoids_for_covariance_filters_and_mode_probabilities_
 
 
 def test_frame_ellipsoid_comes_from_the_covariance_that_scored_the_nees(learned):
-    """MS-10: RKN's plotted covariance is the P its NEES is computed from."""
+    """MS-10: RKN's plotted covariance is the P its NEES is computed from; read before the stand-in diverges."""
     weights_root, _ = learned
-    frame = page_flight(weights_root).frame()["filters"]
+    frame = page_flight(weights_root, steps=LEVEL_RUN_IN_STEPS).frame()["filters"]
 
     assert frame["RKN"]["ellipsoid"] is not None
     assert frame["KalmanNet"]["ellipsoid"] is None
@@ -326,25 +331,8 @@ def test_page_options_offer_the_nees_lower_bound():
     assert page_options()["nees_lower"] == NEES_LOWER_025_DOF9
 
 
-def test_filter_whose_error_peaks_just_under_one_hundred_km_has_not_diverged():
-    assert not diverged(np.array([1.0, 99_999.5, 3.0]))
-
-
-def test_filter_whose_error_peaks_exactly_at_one_hundred_km_has_not_diverged():
-    assert not diverged(np.array([1.0, 100_000.0, 3.0]))
-
-
-def test_filter_whose_error_once_passed_one_hundred_km_stays_diverged_after_it_recovers():
-    assert diverged(np.array([1.0, 100_000.5, 3.0]))
-
-
-@pytest.mark.parametrize("bad", [np.nan, np.inf])
-def test_filter_with_a_non_finite_error_has_diverged(bad):
-    assert diverged(np.array([1.0, bad, 3.0]))
-
-
 def test_a_raw_error_threshold_far_under_the_peak_errors_diverges_no_filter(tmp_path):
-    """Break-turn peaks: EKF and UKF about 171 m; a 1 m raw-error threshold trips them, yet none is 100 km off."""
+    """Break-turn peaks: EKF and UKF about 171 m; a 1 m raw-error threshold trips them, yet none passes 200 m."""
     thresholds = {**DEFAULT_THRESHOLDS, "raw_error_m": 1.0}
 
     readouts = page_flight(tmp_path, thresholds=thresholds).frame()["filters"]
@@ -354,15 +342,3 @@ def test_a_raw_error_threshold_far_under_the_peak_errors_diverges_no_filter(tmp_
         "UKF": False,
         "IMM": False,
     }
-
-
-def test_flight_keeps_a_filter_diverged_after_its_error_falls_back_under_the_limit(tmp_path, monkeypatch):
-    """No committed flight recovers from 100 km, so the limit is moved between IMM's final and peak error."""
-    flight = page_flight(tmp_path)
-    imm_best = json.loads(PAGE_IMM_TUNING.read_text())["best"]
-    errors = [step["IMM"]["error_m"] for step in trace(json.loads(flight.scenario_json()), imm_best, tmp_path)]
-    limit = (errors[-1] + max(errors)) / 2
-    assert errors[-1] < limit < max(errors)
-    monkeypatch.setattr(live_flight, "DIVERGED_POSITION_ERROR_M", limit)
-
-    assert flight.readouts()["IMM"]["diverged"]

@@ -18,7 +18,16 @@ from data.trajectory_gen import fly_scenario
 from filters.ekf import EKF
 from filters.imm import IMM
 from filters.knet import numpy_forward
-from filters.metrics import anees_with_bounds, empirical_coverage, fraction_inside_bounds
+from filters.flags import until_diverged
+from filters.metrics import (
+    anees_over_counted,
+    anees_with_bounds,
+    counted_mask,
+    counted_span,
+    divergence_steps,
+    divergence_summary,
+    empirical_coverage,
+)
 from filters.motion_models import cv_model
 from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import POS, STATE_DIM, VEL
@@ -71,8 +80,8 @@ def ekf_like_steps(flt, x_true, z, snapshot=None):
 
 def run_ekf_like(flt, x_true, z):
     """flt: EKF or UKF instance ((x,P,z)->x,P,y,S signature). x_true: [T,9],
-    z: [T,3]. Returns (err[T,9], nees[T], nis[T])."""
-    return _stacked(ekf_like_steps(flt, x_true, z))
+    z: [T,3]. Returns (err[T',9], nees[T'], nis[T']), T' <= T as the run stops at its divergence step."""
+    return _stacked(until_diverged(ekf_like_steps(flt, x_true, z)))
 
 
 def imm_steps(imm, x_true, z, snapshot=None):
@@ -85,7 +94,7 @@ def imm_steps(imm, x_true, z, snapshot=None):
 
 
 def run_imm(imm, x_true, z):
-    return _stacked(imm_steps(imm, x_true, z))
+    return _stacked(until_diverged(imm_steps(imm, x_true, z)))
 
 
 def knet_steps(weights, dt, R, x_true, z):
@@ -122,43 +131,41 @@ def rkn_steps(weights, dt, x_true, z, snapshot=None):
 
 def evaluate_dataset(filter_factory, run_fn, states, measurements):
     """states: [N,T,9], measurements: [N,mc,T,3]. Returns dict of aggregated
-    arrays: err [N,mc,T,9], nees [N,mc,T], nis [N,mc,T]."""
+    arrays: err [N,mc,T,9], nees [N,mc,T], nis [N,mc,T], NaN past a run's divergence step."""
     N, mc, T, _ = measurements.shape
-    err = np.zeros((N, mc, T, STATE_DIM))
-    nees = np.zeros((N, mc, T))
-    nis = np.zeros((N, mc, T))
+    err = np.full((N, mc, T, STATE_DIM), np.nan)
+    nees = np.full((N, mc, T), np.nan)
+    nis = np.full((N, mc, T), np.nan)
     for i in range(N):
         for m in range(mc):
             flt = filter_factory()
             e, ne, ni = run_fn(flt, states[i], measurements[i, m])
-            err[i, m] = e
-            nees[i, m] = ne
-            nis[i, m] = ni
+            err[i, m, : len(e)] = e
+            nees[i, m, : len(e)] = ne
+            nis[i, m, : len(e)] = ni
     return {"err": err, "nees": nees, "nis": nis}
 
 
 def summarize_rmse(result, burn_in=_BURN_IN):
-    err = result["err"][:, :, burn_in:, :]
+    err = result["err"][:, :, burn_in:, :][counted_mask(result["err"])[:, :, burn_in:]]
     pos_rmse = float(np.sqrt(np.mean(np.sum(err[..., POS] ** 2, axis=-1))))
     vel_rmse = float(np.sqrt(np.mean(np.sum(err[..., VEL] ** 2, axis=-1))))
     return pos_rmse, vel_rmse
 
 
 def summarize_consistency(result, dim=STATE_DIM, meas_dim=3, burn_in=_BURN_IN):
-    nees = result["nees"][:, :, burn_in:]  # [N, mc, T']
+    counted = counted_mask(result["err"])[:, :, burn_in:]
+    nees = result["nees"][:, :, burn_in:]
     nis = result["nis"][:, :, burn_in:]
     mc = nees.shape[1]
 
-    # ANEES: average over the MC axis per (trajectory, step), then test each
-    # against the chi-square interval for N=mc, dim=dim -- the brief's
-    # headline consistency number.
-    anees, bounds = anees_with_bounds(nees, dim=dim, mc_axis=1)  # [N, T']
-    anees_pass_frac = fraction_inside_bounds(anees, bounds)
+    _, bounds = anees_with_bounds(nees, dim=dim, mc_axis=1)
+    anees, anees_pass_frac = anees_over_counted(nees, counted, dim=dim, mc_axis=1)
 
-    anis, nis_bounds = anees_with_bounds(nis, dim=meas_dim, mc_axis=1)
-    anis_pass_frac = fraction_inside_bounds(anis, nis_bounds)
+    _, nis_bounds = anees_with_bounds(nis, dim=meas_dim, mc_axis=1)
+    anis, anis_pass_frac = anees_over_counted(nis, counted, dim=meas_dim, mc_axis=1)
 
-    coverage = empirical_coverage(nees.reshape(-1), dim=dim, levels=(0.68, 0.95))
+    coverage = empirical_coverage(nees[counted], dim=dim, levels=(0.68, 0.95))
 
     return {
         "anees_mean": float(np.mean(anees)),
@@ -216,7 +223,8 @@ def main():
         main_results[name] = result
         pos_rmse, vel_rmse = summarize_rmse(result)
         cons = summarize_consistency(result)
-        rows.append({"filter": name, "regime": "nominal", "pos_rmse": pos_rmse, "vel_rmse": vel_rmse, **cons})
+        divergence = divergence_summary(divergence_steps(result["err"]))
+        rows.append({"filter": name, "regime": "nominal", "pos_rmse": pos_rmse, "vel_rmse": vel_rmse, **divergence, **cons})
         print(f"  {name}: pos_rmse={pos_rmse:.2f}m vel_rmse={vel_rmse:.2f}m/s "
               f"ANEES={cons['anees_mean']:.2f} (bounds {cons['anees_bounds'][0]:.2f}-{cons['anees_bounds'][1]:.2f}) "
               f"frac_in_95={cons['anees_fraction_inside_95']:.3f}")
@@ -246,7 +254,8 @@ def main():
             result = evaluate_dataset(factory, run_fn, sweep_states, sweep_meas)
             pos_rmse, vel_rmse = summarize_rmse(result)
             cons = summarize_consistency(result)
-            rows.append({"filter": name, "regime": regime_name, "pos_rmse": pos_rmse, "vel_rmse": vel_rmse, **cons})
+            divergence = divergence_summary(divergence_steps(result["err"]))
+            rows.append({"filter": name, "regime": regime_name, "pos_rmse": pos_rmse, "vel_rmse": vel_rmse, **divergence, **cons})
             print(f"  {name}: pos_rmse={pos_rmse:.2f}m vel_rmse={vel_rmse:.2f}m/s frac_in_95={cons['anees_fraction_inside_95']:.3f}")
 
     flights = [fly_scenario(json.loads(p.read_text())) for p in sorted(Path(args.scenario_dir).glob("*.json"))]
@@ -255,12 +264,13 @@ def main():
         for name, (factory, run_fn) in filters.items():
             runs = [run_fn(factory(), states, z) for states, z in flights]
             result = {
-                key: np.concatenate([run[i][_BURN_IN:] for run in runs])[None, None]
+                key: np.concatenate([run[i][counted_span(run[0], _BURN_IN)] for run in runs])[None, None]
                 for i, key in enumerate(("err", "nees", "nis"))
             }
             pos_rmse, vel_rmse = summarize_rmse(result, burn_in=0)
             cons = summarize_consistency(result, burn_in=0)
-            rows.append({"filter": name, "regime": "scenarios", "pos_rmse": pos_rmse, "vel_rmse": vel_rmse, **cons})
+            divergence = divergence_summary([divergence_steps(run[0]) for run in runs])
+            rows.append({"filter": name, "regime": "scenarios", "pos_rmse": pos_rmse, "vel_rmse": vel_rmse, **divergence, **cons})
             print(f"  {name}: pos_rmse={pos_rmse:.2f}m vel_rmse={vel_rmse:.2f}m/s "
                   f"frac_in_95={cons['anees_fraction_inside_95']:.3f}")
 
@@ -268,7 +278,8 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
 
     import csv
-    fieldnames = ["filter", "regime", "pos_rmse", "vel_rmse", "anees_mean", "anees_bounds",
+    fieldnames = ["filter", "regime", "pos_rmse", "vel_rmse", "diverged_fraction", "median_divergence_step",
+                  "anees_mean", "anees_bounds",
                   "anees_fraction_inside_95", "anis_mean", "anis_bounds", "anis_fraction_inside_95",
                   "coverage_68", "coverage_95", "n_mc"]
     with open(out / "results_table.csv", "w", newline="") as f:

@@ -176,7 +176,7 @@ function renderReadouts(frame) {
         ...cells.map((text, column) => {
           const cell = document.createElement("td");
           cell.textContent = text;
-          if (column === 0 && readout.diverged) cell.append(divergedBadge(name));
+          if (column === 0 && readout.diverged) cell.append(divergedBadge(name, readout.diverged_step));
           if (column >= 4) Object.assign(cell.dataset, { filter: name, flag: FLAGS[column - 4] });
           return cell;
         }),
@@ -186,11 +186,11 @@ function renderReadouts(frame) {
   );
 }
 
-function divergedBadge(name) {
+function divergedBadge(name, step) {
   const badge = document.createElement("span");
   badge.className = "badge";
-  badge.dataset.divergedFilter = name;
-  badge.textContent = DIVERGED_LABEL;
+  Object.assign(badge.dataset, { divergedFilter: name, divergedStep: step });
+  badge.textContent = `${DIVERGED_LABEL} at step ${step}`;
   return badge;
 }
 
@@ -200,14 +200,14 @@ function renderLegend(frame) {
       const entry = document.createElement("span");
       entry.style.color = TRAIL_COLORS[name];
       entry.textContent = name;
-      if (frame.filters[name]?.diverged) entry.append(divergedBadge(name));
+      if (frame.filters[name]?.diverged) entry.append(divergedBadge(name, frame.filters[name].diverged_step));
       return entry;
     }),
   );
 }
 
 function renderPlan(frame) {
-  const positions = { truth: frame.truth_m, ...Object.fromEntries(Object.entries(frame.filters).map(([name, readout]) => [name, readout.estimate_m])) };
+  const positions = { truth: frame.truth_m, ...Object.fromEntries(Object.entries(frame.filters).map(([name, readout]) => [name, readout.estimate_m ?? []])) };
   for (const [name, [x, y]] of Object.entries(positions)) {
     if (Number.isFinite(x) && Number.isFinite(y)) trails[name] = [...(trails[name] ?? []).slice(1 - TRAIL_LENGTH), [x, y]];
   }
@@ -237,7 +237,7 @@ function renderViews(frame) {
     filters: Object.fromEntries(
       Object.entries(frame.filters).map(([name, readout]) => [
         name,
-        { error: readout.error_m, nees: readout.nees, altitude: readout.estimate_m[2], modes: readout.mode_probabilities },
+        { error: readout.error_m, nees: readout.nees, altitude: readout.estimate_m?.[2], modes: readout.mode_probabilities },
       ]),
     ),
   });

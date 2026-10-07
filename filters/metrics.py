@@ -11,7 +11,39 @@ filter from an overconfident one.
 import numpy as np
 from scipy.stats import chi2
 
+from filters.flags import counted_steps, divergence_step
 from filters.state import POS, VEL
+
+
+def _divergence_step_or_nan(position_error_m):
+    step = divergence_step(position_error_m)
+    return np.nan if step is None else float(step)
+
+
+def divergence_steps(err):
+    """err: [..., T, 9], NaN past a stopped run's last step. Each run's divergence step, NaN if it never diverged."""
+    return np.apply_along_axis(_divergence_step_or_nan, -1, np.linalg.norm(err[..., POS], axis=-1))
+
+
+def counted_mask(err):
+    """[..., T]: the steps metrics count, each run's steps before its divergence step."""
+    steps = err.shape[-2]
+    return np.arange(steps) < np.nan_to_num(divergence_steps(err), nan=steps)[..., None]
+
+
+def counted_span(err, burn_in):
+    """One stopped run's counted steps past its burn-in."""
+    return slice(burn_in, counted_steps(np.linalg.norm(err[:, POS], axis=1)))
+
+
+def divergence_summary(steps):
+    """steps: one divergence step per run, NaN where it never diverged; the median is None when none did."""
+    steps = np.asarray(steps, dtype=float).ravel()
+    diverged = steps[~np.isnan(steps)]
+    return {
+        "diverged_fraction": diverged.size / steps.size,
+        "median_divergence_step": float(np.median(diverged)) if diverged.size else None,
+    }
 
 
 def position_rmse(x_true, x_est):
@@ -60,6 +92,18 @@ def anees_with_bounds(nees_values, dim, mc_axis, confidence=0.95):
     low = chi2.ppf(alpha / 2, df=N * dim) / N
     high = chi2.ppf(1 - alpha / 2, df=N * dim) / N
     return anees, (low, high)
+
+
+def anees_over_counted(nees_values, counted, dim, mc_axis, confidence=0.95):
+    """ANEES per cell over the runs counted there, and the fraction of cells inside the chi-square interval for
+    that cell's own run count; a cell with no counted run is left out of both."""
+    runs = counted.sum(axis=mc_axis)
+    kept = runs > 0
+    runs = runs[kept]
+    anees = np.where(counted, nees_values, 0.0).sum(axis=mc_axis)[kept] / runs
+    alpha = 1 - confidence
+    bounds = (chi2.ppf(alpha / 2, df=runs * dim) / runs, chi2.ppf(1 - alpha / 2, df=runs * dim) / runs)
+    return anees, fraction_inside_bounds(anees, bounds)
 
 
 def fraction_inside_bounds(values, bounds):

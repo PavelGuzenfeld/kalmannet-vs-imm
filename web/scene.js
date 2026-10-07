@@ -166,6 +166,11 @@ export async function createScene(container) {
       pushTrail("truth", truthPosition);
       for (const [name, readout] of Object.entries(frame.filters)) {
         if (!markers[name]) markerFor(name);
+        markers[name].estimate.visible = Boolean(readout.estimate_m);
+        if (!readout.estimate_m) {
+          placeEllipsoid(markers[name], null);
+          continue;
+        }
         const centre = new THREE.Vector3(...toThree(readout.estimate_m));
         markers[name].estimate.position.copy(centre);
         placeEllipsoid(markers[name], readout.diverged ? null : readout.ellipsoid, centre);

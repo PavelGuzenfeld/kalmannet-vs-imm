@@ -168,10 +168,13 @@ def test_zero_gain_kalmannet_trips_raw_error_where_cv_dead_reckoning_leaves_20_m
         estimate = F @ estimate
         error_m.append(np.linalg.norm(estimate[:3] - truth[:3]))
     expected_step = int(np.flatnonzero(np.array(error_m) > 20.0)[0])
+    diverged_step = int(np.flatnonzero(np.array(error_m) > 200.0)[0])
 
     lines = replay(SEED_SCENARIO, "--imm-tuning", imm_tuning, "--knet-checkpoint", knet, "--rkn-checkpoint", missing)
 
-    assert lines["KalmanNet"] == f"KalmanNet: track_loss=n/a overconfidence=n/a raw_error={expected_step}"
+    assert lines["KalmanNet"] == (
+        f"KalmanNet: track_loss=n/a overconfidence=n/a raw_error={expected_step} diverged={diverged_step}"
+    )
 
 
 def test_rkn_track_loss_reads_n_a_with_the_reason_it_has_no_innovation_gate(tmp_path):
@@ -181,7 +184,7 @@ def test_rkn_track_loss_reads_n_a_with_the_reason_it_has_no_innovation_gate(tmp_
 
     lines = replay(SEED_SCENARIO, "--imm-tuning", missing, "--knet-checkpoint", missing, "--rkn-checkpoint", rkn)
 
-    rkn_line = re.fullmatch(r"RKN: track_loss=(.*) overconfidence=(-|\d+) raw_error=(-|\d+)", lines["RKN"])
+    rkn_line = re.fullmatch(r"RKN: track_loss=(.*) overconfidence=(-|\d+) raw_error=(-|\d+)( diverged=\d+)?", lines["RKN"])
     assert rkn_line is not None, lines["RKN"]
     assert rkn_line[1] == "n/a (RKN defines no innovation covariance)"
 

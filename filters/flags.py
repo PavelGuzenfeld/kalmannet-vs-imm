@@ -5,12 +5,15 @@ Quantiles are scipy chi2.ppf values pinned as literals; NaN trips every flag, so
 
 import numpy as np
 
+from filters.state import POS
+
 INNOVATION_GATE_NIS_99_DOF3 = 11.344866730144373
 NEES_UPPER_975_DOF9 = 19.02276779864163
 NEES_LOWER_025_DOF9 = 2.7003894999803584
 ELLIPSOID_95_DOF3 = 7.814727903251179
 OVERCONFIDENT_STEPS = 25
 RAW_ERROR_M = 20.0
+DIVERGED_POSITION_ERROR_M = 200.0
 FLAGS = ("track_loss", "overconfidence", "raw_error")
 UNGATED_REASONS = {("RKN", "track_loss"): "RKN defines no innovation covariance"}
 
@@ -42,6 +45,24 @@ def first_overconfidence_step(nees, upper=NEES_UPPER_975_DOF9, steps=OVERCONFIDE
 
 def first_raw_error_step(position_error_m, limit_m=RAW_ERROR_M):
     return _first_above(position_error_m, limit_m)
+
+
+def divergence_step(position_error_m):
+    """A filter is stepped no further after this step, and metrics count only the steps before it."""
+    return _first_above(position_error_m, DIVERGED_POSITION_ERROR_M)
+
+
+def counted_steps(position_error_m):
+    step = divergence_step(position_error_m)
+    return len(position_error_m) if step is None else step
+
+
+def until_diverged(steps):
+    """steps yield tuples led by the state error [9]; the diverged step is the last one pulled."""
+    for scored in steps:
+        yield scored
+        if divergence_step([np.linalg.norm(scored[0][POS])]) is not None:
+            return
 
 
 def first_trips(position_error_m, nees=None, nis=None, thresholds=DEFAULT_THRESHOLDS):

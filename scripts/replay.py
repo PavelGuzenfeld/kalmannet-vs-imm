@@ -18,7 +18,15 @@ from data.config import NOMINAL
 from data.fixed_wing import DEFAULT_PRESET, PRESETS
 from data.trajectory_gen import fly_scenario
 from filters.ekf import EKF
-from filters.flags import DEFAULT_THRESHOLDS, FLAGS, first_trips, shown
+from filters.flags import (
+    DEFAULT_THRESHOLDS,
+    FLAGS,
+    counted_steps,
+    divergence_step,
+    first_trips,
+    shown,
+    until_diverged,
+)
 from filters.imm import IMM
 from filters.knet import numpy_forward
 from filters.knet.gain_network import KalmanGainGRU
@@ -79,8 +87,8 @@ def knet_errors(checkpoint, states, z, R):
     flt = KalmanNetFilter(net, NOMINAL.dt)
     flt.init_sequence(torch.tensor(states[None, 0]) + _INIT_OFFSET, *_priors(NOMINAL.dt, R))
     with torch.no_grad():
-        estimates = torch.cat([flt.step(torch.tensor(z_t)[None]) for z_t in z]).numpy()
-    return estimates - states
+        steps = ((flt.step(torch.tensor(z_t)[None])[0].numpy() - truth,) for truth, z_t in zip(states, z))
+        return np.array([err for err, in until_diverged(steps)])
 
 
 def rkn_run(checkpoint, states, z):
@@ -88,7 +96,8 @@ def rkn_run(checkpoint, states, z):
     net.load_state_dict(torch.load(checkpoint, map_location="cpu", weights_only=True))
     net.eval()
     result = rkn_errors_and_nees(net, NOMINAL.dt, states[None], z[None, None])
-    return result["err"][0, 0], result["nees"][0, 0]
+    stepped = slice(counted_steps(np.linalg.norm(result["err"][0, 0, :, POS], axis=1)) + 1)
+    return result["err"][0, 0, stepped], result["nees"][0, 0, stepped]
 
 
 def numpy_weights(checkpoint):
@@ -100,11 +109,12 @@ def numpy_weights(checkpoint):
 
 
 def knet_errors_numpy(checkpoint, states, z, R):
-    return np.array(list(knet_steps(numpy_weights(checkpoint), NOMINAL.dt, R, states, z)))
+    steps = ((err,) for err in knet_steps(numpy_weights(checkpoint), NOMINAL.dt, R, states, z))
+    return np.array([err for err, in until_diverged(steps)])
 
 
 def rkn_run_numpy(checkpoint, states, z):
-    err, nees = zip(*rkn_steps(numpy_weights(checkpoint), NOMINAL.dt, states, z))
+    err, nees = zip(*until_diverged(rkn_steps(numpy_weights(checkpoint), NOMINAL.dt, states, z)))
     return np.array(err), np.array(nees)
 
 
@@ -119,7 +129,10 @@ def replay(scenario, imm_tuning, knet_checkpoint, rkn_checkpoint, learned_backen
     knet_run, rkn_backend_run = LEARNED_BACKENDS[learned_backend]
 
     def trips(err, nees=None, nis=None):
-        return first_trips(np.linalg.norm(err[:, POS], axis=1), nees, nis, thresholds)
+        position_error_m = np.linalg.norm(err[:, POS], axis=1)
+        found = first_trips(position_error_m, nees, nis, thresholds)
+        step = divergence_step(position_error_m)
+        return found if step is None else {**found, "diverged": step}
 
     out = {
         "EKF": trips(*run_ekf_like(EKF(dt, R), states, z)),
@@ -161,7 +174,8 @@ def main():
         if isinstance(trips, str):
             print(f"{name}: {trips}")
         else:
-            print(f"{name}: " + " ".join(f"{flag}={shown(name, trips, flag)}" for flag in FLAGS))
+            diverged = f" diverged={trips['diverged']}" if "diverged" in trips else ""
+            print(f"{name}: " + " ".join(f"{flag}={shown(name, trips, flag)}" for flag in FLAGS) + diverged)
 
     if args.record:
         scenario["tripped"] = {name: trips for name, trips in results.items() if not isinstance(trips, str)}

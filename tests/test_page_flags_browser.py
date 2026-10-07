@@ -105,7 +105,8 @@ BOOT_TIMEOUT_MS = 240_000
 PAUSED_WATCH_MS = 1_500
 KNET_WEIGHTS_URL_PATH = "/results/knet_vanilla/best.npz"
 DIVERGING_KNET_WEIGHTS = CASES_DIR / "diverging_knet.npz"
-DIVERGED_POSITION_ERROR_M = 1e5
+DIVERGING_KNET_DIVERGENCE = "diverging_knet_divergence.json"
+KEPT_SCALE_BOUND_M = 3e5
 STOP_SETTLE_MS = 500
 ANALYSIS_PANELS = ("altitude", "error", "nees", "modes")
 
@@ -243,9 +244,10 @@ def test_stop_halts_the_flight_clock(browser_context):
     assert page.locator("#clock").text_content() == stopped_at
 
 
-def test_diverged_filter_gets_a_badge_and_leaves_the_plot_scales_and_plan_extent(browser_context):
-    """KalmanNet on the diverging weights passes 1e5 m near step 60 and ends past 1e30 m. Kept estimates sit within
-    1e5 m of truth, whose break-turn altitude spans under 100 m, so a kept-only scale spans under 3e5 m."""
+def test_diverged_filter_gets_a_badge_at_the_native_divergence_step_and_leaves_the_plot_scales(browser_context):
+    """KalmanNet on the diverging weights passes 200 m in the break turn, at the step replay.py's run records, and
+    is stepped no further. Truth's break-turn altitude spans under 100 m, so a kept-only scale spans under 3e5 m."""
+    native_step = json.loads((CASES_DIR / DIVERGING_KNET_DIVERGENCE).read_text())["KalmanNet"]
     page = browser_context.new_page()
     page.route(f"**{KNET_WEIGHTS_URL_PATH}", lambda route: route.fulfill(path=DIVERGING_KNET_WEIGHTS))
     page.goto(f"{PAGE_BASE_URL}/web/index.html?scenario={CASES_URL_PATH}/{LARGE_RADIUS_CASE}.json")
@@ -255,13 +257,15 @@ def test_diverged_filter_gets_a_badge_and_leaves_the_plot_scales_and_plan_extent
     )
     assert page.locator("#status").text_content() == f"script finished at step {LARGE_RADIUS_CASE_STEPS}"
 
-    badges = page.eval_on_selector_all("#readouts [data-diverged-filter]", "spans => spans.map(s => s.dataset.divergedFilter)")
+    badges = page.eval_on_selector_all(
+        "#readouts [data-diverged-filter]", "spans => spans.map(s => [s.dataset.divergedFilter, Number(s.dataset.divergedStep)])"
+    )
     altitude_axis = page.locator('svg[data-panel="altitude"]').evaluate("svg => [Number(svg.dataset.axisLow), Number(svg.dataset.axisHigh)]")
     plan_span = float(page.locator("#plan").get_attribute("data-span-m"))
 
-    assert badges == ["KalmanNet"]
-    assert 0 < altitude_axis[1] - altitude_axis[0] < 3 * DIVERGED_POSITION_ERROR_M
-    assert plan_span < 3 * DIVERGED_POSITION_ERROR_M
+    assert badges == [["KalmanNet", native_step]]
+    assert 0 < altitude_axis[1] - altitude_axis[0] < KEPT_SCALE_BOUND_M
+    assert plan_span < KEPT_SCALE_BOUND_M
 
 
 FIELD_OF_VIEW_DEG = 55
