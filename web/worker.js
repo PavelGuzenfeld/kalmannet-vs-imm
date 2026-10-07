@@ -73,7 +73,13 @@ const handlers = {
     flight = liveFlight.LiveFlight(pyodide.toPy(setup), pyodide.toPy(immBest), weightsRoot);
     return fromWorker.started();
   },
-  async advance({ controls, manualAxes }) {
+  async advance({ controls, manualAxes, envelope }) {
+    const { pyodide } = await python;
+    if (envelope) {
+      const fields = pyodide.toPy(envelope);
+      flight.set_envelope(fields);
+      fields.destroy();
+    }
     const begin = performance.now();
     for (const control of controls) flight.advance(control, manualAxes);
     const stepCostMs = (performance.now() - begin) / controls.length;

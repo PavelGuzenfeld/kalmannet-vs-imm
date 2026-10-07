@@ -97,7 +97,9 @@ class LiveFlight:
         self._regime = REGIMES[setup["noise_regime"]]
         self._rng = np.random.default_rng(setup["seed"])
         start = scenario_start(setup, self._rng, self._regime)
-        self._envelope = envelope = Envelope(**setup["envelope"])
+        self._start_envelope = self._envelope = envelope = Envelope(**setup["envelope"])
+        self._envelope_changes = {}
+        self._scripted_envelopes = dict(setup.get("envelope_changes", []))
         self._manoeuvre_rows = None
         self.manoeuvre = None
         position, velocity, latest_control = (
@@ -105,7 +107,9 @@ class LiveFlight:
             start["velocity"],
             _latest(lambda: self.controls[-1]),
         )
-        self._flight = fly_steps(envelope, position, velocity, 0.0, latest_control, self._regime.dt)
+        self._flight = fly_steps(
+            envelope, position, velocity, 0.0, latest_control, self._regime.dt, self._envelope_changes
+        )
         self._start = np.concatenate((position, velocity))
         self.holds = Holds(envelope, self._regime.dt)
         self._truth, self._lift_direction, self._z = None, None, None
@@ -142,14 +146,26 @@ class LiveFlight:
         self.holds.disengage_axes(range(len(NEUTRAL_ROW)))
         entry_velocity = self._current_state()[1]
         self._manoeuvre_rows = manoeuvre_rows(
-            name, self._envelope, self._regime.dt, entry_velocity, lambda: self._truth[VEL]
+            name, lambda: self._envelope, self._regime.dt, entry_velocity, lambda: self._truth[VEL]
         )
         self.manoeuvre = name
 
     def cancel_manoeuvre(self):
         self.manoeuvre = self._manoeuvre_rows = None
 
+    def set_envelope(self, fields):
+        """Flies from the next step. One change per step, the last set; none when it matches the step before."""
+        step = len(self.controls)
+        changes = self._envelope_changes
+        changes.pop(step, None)
+        envelope = Envelope(**fields)
+        if envelope != (changes[max(changes)] if changes else self._start_envelope):
+            changes[step] = envelope
+        self._envelope = self.holds.envelope = envelope
+
     def advance(self, control, manual_axes=()):
+        if len(self.controls) in self._scripted_envelopes:
+            self.set_envelope(self._scripted_envelopes[len(self.controls)])
         self.holds.disengage_axes(manual_axes)
         if self.manoeuvre:
             control = next(self._manoeuvre_rows, None) or self._finish_manoeuvre(control)
@@ -206,6 +222,9 @@ class LiveFlight:
             "git_tag": git_tag,
             "controls": self.controls,
         }
+        if self._envelope_changes:
+            changes = self._envelope_changes.items()
+            scenario["envelope_changes"] = [[step, asdict(envelope)] for step, envelope in changes]
         return json.dumps({**scenario, "tripped": self.trips()}) + "\n"
 
 

@@ -1,14 +1,18 @@
 import json
 import sys
 
+import numpy as np
 import pytest
 
+from data.trajectory_gen import fly_scenario
 from filters.flags import DIVERGED_POSITION_ERROR_M
 from scripts.page_parity import (
     DIVERGING_KNET_DIVERGENCE,
     DIVERGING_KNET_NPZ,
     DRIFT_QUANTITIES,
     IMM_TUNING,
+    MAX_G_LOWERED_CASE,
+    MAX_G_LOWERED_STEP,
     NO_WEIGHTS,
     SCENARIOS_DIR,
     TIGHT_THRESHOLDS,
@@ -22,6 +26,8 @@ from scripts.page_parity import (
 from web.live_flight import LEARNED_WEIGHTS, LiveFlight, trace
 
 KILOMETRE_ROUNDING_ATOL_M = 1e-9
+MID_PULL_STEP = 100
+LOWERED_MAX_LOAD_FACTOR = 3.0
 
 
 @pytest.fixture(scope="module")
@@ -195,3 +201,27 @@ def test_page_stops_a_diverged_filter_at_the_step_native_replay_reports_and_show
         "IMM": False,
         "KalmanNet": True,
     }
+
+
+def test_max_g_lowered_mid_pull_case_flies_the_page_truth_and_leaves_the_break_turn_after_its_step(
+    cases,
+):
+    """MS-27: the page applies the recorded envelope change at the row replay applies it."""
+    scenario = json.loads((cases / f"{MAX_G_LOWERED_CASE}.json").read_text())
+    flight = LiveFlight(scenario, json.loads(IMM_TUNING.read_text())["best"], NO_WEIGHTS)
+    page_truth = []
+    for control in scenario["controls"]:
+        flight.advance(control)
+        page_truth.append(flight.frame()["truth_m"] + flight.frame()["truth_velocity_m_s"])
+
+    states, _ = fly_scenario(scenario)
+    break_turn, _ = fly_scenario(json.loads((cases / "break_turn_9g.json").read_text()))
+
+    assert [[step, envelope["max_load_factor"]] for step, envelope in scenario["envelope_changes"]] == [
+        [MID_PULL_STEP, LOWERED_MAX_LOAD_FACTOR]
+    ]
+    assert np.array(page_truth).tobytes() == states[:, :6].tobytes()
+    assert json.loads(flight.scenario_json())["envelope_changes"] == scenario["envelope_changes"]
+    after = MAX_G_LOWERED_STEP + 1
+    assert states[:after, :6].tobytes() == break_turn[:after, :6].tobytes()
+    assert not np.array_equal(states[after, :6], break_turn[after, :6])

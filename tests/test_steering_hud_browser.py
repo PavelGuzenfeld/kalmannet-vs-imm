@@ -418,3 +418,53 @@ def test_holding_either_shift_lights_the_one_afterburner_chip(browser, code):
 
     assert key_lit(page, code)
     assert key_lit(page, "ShiftRight" if code == "ShiftLeft" else "ShiftLeft")
+
+
+BENCHMARK_MAX_LOAD_FACTOR = 9.0
+LOWERED_MAX_LOAD_FACTOR = 3.0
+
+
+def exported_scenario(page):
+    with page.expect_download() as download:
+        page.click("#export")
+    return json.loads(Path(download.value.path()).read_text())
+
+
+def test_lowering_max_g_mid_pull_records_the_new_max_from_the_step_the_slider_moved(browser):
+    page = flying_page(browser)
+    press_and_wait_for_keydown(page, "ArrowDown")
+    page.clock.run_for(int(2 * RAMP_S * 1000))
+    moved_at_step = len(exported_scenario(page)["controls"])
+
+    page.fill("#max_load_factor", f"{LOWERED_MAX_LOAD_FACTOR:g}")
+    page.clock.run_for(HOLD_MS)
+
+    scenario = exported_scenario(page)
+    rows = scenario["controls"]
+    assert rows[-1][ROW_LOAD_FACTOR] == LOWERED_MAX_LOAD_FACTOR
+    assert (rows[moved_at_step - 1][ROW_LOAD_FACTOR], rows[moved_at_step][ROW_LOAD_FACTOR]) == (
+        BENCHMARK_MAX_LOAD_FACTOR,
+        LOWERED_MAX_LOAD_FACTOR,
+    )
+    assert [[step, envelope["max_load_factor"]] for step, envelope in scenario["envelope_changes"]] == [
+        [moved_at_step, LOWERED_MAX_LOAD_FACTOR]
+    ]
+    assert scenario["envelope"]["max_load_factor"] == BENCHMARK_MAX_LOAD_FACTOR
+
+
+def test_max_g_moved_while_paused_applies_from_the_first_step_after_resume(browser):
+    page = flying_page(browser)
+    page.clock.run_for(HOLD_MS)
+    page.click('[data-speed="0"]')
+    paused_at_step = len(exported_scenario(page)["controls"])
+
+    page.fill("#max_load_factor", f"{LOWERED_MAX_LOAD_FACTOR:g}")
+    page.clock.run_for(HOLD_MS)
+    assert len(exported_scenario(page)["controls"]) == paused_at_step
+    page.click('[data-speed="1"]')
+    page.clock.run_for(HOLD_MS)
+
+    changes = exported_scenario(page)["envelope_changes"]
+    assert [[step, envelope["max_load_factor"]] for step, envelope in changes] == [
+        [paused_at_step, LOWERED_MAX_LOAD_FACTOR]
+    ]

@@ -16,7 +16,7 @@ def run(name):
     recorded = []
 
     def feedback_rows():
-        for row in manoeuvre_rows(name, ENVELOPE, NOMINAL.dt, ENTRY_VELOCITY, lambda: latest["velocity"]):
+        for row in manoeuvre_rows(name, lambda: ENVELOPE, NOMINAL.dt, ENTRY_VELOCITY, lambda: latest["velocity"]):
             recorded.append(row)
             yield row
 
