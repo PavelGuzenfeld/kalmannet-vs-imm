@@ -1,4 +1,6 @@
+import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -17,7 +19,7 @@ KEYDOWN_POLLS = 100
 FRAME_STEP_PERCENT = 100 * FRAME_MS / 1000 / RAMP_S
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def browser():
     with sync_api.sync_playwright() as playwright:
         chromium = playwright.chromium.launch()
@@ -25,15 +27,24 @@ def browser():
         chromium.close()
 
 
-def flying_page(browser):
+def boot_paused(browser):
     page = browser.new_context().new_page()
     page.clock.install(time=0)
     page.clock.pause_at(FRAME_MS)
     page.goto(f"{PAGE_BASE_URL}/web/index.html")
     page.wait_for_function("document.getElementById('status').textContent.startsWith('paused')", polling=200, timeout=BOOT_TIMEOUT_MS)
+    return page
+
+
+def start_flight(page):
     page.click("#start")
     page.wait_for_function("document.getElementById('status').textContent.startsWith('flying')", polling=200, timeout=BOOT_TIMEOUT_MS)
     page.bring_to_front()
+
+
+def flying_page(browser):
+    page = boot_paused(browser)
+    start_flight(page)
     return page
 
 
@@ -77,3 +88,199 @@ def test_releasing_right_arrow_unlights_the_key_and_ramps_roll_back_to_zero_with
 
     assert not key_lit(page, "ArrowRight")
     assert hud_percent(page, "roll") == pytest.approx(0, abs=FRAME_STEP_PERCENT)
+
+
+def test_holding_d_for_one_second_reads_half_rudder_with_the_key_lit(browser):
+    page = flying_page(browser)
+
+    press_and_wait_for_keydown(page, "KeyD")
+    page.clock.run_for(HOLD_MS)
+
+    assert hud_percent(page, "rudder") == pytest.approx(50, abs=FRAME_STEP_PERCENT)
+    assert key_lit(page, "KeyD")
+
+
+def test_holding_a_reads_negative_rudder(browser):
+    page = flying_page(browser)
+
+    press_and_wait_for_keydown(page, "KeyA")
+    page.clock.run_for(HOLD_MS)
+
+    assert hud_percent(page, "rudder") == pytest.approx(-50, abs=FRAME_STEP_PERCENT)
+
+
+def test_holding_space_reads_full_brake_and_releasing_clears_it(browser):
+    page = flying_page(browser)
+
+    press_and_wait_for_keydown(page, "Space")
+    page.clock.run_for(2 * FRAME_MS)
+    assert hud_percent(page, "brake") == 100
+    assert key_lit(page, "Space")
+
+    page.keyboard.up("Space")
+    page.clock.run_for(2 * FRAME_MS)
+    assert hud_percent(page, "brake") == 0
+
+
+def test_holding_shift_reads_full_afterburner(browser):
+    page = flying_page(browser)
+
+    press_and_wait_for_keydown(page, "ShiftLeft")
+    page.clock.run_for(2 * FRAME_MS)
+
+    assert hud_percent(page, "afterburner") == 100
+    assert key_lit(page, "ShiftLeft")
+
+
+ROW_LOAD_FACTOR, ROW_THROTTLE = 1, 2
+ROW_RUDDER, ROW_BRAKE, ROW_AFTERBURNER = 3, 4, 5
+BENCHMARK_MAX_SIDE_G = 2.0
+EXPORT_LAG_FRAMES = 8
+SLIDER_IDS = ("max_side_load_factor", "max_negative_load_factor", "brake_drag_multiplier", "afterburner_thrust_multiplier")
+PRESET_SLIDERS = {
+    "benchmark": (2.0, -4.5, 3.0, 1.5),
+    "small aerial object": (0.5, -2.0, 2.0, 1.0),
+    "light aircraft": (0.3, -1.5, 2.0, 1.0),
+    "jet": (1.0, -3.0, 3.0, 1.5),
+}
+
+
+def recorded_rows(page):
+    with page.expect_download() as download:
+        page.click("#export")
+    return json.loads(Path(download.value.path()).read_text())["controls"]
+
+
+def test_holding_d_for_one_second_records_half_of_max_side_g_in_the_rudder_column(browser):
+    page = flying_page(browser)
+
+    press_and_wait_for_keydown(page, "KeyD")
+    page.clock.run_for(HOLD_MS)
+
+    rudder_fraction = recorded_rows(page)[-1][ROW_RUDDER] / BENCHMARK_MAX_SIDE_G
+    assert rudder_fraction == pytest.approx(0.5, abs=EXPORT_LAG_FRAMES * FRAME_STEP_PERCENT / 100)
+
+
+def test_holding_space_records_brake_one_and_afterburner_zero(browser):
+    page = flying_page(browser)
+
+    press_and_wait_for_keydown(page, "Space")
+    page.clock.run_for(HOLD_MS)
+
+    row = recorded_rows(page)[-1]
+    assert row[ROW_BRAKE] == 1
+    assert row[ROW_AFTERBURNER] == 0
+
+
+def test_holding_shift_records_afterburner_one(browser):
+    page = flying_page(browser)
+
+    press_and_wait_for_keydown(page, "ShiftLeft")
+    page.clock.run_for(HOLD_MS)
+
+    assert recorded_rows(page)[-1][ROW_AFTERBURNER] == 1
+
+
+def test_full_push_records_minus_the_preset_max_negative_g(browser):
+    page = flying_page(browser)
+
+    press_and_wait_for_keydown(page, "ArrowUp")
+    page.clock.run_for(int(2 * RAMP_S * 1000))
+
+    assert recorded_rows(page)[-1][1] == -4.5
+
+
+def test_selecting_each_preset_sets_the_four_new_sliders(browser):
+    page = boot_paused(browser)
+
+    shown = {}
+    for preset in PRESET_SLIDERS:
+        page.select_option("#preset", preset)
+        shown[preset] = tuple(float(page.input_value(f"#{slider}")) for slider in SLIDER_IDS)
+
+    assert shown == PRESET_SLIDERS
+
+
+def test_holding_w_reaches_exactly_full_throttle_in_the_recorded_row(browser):
+    page = flying_page(browser)
+
+    press_and_wait_for_keydown(page, "KeyW")
+    page.clock.run_for(2 * HOLD_MS)
+
+    assert recorded_rows(page)[-1][ROW_THROTTLE] == 1
+
+
+def test_holding_shift_at_full_throttle_keeps_the_afterburner_column_set(browser):
+    page = flying_page(browser)
+
+    press_and_wait_for_keydown(page, "KeyW")
+    page.keyboard.down("ShiftLeft")
+    page.clock.run_for(2 * HOLD_MS)
+
+    row = recorded_rows(page)[-1]
+    assert row[ROW_THROTTLE] == 1
+    assert row[ROW_AFTERBURNER] == 1
+
+
+def test_moving_the_max_negative_g_slider_changes_the_full_push_row(browser):
+    page = boot_paused(browser)
+    page.fill("#max_negative_load_factor", "-6")
+    start_flight(page)
+
+    press_and_wait_for_keydown(page, "ArrowUp")
+    page.clock.run_for(int(2 * RAMP_S * 1000))
+
+    assert recorded_rows(page)[-1][ROW_LOAD_FACTOR] == -6
+
+
+def test_holding_shift_right_records_afterburner_one(browser):
+    page = flying_page(browser)
+
+    press_and_wait_for_keydown(page, "ShiftRight")
+    page.clock.run_for(HOLD_MS)
+
+    assert recorded_rows(page)[-1][ROW_AFTERBURNER] == 1
+
+
+def test_max_side_g_slider_scales_the_rudder_column_at_full_deflection(browser):
+    page = boot_paused(browser)
+    page.fill("#max_side_load_factor", "1.5")
+    start_flight(page)
+
+    press_and_wait_for_keydown(page, "KeyD")
+    page.clock.run_for(int(2 * RAMP_S * 1000))
+
+    assert recorded_rows(page)[-1][ROW_RUDDER] == 1.5
+
+
+def test_rudder_column_climbs_the_ramp_in_exact_frame_steps(browser):
+    page = flying_page(browser)
+
+    press_and_wait_for_keydown(page, "KeyD")
+    page.clock.run_for(HOLD_MS)
+
+    fractions = [row[ROW_RUDDER] / BENCHMARK_MAX_SIDE_G for row in recorded_rows(page)]
+    frame_steps = sorted({fraction / (FRAME_STEP_PERCENT / 100) for fraction in fractions})
+    gaps = [later - earlier for earlier, later in zip(frame_steps, frame_steps[1:])]
+    assert all(gap == pytest.approx(round(gap), abs=1e-6) for gap in gaps)
+    assert 0.4 <= max(fractions) <= 0.5 + 1e-9
+
+
+LEGACY_SCENARIO_URL = "../data/scenarios/break_turn_9g.json"
+LEGACY_MAX_LOAD_FACTOR = 9.0
+
+
+def test_a_legacy_scenario_gets_neutral_defaults_for_the_new_limits(browser):
+    page = browser.new_context().new_page()
+    page.clock.install(time=0)
+    page.clock.pause_at(FRAME_MS)
+    page.goto(f"{PAGE_BASE_URL}/web/index.html?scenario={LEGACY_SCENARIO_URL}")
+    page.wait_for_function("document.getElementById('status').textContent.startsWith('flying')", polling=200, timeout=BOOT_TIMEOUT_MS)
+    page.clock.run_for(HOLD_MS)
+
+    shown = tuple(float(page.input_value(f"#{slider}")) for slider in SLIDER_IDS)
+    with page.expect_download() as download:
+        page.click("#export")
+    flown = json.loads(Path(download.value.path()).read_text())["envelope"]
+    assert shown == (0.0, -LEGACY_MAX_LOAD_FACTOR, 1.0, 1.0)
+    assert tuple(flown[key] for key in SLIDER_IDS) == shown
