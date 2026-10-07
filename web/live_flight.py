@@ -25,6 +25,7 @@ from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import POS, VEL
 from filters.ukf import UKF
 from scripts.eval import ekf_like_steps, imm_steps, knet_steps, rkn_steps
+from web.evade import evade_rows
 from web.holds import Holds
 from web.manoeuvres import MANOEUVRES, manoeuvre_rows
 
@@ -100,7 +101,7 @@ class LiveFlight:
         self._start_envelope = self._envelope = envelope = Envelope(**setup["envelope"])
         self._envelope_changes = {}
         self._scripted_envelopes = dict(setup.get("envelope_changes", []))
-        self._manoeuvre_rows = None
+        self._manoeuvre_rows = self._evade_rows = None
         self.manoeuvre = None
         position, velocity, latest_control = (
             start["position"],
@@ -140,9 +141,25 @@ class LiveFlight:
 
     def toggle_hold(self, name):
         self.cancel_manoeuvre()
+        self.disengage_evade()
         self.holds.toggle(name, *self._current_state())
 
+    def engage_evade(self):
+        """Seeded by the scenario seed and the engage step, apart from the flight's own draws."""
+        self.cancel_manoeuvre()
+        self.holds.disengage_axes(range(len(NEUTRAL_ROW)))
+        rng = np.random.default_rng([self.setup["seed"], len(self.controls)])
+        self._evade_rows = evade_rows(lambda: self._envelope, self._regime.dt, rng, self._evader_truth)
+
+    def disengage_evade(self):
+        self._evade_rows = None
+
+    def _evader_truth(self):
+        position, velocity = (np.asarray(value, dtype=np.float64) for value in self._current_state())
+        return position, velocity, self._lift_direction
+
     def start_manoeuvre(self, name):
+        self.disengage_evade()
         self.holds.disengage_axes(range(len(NEUTRAL_ROW)))
         entry_velocity = self._current_state()[1]
         self._manoeuvre_rows = manoeuvre_rows(
@@ -169,6 +186,8 @@ class LiveFlight:
         self.holds.disengage_axes(manual_axes)
         if self.manoeuvre:
             control = next(self._manoeuvre_rows, None) or self._finish_manoeuvre(control)
+        elif self._evade_rows:
+            control = next(self._evade_rows)
         self.controls.append(self.holds.steer(full_control_row(control), *self._current_state()))
         self._truth, self._lift_direction = next(self._flight)
         self._z = measure(self._rng, self._truth[None], self._regime)[0]
@@ -203,6 +222,7 @@ class LiveFlight:
         return {
             "step": len(self.controls),
             "manoeuvre": self.manoeuvre,
+            "evade": self._evade_rows is not None,
             "truth_m": self._truth[POS].tolist(),
             "truth_velocity_m_s": self._truth[VEL].tolist(),
             "truth_lift_direction": self._lift_direction.tolist(),

@@ -8,6 +8,7 @@ export const toWorker = Object.freeze({
   setThresholds: (thresholds) => ({ kind: "setThresholds", thresholds }),
   exportScenario: () => ({ kind: "exportScenario" }),
   manoeuvre: (name) => ({ kind: "manoeuvre", name }),
+  evade: (engaged) => ({ kind: "evade", engaged }),
 });
 
 export const fromWorker = Object.freeze({

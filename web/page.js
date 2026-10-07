@@ -35,6 +35,7 @@ const ROW_THROTTLE = 2;
 const ROW_SPEED_BRAKE = 4;
 const ROW_AFTERBURNER = 5;
 const HOLD_KEYS = { KeyH: "heading", KeyJ: "altitude", KeyK: "speed", KeyL: "bank" };
+const EVADE_KEY = "KeyE";
 const STEP_COST_WINDOW = 100;
 const STEP_BUDGET_MS = 20;
 const TRAIL_LENGTH = 3000;
@@ -59,6 +60,7 @@ let awaitingWorker = true;
 let lastTick = performance.now();
 let throttle = CRUISE_THROTTLE;
 let manoeuvreStep = null;
+let evadeStep = null;
 let latestControl = [0, 1, CRUISE_THROTTLE, 0, 0, 0];
 let latestEnvelope = null;
 const keyAxes = { roll: 0, pull: 0, rudder: 0 };
@@ -120,6 +122,7 @@ function startFlight(scriptControls, recordedStart, recordedEnvelopeChanges) {
   };
   script = scriptControls;
   stepsSent = 0;
+  evadeStep = null;
   owedSteps = 0;
   trails = {};
   history = [];
@@ -190,10 +193,23 @@ function renderManoeuvre(frame) {
   byId("manoeuvre-hud").textContent = frame.manoeuvre ?? "";
 }
 
+function setEvade(engaged) {
+  if (!flying || script) return;
+  evadeStep = engaged ? stepsSent : null;
+  worker.postMessage(toWorker.evade(engaged));
+}
+
+function renderEvade(frame) {
+  if (evadeStep !== null && !frame.evade && frame.step > evadeStep) evadeStep = null;
+  byId("steering-hud").querySelector("[data-hud-evade]").dataset.engaged = String(frame.evade);
+  byId("evade").checked = frame.evade;
+}
+
 function readControl(elapsedS) {
   const stick = stickInput(elapsedS);
   steering = stick;
   if (manoeuvreStep !== null && stick.manual) cancelManoeuvre();
+  if (evadeStep !== null && stick.manual) setEvade(false);
   latestEnvelope = { ...envelope };
   const { max_roll_rate_rad_s, max_load_factor, max_side_load_factor, max_negative_load_factor } = latestEnvelope;
   throttle = clamp(throttle + stick.throttleRate * THROTTLE_RATE_PER_S * elapsedS, 0, 1);
@@ -354,6 +370,7 @@ const replies = {
     renderClock(frame);
     renderManoeuvre(frame);
     renderHolds(frame);
+    renderEvade(frame);
   },
   scenario({ json }) {
     const link = document.createElement("a");
@@ -412,10 +429,20 @@ for (const tab of document.querySelectorAll("[data-tab]")) {
     }
   });
 }
+byId("evade").addEventListener("change", (event) => {
+  setEvade(event.target.checked);
+  event.target.checked = evadeStep !== null;
+  event.target.blur();
+});
 byId("export").addEventListener("click", () => stepsSent && worker.postMessage(toWorker.exportScenario()));
 addEventListener("keydown", (event) => {
   if (event.code in HOLD_KEYS && flying && !script && !event.repeat && !event.target.matches("input, select")) {
     worker.postMessage(toWorker.toggleHold(HOLD_KEYS[event.code]));
+    event.preventDefault();
+    return;
+  }
+  if (event.code === EVADE_KEY && !event.repeat && !event.target.matches("input, select")) {
+    setEvade(evadeStep === null);
     event.preventDefault();
     return;
   }

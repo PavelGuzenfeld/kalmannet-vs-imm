@@ -391,7 +391,7 @@ def test_gamepad_a_reads_full_afterburner_and_records_afterburner_one_brake_zero
 
 
 PAGE_JS = Path(__file__).resolve().parents[1] / "web" / "page.js"
-BINDING_DECLARATIONS = tuple(f"const {name} " for name in ("STEERING_KEYS", "MANOEUVRE_KEYS", "HOLD_KEYS"))
+BINDING_DECLARATIONS = tuple(f"const {name} " for name in ("STEERING_KEYS", "MANOEUVRE_KEYS", "HOLD_KEYS", "EVADE_KEY"))
 KEY_CODE = re.compile(r"\b(?:Arrow[A-Z]\w+|Key[A-Z]|Digit\d|Space|Shift(?:Left|Right))\b")
 
 
