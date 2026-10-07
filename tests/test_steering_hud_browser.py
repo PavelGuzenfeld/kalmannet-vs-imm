@@ -231,3 +231,56 @@ def test_moving_the_max_negative_g_slider_changes_the_full_push_row(browser):
     page.clock.run_for(int(2 * RAMP_S * 1000))
 
     assert recorded_rows(page)[-1][ROW_LOAD_FACTOR] == -6
+
+
+def test_holding_shift_right_records_afterburner_one(browser):
+    page = flying_page(browser)
+
+    press_and_wait_for_keydown(page, "ShiftRight")
+    page.clock.run_for(HOLD_MS)
+
+    assert recorded_rows(page)[-1][ROW_AFTERBURNER] == 1
+
+
+def test_max_side_g_slider_scales_the_rudder_column_at_full_deflection(browser):
+    page = boot_paused(browser)
+    page.fill("#max_side_load_factor", "1.5")
+    start_flight(page)
+
+    press_and_wait_for_keydown(page, "KeyD")
+    page.clock.run_for(int(2 * RAMP_S * 1000))
+
+    assert recorded_rows(page)[-1][ROW_RUDDER] == 1.5
+
+
+def test_rudder_column_climbs_the_ramp_in_exact_frame_steps(browser):
+    page = flying_page(browser)
+
+    press_and_wait_for_keydown(page, "KeyD")
+    page.clock.run_for(HOLD_MS)
+
+    fractions = [row[ROW_RUDDER] / BENCHMARK_MAX_SIDE_G for row in recorded_rows(page)]
+    frame_steps = sorted({fraction / (FRAME_STEP_PERCENT / 100) for fraction in fractions})
+    gaps = [later - earlier for earlier, later in zip(frame_steps, frame_steps[1:])]
+    assert all(gap == pytest.approx(round(gap), abs=1e-6) for gap in gaps)
+    assert 0.4 <= max(fractions) <= 0.5 + 1e-9
+
+
+LEGACY_SCENARIO_URL = "../data/scenarios/break_turn_9g.json"
+LEGACY_MAX_LOAD_FACTOR = 9.0
+
+
+def test_a_legacy_scenario_gets_neutral_defaults_for_the_new_limits(browser):
+    page = browser.new_context().new_page()
+    page.clock.install(time=0)
+    page.clock.pause_at(FRAME_MS)
+    page.goto(f"{PAGE_BASE_URL}/web/index.html?scenario={LEGACY_SCENARIO_URL}")
+    page.wait_for_function("document.getElementById('status').textContent.startsWith('flying')", polling=200, timeout=BOOT_TIMEOUT_MS)
+    page.clock.run_for(HOLD_MS)
+
+    shown = tuple(float(page.input_value(f"#{slider}")) for slider in SLIDER_IDS)
+    with page.expect_download() as download:
+        page.click("#export")
+    flown = json.loads(Path(download.value.path()).read_text())["envelope"]
+    assert shown == (0.0, -LEGACY_MAX_LOAD_FACTOR, 1.0, 1.0)
+    assert tuple(flown[key] for key in SLIDER_IDS) == shown
