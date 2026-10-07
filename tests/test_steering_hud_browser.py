@@ -266,12 +266,22 @@ def test_rudder_column_climbs_the_ramp_in_exact_frame_steps(browser):
     assert 0.4 <= max(fractions) <= 0.5 + 1e-9
 
 
-LEGACY_SCENARIO_URL = "../data/scenarios/break_turn_9g.json"
+LEGACY_SCENARIO_URL = "../data/scenarios/legacy_break_turn_9g.json"
+COMMITTED_SCENARIO = Path(__file__).resolve().parents[1] / "data" / "scenarios" / "break_turn_9g.json"
 LEGACY_MAX_LOAD_FACTOR = 9.0
+LEGACY_CONTROL_COLUMNS = 3
+
+
+def legacy_form_of_committed_scenario():
+    scenario = json.loads(COMMITTED_SCENARIO.read_text())
+    scenario["envelope"] = {key: value for key, value in scenario["envelope"].items() if key not in SLIDER_IDS}
+    scenario["controls"] = [row[:LEGACY_CONTROL_COLUMNS] for row in scenario["controls"]]
+    return json.dumps(scenario)
 
 
 def test_a_legacy_scenario_gets_neutral_defaults_for_the_new_limits(browser):
     page = browser.new_context().new_page()
+    page.route(f"{PAGE_BASE_URL}/data/scenarios/legacy_break_turn_9g.json", lambda route: route.fulfill(content_type="application/json", body=legacy_form_of_committed_scenario()))
     page.clock.install(time=0)
     page.clock.pause_at(FRAME_MS)
     page.goto(f"{PAGE_BASE_URL}/web/index.html?scenario={LEGACY_SCENARIO_URL}")
