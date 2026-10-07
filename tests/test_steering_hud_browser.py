@@ -303,13 +303,13 @@ def hold_engaged_js(name, engaged):
     return f"document.querySelector('[data-hud-hold=\"{name}\"]').dataset.engaged === '{str(engaged).lower()}'"
 
 
-def test_j_engages_altitude_hold_and_pulling_the_stick_disengages_it(browser_context):
-    page = flying_page(browser_context)
+def test_j_engages_altitude_hold_and_pulling_the_stick_disengages_it(browser):
+    page = flying_page(browser)
 
     page.keyboard.press("KeyJ")
     assert run_until(page, hold_engaged_js("altitude", True))
 
-    page.keyboard.down("ArrowDown")
+    press_and_wait_for_keydown(page, "ArrowDown")
     assert run_until(page, hold_engaged_js("altitude", False))
     page.clock.run_for(HOLD_MS)
     assert recorded_rows(page)[-1][ROW_LOAD_FACTOR] > 1
