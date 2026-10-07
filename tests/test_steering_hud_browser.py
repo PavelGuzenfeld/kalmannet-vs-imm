@@ -123,6 +123,7 @@ def test_holding_shift_reads_full_afterburner(browser_context):
     assert key_lit(page, "ShiftLeft")
 
 
+ROW_LOAD_FACTOR, ROW_THROTTLE = 1, 2
 ROW_RUDDER, ROW_BRAKE, ROW_AFTERBURNER = 3, 4, 5
 BENCHMARK_MAX_SIDE_G = 2.0
 EXPORT_LAG_FRAMES = 8
@@ -189,3 +190,41 @@ def test_selecting_a_preset_sets_the_four_new_sliders(browser_context, preset):
     page.select_option("#preset", preset)
 
     assert tuple(float(page.input_value(f"#{slider}")) for slider in SLIDER_IDS) == PRESET_SLIDERS[preset]
+
+
+def test_holding_w_reaches_exactly_full_throttle_in_the_recorded_row(browser_context):
+    page = flying_page(browser_context)
+
+    page.keyboard.down("KeyW")
+    page.clock.run_for(2 * HOLD_MS)
+
+    assert recorded_rows(page)[-1][ROW_THROTTLE] == 1
+
+
+def test_holding_shift_at_full_throttle_keeps_the_afterburner_column_set(browser_context):
+    page = flying_page(browser_context)
+
+    page.keyboard.down("KeyW")
+    page.keyboard.down("ShiftLeft")
+    page.clock.run_for(2 * HOLD_MS)
+
+    row = recorded_rows(page)[-1]
+    assert row[ROW_THROTTLE] == 1
+    assert row[ROW_AFTERBURNER] == 1
+
+
+def test_moving_the_max_negative_g_slider_changes_the_full_push_row(browser_context):
+    page = browser_context.new_page()
+    page.clock.install()
+    page.goto(f"{PAGE_BASE_URL}/web/index.html")
+    page.wait_for_function("document.getElementById('status').textContent.startsWith('paused')", polling=200, timeout=BOOT_TIMEOUT_MS)
+    page.fill("#max_negative_load_factor", "-6")
+    page.click("#start")
+    page.wait_for_function("document.getElementById('status').textContent.startsWith('flying')", polling=200, timeout=BOOT_TIMEOUT_MS)
+    page.bring_to_front()
+    page.clock.pause_at(page.evaluate("Date.now()") + FRAME_MS)
+
+    page.keyboard.down("ArrowUp")
+    page.clock.run_for(int(2 * RAMP_S * 1000))
+
+    assert recorded_rows(page)[-1][ROW_LOAD_FACTOR] == -6
