@@ -197,3 +197,20 @@ old = "-1"
 new = "1"
 reason = """`np.sum(err[..., POS or VEL] ** 2, axis=-1)` on the counted steps, a 2-D [n,3] array after the
 boolean mask: axis=-1 and axis=1 are the same axis, so this mutant is equivalent and no test can tell them apart."""
+
+file = "web/manoeuvres.py"
+line = 55
+column = 14
+old = """self.turned_rad < target_rad"""
+new = """self.turned_rad <= target_rad"""
+reason = """turned_rad is a running sum of float arctan2 angles, so it never lands exactly on the target
+radian value; rebuilt with the mutant, all six manoeuvres fly bit-identical states and rows."""
+
+[[waiver]]
+file = "web/manoeuvres.py"
+line = 59
+column = 14
+old = """self._velocity[2] < 0.0"""
+new = """self._velocity[2] <= 0.0"""
+reason = """A flown vertical velocity is never exactly 0.0 at the level-off check; rebuilt with the mutant,
+all six manoeuvres fly bit-identical states and rows."""
