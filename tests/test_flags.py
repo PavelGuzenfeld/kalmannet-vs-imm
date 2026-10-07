@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from scipy.stats import chi2
 
 from filters.flags import (
@@ -9,11 +10,14 @@ from filters.flags import (
     NEES_UPPER_975_DOF9,
     OVERCONFIDENT_STEPS,
     RAW_ERROR_M,
+    counted_steps,
+    divergence_step,
     first_overconfidence_step,
     first_raw_error_step,
     first_track_loss_step,
     first_trips,
     shown,
+    until_diverged,
 )
 
 INSIDE_NEES = 9.0
@@ -118,3 +122,50 @@ def test_shown_reads_a_flag_that_never_tripped_as_a_dash_and_a_tripped_one_as_it
 def test_band_and_ellipsoid_quantiles_are_the_scipy_values_for_the_pinned_scipy():
     assert NEES_LOWER_025_DOF9 == chi2.ppf(0.025, df=9)
     assert ELLIPSOID_95_DOF3 == chi2.ppf(0.95, df=3)
+
+
+def test_position_error_of_exactly_200_m_has_not_diverged():
+    assert divergence_step(np.full(5, 200.0)) is None
+
+
+def test_position_error_just_above_200_m_diverges_at_that_step():
+    assert divergence_step(np.array([0.0, 200.0, np.nextafter(200.0, np.inf), 1.0])) == 2
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+def test_non_finite_position_error_diverges_at_that_step(bad):
+    assert divergence_step(np.array([1.0, bad, 3.0])) == 1
+
+
+def test_counted_steps_are_the_ones_before_the_divergence_step_or_all_of_them():
+    assert (counted_steps(np.array([1.0, 2.0, 250.0, 1.0])), counted_steps(np.array([1.0, 2.0]))) == (2, 2)
+
+
+def scored(position_error_m):
+    err = np.zeros(9)
+    err[0] = position_error_m
+    return (err,)
+
+
+def test_a_filter_is_pulled_through_its_divergence_step_and_no_further():
+    pulled = []
+
+    def steps():
+        for position_error_m in (1.0, 200.0, 201.0, 1.0):
+            pulled.append(position_error_m)
+            yield scored(position_error_m)
+
+    yielded = [err[0] for err, in until_diverged(steps())]
+
+    assert yielded == pulled == [1.0, 200.0, 201.0]
+
+
+def test_a_filter_whose_error_stays_at_200_m_is_pulled_to_the_end():
+    assert len(list(until_diverged(scored(200.0) for _ in range(4)))) == 4
+
+
+def test_a_filter_off_only_in_altitude_is_pulled_no_further_once_past_200_m():
+    err = np.zeros(9)
+    err[2] = 201.0
+
+    assert len(list(until_diverged((err,) for _ in range(3)))) == 1
