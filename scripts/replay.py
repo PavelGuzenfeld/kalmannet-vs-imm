@@ -52,8 +52,8 @@ OVERHEAD_PASS_STEPS = 200
 def break_turn_controls():
     """Level, roll to ~83 deg at full rate, pull 9 g at full throttle for 3 s, roll out, level. 50 Hz steps."""
     roll_rate = PRESETS[DEFAULT_PRESET].max_roll_rate_rad_s
-    level, pull = [0.0, 1.0, 0.6], [0.0, 9.0, 1.0]
-    roll_in, roll_out = [roll_rate, 1.0, 1.0], [-roll_rate, 1.0, 1.0]
+    level, pull = [0.0, 1.0, 0.6, 0.0, 0.0, 0.0], [0.0, 9.0, 1.0, 0.0, 0.0, 0.0]
+    roll_in, roll_out = [roll_rate, 1.0, 1.0, 0.0, 0.0, 0.0], [-roll_rate, 1.0, 1.0, 0.0, 0.0, 0.0]
     bank, hold = SEED_BREAK_TURN_BANK_STEPS, SEED_BREAK_TURN_PULL_STEPS
     return [level] * 50 + [roll_in] * bank + [pull] * hold + [roll_out] * bank + [level] * 50
 
@@ -76,7 +76,7 @@ def overhead_scenario():
         **seed_scenario(),
         "seed": OVERHEAD_SCENARIO_SEED,
         "start": {"position": OVERHEAD_START_M, "velocity": [envelope.max_speed_m_s, 0.0, 0.0]},
-        "controls": [[0.0, 1.0, 1.0]] * OVERHEAD_PASS_STEPS,
+        "controls": [[0.0, 1.0, 1.0, 0.0, 0.0, 0.0]] * OVERHEAD_PASS_STEPS,
     }
 
 

@@ -5,7 +5,7 @@ from dataclasses import asdict
 import numpy as np
 
 from data.config import NOMINAL, REGIMES
-from data.fixed_wing import DEFAULT_PRESET, PRESETS, Envelope, fly_steps
+from data.fixed_wing import DEFAULT_PRESET, PRESETS, Envelope, fly_steps, full_control_row
 from data.trajectory_gen import measure, scenario_start
 from filters.ekf import EKF
 from filters.flags import (
@@ -101,7 +101,7 @@ class LiveFlight:
             _latest(lambda: self.controls[-1]),
         )
         self._flight = fly_steps(envelope, position, velocity, 0.0, latest_control, self._regime.dt)
-        self._truth, self._z = None, None
+        self._truth, self._lift_direction, self._z = None, None, None
         truth, z = _latest(lambda: self._truth), _latest(lambda: self._z)
         R, dt = NOMINAL.R(), NOMINAL.dt
         snapshots = self._snapshots = defaultdict(dict)
@@ -124,8 +124,8 @@ class LiveFlight:
         self._scores = {name: [] for name in self._filters}
 
     def advance(self, control):
-        self.controls.append([float(value) for value in control])
-        self._truth = next(self._flight)
+        self.controls.append([float(value) for value in full_control_row(control)])
+        self._truth, self._lift_direction = next(self._flight)
         self._z = measure(self._rng, self._truth[None], self._regime)[0]
         for name, steps in self._filters.items():
             scored = next(steps, None)
@@ -155,6 +155,7 @@ class LiveFlight:
             "step": len(self.controls),
             "truth_m": self._truth[POS].tolist(),
             "truth_velocity_m_s": self._truth[VEL].tolist(),
+            "truth_lift_direction": self._lift_direction.tolist(),
             "filters": readouts,
             "trips": trips,
             "flags": {

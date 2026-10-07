@@ -22,6 +22,7 @@ from filters.torch_ops import export_npz
 from scripts.export_weights import main as export_weights_main
 from scripts.replay import SEED_SCENARIO_SEED, break_turn_controls, numpy_weights
 from tests.test_numpy_forward import knet_stand_in, rkn_stand_in
+from tests.test_replay import recorded_today
 from filters.state import POS
 from scripts.eval import ekf_like_steps, imm_steps, run_ekf_like
 from web.live_flight import (
@@ -124,7 +125,11 @@ def test_exported_break_turn_replays_to_the_page_preview_flags(learned, tmp_path
     assert lines == preview_lines(flight)
     assert [line.split(":")[0] for line in lines if " diverged=" in line] == ["KalmanNet", "RKN"]
     committed = json.loads(SEED_SCENARIO.read_text())
-    assert json.loads(exported.read_text()) == {**committed, "git_tag": "unknown", "tripped": flight.trips()}
+    assert json.loads(exported.read_text()) == {
+        **recorded_today(committed),
+        "git_tag": "unknown",
+        "tripped": flight.trips(),
+    }
     assert flight.trips()["EKF"] == committed["tripped"]["EKF"]
 
 
@@ -237,6 +242,31 @@ def test_scenario_with_a_recorded_start_flies_from_it_and_replays_to_the_page_pr
     assert flight.frame()["truth_m"] == fly_scenario(scenario)[0][-1, :3].tolist()
 
 
+def test_page_3_column_rows_export_as_full_rows_with_every_new_input_neutral(tmp_path):
+    """MS-27, #106 decision 4: a recording writes the full control row whatever width the page sent."""
+    scenario = json.loads(OVERHEAD_SCENARIO.read_text())
+    flight = LiveFlight(scenario, json.loads(PAGE_IMM_TUNING.read_text())["best"], tmp_path)
+    for control in scenario["controls"]:
+        flight.advance(control)
+
+    assert json.loads(flight.scenario_json())["controls"] == recorded_today(scenario)["controls"]
+
+
+def test_page_6_column_rows_fly_the_new_inputs_and_export_them_unchanged(tmp_path):
+    """MS-27: the live flight is the replayed flight, rudder, brake and afterburner included."""
+    scenario = {**json.loads(OVERHEAD_SCENARIO.read_text()), "envelope": asdict(PRESETS[DEFAULT_PRESET])}
+    scenario["controls"] = [[0.0, 1.0, 1.0, 2.0, 1.0, 1.0]] * 3 + [[0.0, 1.0, 1.0, -1.0, 0.0, 1.0]] * 3
+    flight = LiveFlight(scenario, json.loads(PAGE_IMM_TUNING.read_text())["best"], tmp_path)
+    for control in scenario["controls"]:
+        flight.advance(control)
+
+    exported = json.loads(flight.scenario_json())
+    assert exported["controls"] == scenario["controls"]
+    assert flight.frame()["truth_m"] == fly_scenario(exported)[0][-1, :3].tolist()
+    neutral = {**scenario, "controls": [row[:3] for row in scenario["controls"]]}
+    assert flight.frame()["truth_m"] != fly_scenario(neutral)[0][-1, :3].tolist()
+
+
 def test_ellipsoid_of_an_axis_aligned_position_covariance_has_the_95_percent_semi_axes_and_identity_axes():
     """Scaled by the pinned chi-square(3) 95% quantile; sqrt of exact binary variances, so atol only absorbs it."""
     P = np.diag([4.0, 16.0, 64.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
@@ -301,6 +331,45 @@ def test_frame_truth_velocity_is_the_flown_state_velocity(seed_frame):
     states, _ = fly_scenario(json.loads(SEED_SCENARIO.read_text()))
 
     assert seed_frame["truth_velocity_m_s"] == states[-1, 3:6].tolist()
+
+
+def lift_frame(roll_rate_rad_s, steps):
+    setup = {
+        "seed": SEED_SCENARIO_SEED,
+        "envelope": asdict(PRESETS[DEFAULT_PRESET]),
+        "noise_regime": "nominal",
+        "thresholds": DEFAULT_THRESHOLDS,
+    }
+    flight = LiveFlight(setup, json.loads(PAGE_IMM_TUNING.read_text())["best"], REPO / "no_weights")
+    for _ in range(steps):
+        flight.advance([roll_rate_rad_s, 0.0, 1.0])
+    return flight.frame()
+
+
+def test_frame_lift_direction_is_a_unit_vector_perpendicular_to_the_velocity_and_level_flight_has_horizontal_wings():
+    """MS-38: unit lift, perpendicular to the velocity; wings along velocity x lift are horizontal at zero bank."""
+    frame = lift_frame(0.0, 20)
+    lift, velocity = np.array(frame["truth_lift_direction"]), np.array(frame["truth_velocity_m_s"])
+
+    wing_axis = np.cross(velocity, lift)
+
+    assert np.linalg.norm(lift) == pytest.approx(1.0, abs=1e-12)
+    assert lift @ velocity == pytest.approx(0.0, abs=1e-9)
+    assert wing_axis[2] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_frame_lift_direction_is_rolled_from_the_level_lift_by_the_bank_angle():
+    """MS-38: positive roll banks the lift toward the right wing, velocity x level lift, by the integrated angle."""
+    steps, roll_rate = 20, 0.5
+    bank_rad = roll_rate * NOMINAL.dt * steps
+    level_frame, banked_frame = lift_frame(0.0, steps), lift_frame(roll_rate, steps)
+    level = np.array(level_frame["truth_lift_direction"])
+    velocity = np.array(level_frame["truth_velocity_m_s"])
+    right_wing = np.cross(velocity / np.linalg.norm(velocity), level)
+
+    assert banked_frame["truth_lift_direction"] == pytest.approx(
+        (np.cos(bank_rad) * level + np.sin(bank_rad) * right_wing).tolist(), abs=1e-9
+    )
 
 
 def test_ekf_snapshot_holds_the_covariance_the_last_nees_was_scored_with():
