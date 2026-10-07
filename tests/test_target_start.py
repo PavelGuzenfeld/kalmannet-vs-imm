@@ -185,4 +185,23 @@ def test_exported_set_start_replays_to_the_page_preview_flags(learned, tmp_path)
     exported.write_text(flight.scenario_json())
 
     assert replay_lines(exported, checkpoints) == preview_lines(flight)
-    assert json.loads(exported.read_text())["start"]["position"][2] == 300.0
+    start = json.loads(exported.read_text())["start"]
+    assert start["position"][2] == 300.0
+    assert start["velocity"][0] == pytest.approx(-150.0, abs=COSINE_OF_QUARTER_TURN_RESIDUE_M)
+
+
+def test_bearing_and_heading_are_clockwise_from_north_off_the_axes(tmp_path):
+    spec = {
+        "range_m": 1000.0,
+        "bearing_deg": 30.0,
+        "altitude_m": 50.0,
+        "heading_deg": 135.0,
+        "speed_m_s": 100.0,
+    }
+
+    start = exported_start(tmp_path, start_spec=spec)
+
+    np.testing.assert_allclose(start["position"], [500.0, 866.0254037844386, 50.0], rtol=0.0, atol=1e-9)
+    np.testing.assert_allclose(
+        start["velocity"], [70.71067811865476, -70.71067811865476, 0.0], rtol=0.0, atol=1e-9
+    )
