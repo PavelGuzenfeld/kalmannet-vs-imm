@@ -19,47 +19,32 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from filters.ekf import EKF
+from filters.flags import counted_steps, until_diverged
 from filters.imm import IMM
 from filters.metrics import anees_with_bounds, per_step_rmse
 from filters.plot_data import coverage_series, imm_kwargs_from_tuning, latency_series, rmse_series_by_regime
 from filters.state import POS, STATE_DIM
 from filters.ukf import UKF
+from scripts.eval import ekf_like_steps, imm_steps
 
-_INIT_OFFSET = np.array([2.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-_P0 = np.diag([50.0, 50.0, 50.0, 5.0, 5.0, 5.0, 1.0, 1.0, 1.0])
+
+def _counted_run(steps, x_true):
+    """NaN-padded (xs, nees) over the steps before the run's divergence step, as the metrics count them."""
+    scored = list(until_diverged(steps))
+    counted = counted_steps(np.array([np.linalg.norm(err[POS]) for err, *_ in scored]))
+    xs = np.full((x_true.shape[0], STATE_DIM), np.nan)
+    nees = np.full(x_true.shape[0], np.nan)
+    for t, (err, step_nees, _) in enumerate(scored[:counted]):
+        xs[t], nees[t] = x_true[t] + err, step_nees
+    return xs, nees
 
 
 def _run_ekf_like(flt, x_true, z):
-    T = x_true.shape[0]
-    xs = np.zeros((T, STATE_DIM))
-    nees = np.zeros(T)
-    x, P = x_true[0] + _INIT_OFFSET, _P0.copy()
-    for t in range(T):
-        if t == 0:
-            if isinstance(flt, UKF):
-                pts_pred = flt._sigma_points(x, P)
-                x, P, _, _ = flt.update(x, P, pts_pred, z[t])
-            else:
-                x, P, _, _ = flt.update(x, P, z[t])
-        else:
-            x, P, _, _ = flt.step(x, P, z[t])
-        xs[t] = x
-        e = x - x_true[t]
-        nees[t] = e @ np.linalg.solve(P, e)
-    return xs, nees
+    return _counted_run(ekf_like_steps(flt, x_true, z), x_true)
 
 
 def _run_imm(imm, x_true, z):
-    T = x_true.shape[0]
-    xs = np.zeros((T, STATE_DIM))
-    nees = np.zeros(T)
-    state = imm.init_state(x_true[0] + _INIT_OFFSET, _P0.copy())
-    for t in range(T):
-        x, P, state, _, _ = imm.step(state, z[t])
-        xs[t] = x
-        e = x - x_true[t]
-        nees[t] = e @ np.linalg.solve(P, e)
-    return xs, nees
+    return _counted_run(imm_steps(imm, x_true, z), x_true)
 
 
 def plot_trajectory_overlay(out_dir, dt, R, states, measurements,
@@ -141,7 +126,9 @@ def plot_nees_with_bounds(out_dir, dt, R, states, measurements, n_traj=None):
                 flt = factory()
                 _, nees = run_fn(flt, states[i], measurements[i, m])
                 nees_all[i, m] = nees
-        anees_t, (low, high) = anees_with_bounds(nees_all.reshape(n_traj * mc, T), dim=dim, mc_axis=0)
+        flights = nees_all.reshape(n_traj * mc, T)
+        _, (low, high) = anees_with_bounds(flights, dim=dim, mc_axis=0)
+        anees_t = np.nanmean(flights, axis=0)
         ax.plot(t_axis, anees_t, label=f"{name} ANEES(t)")
 
     ax.axhline(low, color="gray", ls=":", label="95% chi-square bound")

@@ -62,7 +62,7 @@ def per_step_rmse(x_true, x_est, idx_slice):
     x_true, x_est: [..., T, 9]."""
     err = x_true[..., idx_slice] - x_est[..., idx_slice]
     sq = np.sum(err**2, axis=-1)  # [..., T]
-    return np.sqrt(np.mean(sq, axis=tuple(range(sq.ndim - 1))))
+    return np.sqrt(np.nanmean(sq, axis=tuple(range(sq.ndim - 1))))
 
 
 def nees(x_true, x_est, P, idx_slice=slice(None)):
