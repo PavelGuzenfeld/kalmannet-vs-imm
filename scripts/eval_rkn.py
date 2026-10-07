@@ -21,6 +21,7 @@ from filters.knet.rkn_network import RKNGainCovNetwork
 from filters.flags import until_diverged
 from filters.metrics import (
     anees_over_counted,
+    counted_mean,
     anees_with_bounds,
     counted_mask,
     counted_span,
@@ -68,8 +69,8 @@ def summarize(result, burn_in=_BURN_IN, divergence=None):
     """divergence: the runs' divergence steps when result pools them already cut; read from result otherwise."""
     counted = counted_mask(result["err"])[:, :, burn_in:]
     err = result["err"][:, :, burn_in:, :][counted]
-    pos_rmse = float(np.sqrt(np.mean(np.sum(err[..., POS] ** 2, axis=-1))))
-    vel_rmse = float(np.sqrt(np.mean(np.sum(err[..., VEL] ** 2, axis=-1))))
+    pos_rmse = float(np.sqrt(counted_mean(np.sum(err[..., POS] ** 2, axis=-1))))
+    vel_rmse = float(np.sqrt(counted_mean(np.sum(err[..., VEL] ** 2, axis=-1))))
 
     nees = result["nees"][:, :, burn_in:]
     mc = nees.shape[1]
@@ -80,7 +81,7 @@ def summarize(result, burn_in=_BURN_IN, divergence=None):
     return {
         "pos_rmse": pos_rmse, "vel_rmse": vel_rmse,
         **divergence_summary(divergence_steps(result["err"]) if divergence is None else divergence),
-        "anees_mean": float(np.mean(anees)), "anees_bounds": bounds,
+        "anees_mean": float(counted_mean(anees)), "anees_bounds": bounds,
         "anees_fraction_inside_95": frac_in_95,
         "coverage_68": coverage[0.68], "coverage_95": coverage[0.95],
         "n_mc": mc,

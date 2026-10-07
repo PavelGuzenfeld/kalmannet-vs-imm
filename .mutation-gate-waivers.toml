@@ -161,3 +161,39 @@ check = "no-citation"
 file = "tests/test_eval_rkn.py"
 test = "test_rkn_run_is_stepped_through_its_divergence_step_and_no_further"
 reason = "Stopping a diverged run is an evaluation-harness rule (#111), not model behaviour; the filter here is a stub, so no MS-n line states it."
+
+[[waiver]]
+file = "scripts/eval.py"
+line = 152
+column = 74
+old = "-1"
+new = "1"
+reason = """`np.sum(err[..., POS or VEL] ** 2, axis=-1)` on the counted steps, a 2-D [n,3] array after the
+boolean mask: axis=-1 and axis=1 are the same axis, so this mutant is equivalent and no test can tell them apart."""
+
+[[waiver]]
+file = "scripts/eval.py"
+line = 153
+column = 74
+old = "-1"
+new = "1"
+reason = """`np.sum(err[..., POS or VEL] ** 2, axis=-1)` on the counted steps, a 2-D [n,3] array after the
+boolean mask: axis=-1 and axis=1 are the same axis, so this mutant is equivalent and no test can tell them apart."""
+
+[[waiver]]
+file = "scripts/eval_rkn.py"
+line = 72
+column = 74
+old = "-1"
+new = "1"
+reason = """`np.sum(err[..., POS or VEL] ** 2, axis=-1)` on the counted steps, a 2-D [n,3] array after the
+boolean mask: axis=-1 and axis=1 are the same axis, so this mutant is equivalent and no test can tell them apart."""
+
+[[waiver]]
+file = "scripts/eval_rkn.py"
+line = 73
+column = 74
+old = "-1"
+new = "1"
+reason = """`np.sum(err[..., POS or VEL] ** 2, axis=-1)` on the counted steps, a 2-D [n,3] array after the
+boolean mask: axis=-1 and axis=1 are the same axis, so this mutant is equivalent and no test can tell them apart."""
