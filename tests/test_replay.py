@@ -31,6 +31,7 @@ REPO = Path(__file__).resolve().parents[1]
 SCENARIO_DIR = REPO / "data" / "scenarios"
 SEED_SCENARIO = SCENARIO_DIR / "break_turn_9g.json"
 OVERHEAD_SCENARIO = SCENARIO_DIR / "overhead_pass.json"
+PAGE_IMM_TUNING = REPO / "web" / "imm_tuning.json"
 OVERHEAD_CROSSING_ERROR_BOUND_M = 3.0
 OVERHEAD_ERROR_WINDOW_STEPS = 25
 OVERCONFIDENT_STEPS = 25
@@ -66,12 +67,12 @@ BENCHMARK_CONTROL_LIMITS_ISSUE_106 = {
 G = 9.80665
 
 
-def recorded_today(committed):
-    """A committed 3-column scenario as a recording writes it since #107: full rows, every new input neutral."""
+def recorded_before_wider_row(committed):
+    """A committed scenario as recorded before #107: 3-column rows, no #106 envelope fields."""
     return {
         **committed,
-        "envelope": {**committed["envelope"], **BENCHMARK_CONTROL_LIMITS_ISSUE_106},
-        "controls": [[*row, 0.0, 0.0, 0.0] for row in committed["controls"]],
+        "envelope": {k: v for k, v in committed["envelope"].items() if k not in BENCHMARK_CONTROL_LIMITS_ISSUE_106},
+        "controls": [row[:3] for row in committed["controls"]],
     }
 
 
@@ -104,7 +105,7 @@ def zero_gain_knet(path):
 def test_record_rewrites_the_committed_seed_scenario_and_the_flags_it_tripped(tmp_path, monkeypatch):
     """MS-19 start drawn from the recorded seed; controls, envelope, thresholds and flags recorded by value."""
     recorded, missing = tmp_path / "scenarios" / "seed.json", tmp_path / "missing"
-    argv = ["replay.py", str(recorded), "--record", "--imm-tuning", str(missing)]
+    argv = ["replay.py", str(recorded), "--record", "--imm-tuning", str(PAGE_IMM_TUNING)]
     monkeypatch.setattr(sys, "argv", [*argv, "--knet-checkpoint", str(missing), "--rkn-checkpoint", str(missing)])
     monkeypatch.setenv("GIT_COMMIT", "recorded-sha")
 
@@ -113,26 +114,26 @@ def test_record_rewrites_the_committed_seed_scenario_and_the_flags_it_tripped(tm
     assert recorded.read_text().endswith("}\n")
     committed = json.loads(SEED_SCENARIO.read_text())
     assert set(committed) == {"controls", "seed", "envelope", "noise_regime", "thresholds", "git_tag", "tripped"}
-    assert json.loads(recorded.read_text()) == {**recorded_today(committed), "git_tag": "recorded-sha"}
+    assert json.loads(recorded.read_text()) == {**committed, "git_tag": "recorded-sha"}
 
 
 def test_record_overhead_rewrites_the_committed_overhead_scenario(tmp_path, monkeypatch):
     """MS-35: --record --overhead regenerates the committed pass; only the git tag is the recording run's."""
     recorded, missing = tmp_path / "overhead.json", tmp_path / "missing"
-    argv = ["replay.py", str(recorded), "--record", "--overhead", "--imm-tuning", str(missing)]
+    argv = ["replay.py", str(recorded), "--record", "--overhead", "--imm-tuning", str(PAGE_IMM_TUNING)]
     monkeypatch.setattr(sys, "argv", [*argv, "--knet-checkpoint", str(missing), "--rkn-checkpoint", str(missing)])
     monkeypatch.setenv("GIT_COMMIT", "recorded-sha")
 
     replay_main()
 
     committed = json.loads(OVERHEAD_SCENARIO.read_text())
-    assert json.loads(recorded.read_text()) == {**recorded_today(committed), "git_tag": "recorded-sha"}
+    assert json.loads(recorded.read_text()) == {**committed, "git_tag": "recorded-sha"}
 
 
 @pytest.mark.parametrize("committed", [SEED_SCENARIO, OVERHEAD_SCENARIO], ids=lambda path: path.stem)
-def test_committed_3_column_scenario_flies_bit_for_bit_the_truth_it_flew_before_the_wider_control_row(committed):
+def test_3_column_form_of_committed_scenario_flies_bit_for_bit_the_truth_it_flew_before_the_wider_row(committed):
     """MS-27, #107: old rows replay with every new input neutral and, lacking the field, today's push limit."""
-    scenario = json.loads(committed.read_text())
+    scenario = recorded_before_wider_row(json.loads(committed.read_text()))
     regime = REGIMES[scenario["noise_regime"]]
     start = scenario_start(scenario, np.random.default_rng(scenario["seed"]), regime)
     controls = np.asarray(scenario["controls"], dtype=np.float64)
@@ -176,20 +177,20 @@ def test_replay_trips_on_the_scenario_recorded_thresholds_not_the_defaults(tmp_p
     assert lines["EKF"].endswith(" raw_error=-")
 
 
-def test_replay_prints_the_recorded_first_trip_step_of_every_flag_per_filter(imm_tuning, tmp_path):
+def test_replay_prints_the_recorded_first_trip_step_of_every_flag_per_filter(tmp_path):
     """MS-11: every filter replays under the nominal R, whatever the scenario's noise regime."""
     scenario = json.loads(SEED_SCENARIO.read_text())
     missing = tmp_path / "missing.pt"
 
     lines = replay(
-        SEED_SCENARIO, "--imm-tuning", imm_tuning, "--knet-checkpoint", missing, "--rkn-checkpoint", missing
+        SEED_SCENARIO, "--imm-tuning", PAGE_IMM_TUNING, "--knet-checkpoint", missing, "--rkn-checkpoint", missing
     )
 
     assert set(lines) == {"EKF", "UKF", "IMM", "KalmanNet", "RKN"}
+    assert set(scenario["tripped"]) == {"EKF", "UKF", "IMM"}
     assert BREAK_TURN_START_STEP < scenario["tripped"]["EKF"]["track_loss"] < BREAK_TURN_END_STEP
     for name, trips in scenario["tripped"].items():
         assert lines[name] == f"{name}: " + " ".join(f"{flag}={shown(trips[flag])}" for flag in FLAGS)
-    assert all(f"{flag}=" in lines["IMM"] for flag in FLAGS)
     assert lines["KalmanNet"] == f"KalmanNet: skipped, no checkpoint at {missing}"
     assert lines["RKN"] == f"RKN: skipped, no checkpoint at {missing}"
 
