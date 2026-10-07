@@ -22,7 +22,7 @@ from filters.torch_ops import export_npz
 from scripts.export_weights import main as export_weights_main
 from scripts.replay import SEED_SCENARIO_SEED, break_turn_controls, numpy_weights
 from tests.test_numpy_forward import knet_stand_in, rkn_stand_in
-from tests.test_replay import recorded_today
+from tests.test_replay import recorded_before_wider_row
 from filters.state import POS
 from scripts.eval import ekf_like_steps, imm_steps, run_ekf_like
 from web.live_flight import (
@@ -125,12 +125,8 @@ def test_exported_break_turn_replays_to_the_page_preview_flags(learned, tmp_path
     assert lines == preview_lines(flight)
     assert [line.split(":")[0] for line in lines if " diverged=" in line] == ["KalmanNet", "RKN"]
     committed = json.loads(SEED_SCENARIO.read_text())
-    assert json.loads(exported.read_text()) == {
-        **recorded_today(committed),
-        "git_tag": "unknown",
-        "tripped": flight.trips(),
-    }
-    assert flight.trips()["EKF"] == committed["tripped"]["EKF"]
+    assert json.loads(exported.read_text()) == {**committed, "git_tag": "unknown", "tripped": flight.trips()}
+    assert {name: flight.trips()[name] for name in committed["tripped"]} == committed["tripped"]
 
 
 @pytest.mark.parametrize("raw_error_side", RAW_ERROR_LIMIT_OFFSET_M)
@@ -244,12 +240,13 @@ def test_scenario_with_a_recorded_start_flies_from_it_and_replays_to_the_page_pr
 
 def test_page_3_column_rows_export_as_full_rows_with_every_new_input_neutral(tmp_path):
     """MS-27, #106 decision 4: a recording writes the full control row whatever width the page sent."""
-    scenario = json.loads(OVERHEAD_SCENARIO.read_text())
+    committed = json.loads(OVERHEAD_SCENARIO.read_text())
+    scenario = recorded_before_wider_row(committed)
     flight = LiveFlight(scenario, json.loads(PAGE_IMM_TUNING.read_text())["best"], tmp_path)
     for control in scenario["controls"]:
         flight.advance(control)
 
-    assert json.loads(flight.scenario_json())["controls"] == recorded_today(scenario)["controls"]
+    assert json.loads(flight.scenario_json())["controls"] == committed["controls"]
 
 
 def test_page_6_column_rows_fly_the_new_inputs_and_export_them_unchanged(tmp_path):
