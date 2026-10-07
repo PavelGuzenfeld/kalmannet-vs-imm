@@ -279,15 +279,16 @@ PILOT_ROW = (0.0, 1.0, 0.6, 0.0, 0.0, 0.0)
 ROW_LOAD_FACTOR = 1
 
 
-def head_on_flight(tmp_path, steps=ENGAGE_STEP):
+def head_on_flight(tmp_path, steps=ENGAGE_STEP, imm_best=None, thresholds=DEFAULT_THRESHOLDS):
     setup = {
         "seed": FLIGHT_SEED,
         "envelope": asdict(ENVELOPE),
         "noise_regime": "nominal",
-        "thresholds": DEFAULT_THRESHOLDS,
+        "thresholds": thresholds,
         "start": {"position": HEAD_ON_POSITION.tolist(), "velocity": HEAD_ON_VELOCITY.tolist()},
     }
-    flight = live_flight.LiveFlight(setup, json.loads(PAGE_IMM_TUNING.read_text())["best"], tmp_path)
+    imm_best = imm_best or json.loads(PAGE_IMM_TUNING.read_text())["best"]
+    flight = live_flight.LiveFlight(setup, imm_best, tmp_path)
     for _ in range(steps):
         flight.advance(PILOT_ROW)
     return flight
@@ -381,3 +382,45 @@ def test_max_g_lowered_while_evading_caps_the_next_row(tmp_path):
     flight.advance(PILOT_ROW)
 
     assert flight.controls[-1][ROW_LOAD_FACTOR] == LOWERED_MAX_LOAD_FACTOR
+
+
+def test_evade_rows_are_the_same_whatever_the_filters_estimate_or_flag(tmp_path):
+    default = head_on_flight(tmp_path)
+    retuned = head_on_flight(
+        tmp_path,
+        imm_best={
+            "p_stay": 0.9,
+            "omega_ct_deg": 5.0,
+            "ca_sigma_a": 9.0,
+            "ca_tau": 0.5,
+            "ct_sigma_a": 9.0,
+            "cv_sigma_a": 3.0,
+        },
+        thresholds={**DEFAULT_THRESHOLDS, "raw_error_m": 0.1},
+    )
+    for flight in (default, retuned):
+        flight.engage_evade()
+        for _ in range(200):
+            flight.advance(PILOT_ROW)
+
+    assert default.readouts()["IMM"]["estimate_m"] != retuned.readouts()["IMM"]["estimate_m"]
+    assert default.controls == retuned.controls
+
+
+@pytest.mark.parametrize("preset", PRESETS)
+def test_every_row_stays_inside_each_preset_envelope(preset):
+    envelope = PRESETS[preset]
+    push_limit = envelope.max_negative_load_factor
+
+    _, rows = fly_evading(seed=SEED, steps=1500, envelope_at=lambda row: envelope)
+
+    assert np.abs(rows[:, 0]).max() <= envelope.max_roll_rate_rad_s
+    assert push_limit <= rows[:, 1].min() and rows[:, 1].max() <= envelope.max_load_factor
+
+
+def test_once_on_the_beam_the_target_jinks_toward_and_away_from_the_sensor():
+    states, _ = fly_evading(seed=SEED, steps=1500)
+
+    on_beam = states[round(EVADE_WITHIN_S / DT_S) :]
+    radial_speed = np.einsum("ij,ij->i", on_beam[:, 0:3], on_beam[:, 3:6])
+    assert np.count_nonzero(np.diff(np.sign(radial_speed))) >= 4
