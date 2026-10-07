@@ -15,6 +15,12 @@ from filters.flags import counted_steps, divergence_step
 from filters.state import POS, VEL
 
 
+def counted_mean(values):
+    """NaN, without numpy's empty-mean warning, when nothing was counted: every run diverged inside its burn-in."""
+    values = np.asarray(values, dtype=float)
+    return float(np.mean(values)) if values.size else np.nan
+
+
 def _divergence_step_or_nan(position_error_m):
     step = divergence_step(position_error_m)
     return np.nan if step is None else float(step)
@@ -62,7 +68,7 @@ def per_step_rmse(x_true, x_est, idx_slice):
     x_true, x_est: [..., T, 9]."""
     err = x_true[..., idx_slice] - x_est[..., idx_slice]
     sq = np.sum(err**2, axis=-1)  # [..., T]
-    return np.sqrt(np.mean(sq, axis=tuple(range(sq.ndim - 1))))
+    return np.sqrt(np.nanmean(sq, axis=tuple(range(sq.ndim - 1))))
 
 
 def nees(x_true, x_est, P, idx_slice=slice(None)):
@@ -108,7 +114,7 @@ def anees_over_counted(nees_values, counted, dim, mc_axis, confidence=0.95):
 
 def fraction_inside_bounds(values, bounds):
     low, high = bounds
-    return float(np.mean((values >= low) & (values <= high)))
+    return float(counted_mean((values >= low) & (values <= high)))
 
 
 def empirical_coverage(nees_values, dim, levels=(0.68, 0.95)):
@@ -118,5 +124,5 @@ def empirical_coverage(nees_values, dim, levels=(0.68, 0.95)):
     out = {}
     for p in levels:
         threshold = chi2.ppf(p, df=dim)
-        out[p] = float(np.mean(nees_values <= threshold))
+        out[p] = float(counted_mean(nees_values <= threshold))
     return out

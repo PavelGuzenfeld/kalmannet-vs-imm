@@ -161,3 +161,165 @@ check = "no-citation"
 file = "tests/test_eval_rkn.py"
 test = "test_rkn_run_is_stepped_through_its_divergence_step_and_no_further"
 reason = "Stopping a diverged run is an evaluation-harness rule (#111), not model behaviour; the filter here is a stub, so no MS-n line states it."
+
+[[waiver]]
+file = "scripts/eval.py"
+line = 152
+column = 74
+old = "-1"
+new = "1"
+reason = """`np.sum(err[..., POS or VEL] ** 2, axis=-1)` on the counted steps, a 2-D [n,3] array after the
+boolean mask: axis=-1 and axis=1 are the same axis, so this mutant is equivalent and no test can tell them apart."""
+
+[[waiver]]
+file = "scripts/eval.py"
+line = 153
+column = 74
+old = "-1"
+new = "1"
+reason = """`np.sum(err[..., POS or VEL] ** 2, axis=-1)` on the counted steps, a 2-D [n,3] array after the
+boolean mask: axis=-1 and axis=1 are the same axis, so this mutant is equivalent and no test can tell them apart."""
+
+[[waiver]]
+file = "scripts/eval_rkn.py"
+line = 72
+column = 74
+old = "-1"
+new = "1"
+reason = """`np.sum(err[..., POS or VEL] ** 2, axis=-1)` on the counted steps, a 2-D [n,3] array after the
+boolean mask: axis=-1 and axis=1 are the same axis, so this mutant is equivalent and no test can tell them apart."""
+
+[[waiver]]
+file = "scripts/eval_rkn.py"
+line = 73
+column = 74
+old = "-1"
+new = "1"
+reason = """`np.sum(err[..., POS or VEL] ** 2, axis=-1)` on the counted steps, a 2-D [n,3] array after the
+boolean mask: axis=-1 and axis=1 are the same axis, so this mutant is equivalent and no test can tell them apart."""
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_plot_data.py"
+test = "test_trajectory_overlay_draws_no_filter_estimate_from_its_divergence_step_on"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_plot_data.py"
+test = "test_rmse_vs_time_averages_only_the_flights_still_running_and_ends_at_the_cut"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_plot_data.py"
+test = "test_anees_vs_time_ends_at_the_cut"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_plot_data.py"
+test = "test_animation_records_each_filter_through_its_divergence_step_and_no_further"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_plot_data.py"
+test = "test_overlay_cuts_each_filter_at_its_own_divergence_step"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_plot_data.py"
+test = "test_rmse_between_two_flights_cuts_averages_only_the_flight_still_running"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_plot_data.py"
+test = "test_anees_between_two_flights_cuts_averages_only_the_flight_still_running"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_page_pulls_each_diverged_filter_through_its_divergence_step_and_no_further"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the path applies it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_page_does_not_trip_a_flag_that_would_only_trip_after_the_divergence_step"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the path applies it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_replay.py"
+test = "test_replay_pulls_each_diverged_filter_through_its_divergence_step_and_no_further"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the path applies it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_replay.py"
+test = "test_replay_does_not_trip_a_flag_that_would_only_trip_after_the_divergence_step"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the path applies it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_plot_data.py"
+test = "test_animation_records_the_estimate_error_nees_and_mode_probabilities_each_filter_produced"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_plot_data.py"
+test = "test_scene_limits_ignore_the_rows_of_a_stopped_filter"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_plot_data.py"
+test = "test_plot_runner_pulls_a_diverged_filter_through_its_divergence_step_and_no_further"
+reason = "The 200 m stop is the evaluation harness rule of filters/flags.py, a Layer 5 harness the model scope excludes; this only checks the plot scripts apply it."
+
+[[waiver]]
+file = "web/manoeuvres.py"
+line = 55
+column = 14
+old = """self.turned_rad < target_rad"""
+new = """self.turned_rad <= target_rad"""
+reason = """turned_rad is a running sum of float arctan2 angles, so it never lands exactly on the target
+radian value; rebuilt with the mutant, all six manoeuvres fly bit-identical states and rows."""
+
+[[waiver]]
+file = "web/manoeuvres.py"
+line = 59
+column = 14
+old = """self._velocity[2] < 0.0"""
+new = """self._velocity[2] <= 0.0"""
+reason = """A flown vertical velocity is never exactly 0.0 at the level-off check; rebuilt with the mutant,
+all six manoeuvres fly bit-identical states and rows."""
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_manoeuvre_runs_to_its_end_ignoring_the_pilot_rows_then_the_pilot_resumes"
+reason = "The named manoeuvres are specified by decisions 14-16 in #106, which carry no MS-n line in the model spec; the author decides whether they join it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_cancelled_manoeuvre_hands_the_very_next_step_back_to_the_pilot_row"
+reason = "The named manoeuvres are specified by decisions 14-16 in #106, which carry no MS-n line in the model spec; the author decides whether they join it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_starting_a_manoeuvre_drops_every_engaged_hold"
+reason = "Holds and named manoeuvres are specified by decisions 11-16 in #106, which carry no MS-n line in the model spec; the author decides whether they join it."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_live_flight.py"
+test = "test_engaging_a_hold_cancels_the_running_manoeuvre"
+reason = "Holds and named manoeuvres are specified by decisions 11-16 in #106, which carry no MS-n line in the model spec; the author decides whether they join it."

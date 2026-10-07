@@ -21,7 +21,9 @@ const PYTHON_SOURCES = [
   "filters/metrics.py",
   "filters/plot_data.py",
   "scripts/eval.py",
+  "web/holds.py",
   "web/live_flight.py",
+  "web/manoeuvres.py",
 ];
 
 async function fetched(path) {
@@ -71,16 +73,25 @@ const handlers = {
     flight = liveFlight.LiveFlight(pyodide.toPy(setup), pyodide.toPy(immBest), weightsRoot);
     return fromWorker.started();
   },
-  async advance({ controls }) {
+  async advance({ controls, manualAxes }) {
     const begin = performance.now();
-    for (const control of controls) flight.advance(control);
+    for (const control of controls) flight.advance(control, manualAxes);
     const stepCostMs = (performance.now() - begin) / controls.length;
     return fromWorker.frame(toJs(flight.frame()), stepCostMs);
+  },
+  async manoeuvre({ name }) {
+    if (name) flight.start_manoeuvre(name);
+    else flight.cancel_manoeuvre();
+    return null;
   },
   async setThresholds({ thresholds }) {
     const { pyodide } = await python;
     flight.thresholds = pyodide.toPy(thresholds);
     return flight.controls.length ? fromWorker.frame(toJs(flight.frame()), null) : null;
+  },
+  async toggleHold({ name }) {
+    flight?.toggle_hold(name);
+    return null;
   },
   async exportScenario() {
     return fromWorker.scenario(flight.scenario_json());

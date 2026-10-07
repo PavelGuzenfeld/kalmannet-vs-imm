@@ -409,3 +409,102 @@ def test_a_raw_error_threshold_far_under_the_peak_errors_diverges_no_filter(tmp_
         "UKF": False,
         "IMM": False,
     }
+
+
+MANOEUVRE_CRUISE_CONTROL = [0.0, 1.0, 0.6, 0.0, 0.0, 0.0]
+MANOEUVRE_START = {"position": [0.0, 0.0, 3000.0], "velocity": [150.0, 0.0, 0.0]}
+
+
+def manoeuvre_flight(tmp_path):
+    setup = {
+        "seed": SEED_SCENARIO_SEED,
+        "envelope": asdict(PRESETS[DEFAULT_PRESET]),
+        "noise_regime": "nominal",
+        "thresholds": DEFAULT_THRESHOLDS,
+        "start": MANOEUVRE_START,
+    }
+    return LiveFlight(setup, json.loads(PAGE_IMM_TUNING.read_text())["best"], tmp_path)
+
+
+def test_manoeuvre_runs_to_its_end_ignoring_the_pilot_rows_then_the_pilot_resumes(tmp_path):
+    flight = manoeuvre_flight(tmp_path)
+    flight.start_manoeuvre("split-S")
+    assert flight.manoeuvre == "split-S"
+    while flight.manoeuvre:
+        flight.advance(MANOEUVRE_CRUISE_CONTROL)
+    assert len(flight.controls) > 200
+    assert flight.controls[-1] == MANOEUVRE_CRUISE_CONTROL
+    assert MANOEUVRE_CRUISE_CONTROL not in flight.controls[:-1]
+    assert flight.frame()["manoeuvre"] is None
+    assert flight.frame()["truth_m"][2] < MANOEUVRE_START["position"][2] - 300.0
+
+
+def test_cancelled_manoeuvre_hands_the_very_next_step_back_to_the_pilot_row(tmp_path):
+    flight = manoeuvre_flight(tmp_path)
+    flight.start_manoeuvre("jink")
+    for _ in range(10):
+        flight.advance(MANOEUVRE_CRUISE_CONTROL)
+    assert flight.frame()["manoeuvre"] == "jink"
+    flight.cancel_manoeuvre()
+    flight.advance(MANOEUVRE_CRUISE_CONTROL)
+    assert flight.controls[-1] == MANOEUVRE_CRUISE_CONTROL
+    assert flight.frame()["manoeuvre"] is None
+    assert flight.controls[0][3] == PRESETS[DEFAULT_PRESET].max_side_load_factor
+
+
+SCRIPTED_DIVERGES_AT_STEP = 3
+SCRIPTED_PAGE_STEPS = 10
+
+
+def scripted_filter_steps(pulled):
+    def steps(*args, **kwargs):
+        count = [0]
+        pulled.append(count)
+        for step in range(SCRIPTED_PAGE_STEPS * 2):
+            count[0] += 1
+            error_m = 1.0 if step < SCRIPTED_DIVERGES_AT_STEP else 300.0
+            err = np.zeros(9)
+            err[0] = error_m
+            yield err, error_m**2, 0.0 if step <= SCRIPTED_DIVERGES_AT_STEP else 1e3
+
+    return steps
+
+
+def scripted_page_flight(monkeypatch, tmp_path):
+    from web import live_flight
+
+    pulled = []
+    monkeypatch.setattr(live_flight, "ekf_like_steps", scripted_filter_steps(pulled))
+    monkeypatch.setattr(live_flight, "imm_steps", scripted_filter_steps(pulled))
+    thresholds = {**DEFAULT_THRESHOLDS, "raw_error_m": 1e9}
+    return page_flight(tmp_path, thresholds=thresholds, steps=SCRIPTED_PAGE_STEPS), pulled
+
+
+def test_page_pulls_each_diverged_filter_through_its_divergence_step_and_no_further(monkeypatch, tmp_path):
+    flight, pulled = scripted_page_flight(monkeypatch, tmp_path)
+
+    assert [count[0] for count in pulled] == [SCRIPTED_DIVERGES_AT_STEP + 1] * 3
+    assert {r["diverged_step"] for r in flight.readouts().values()} == {SCRIPTED_DIVERGES_AT_STEP}
+
+
+def test_page_does_not_trip_a_flag_that_would_only_trip_after_the_divergence_step(monkeypatch, tmp_path):
+    """Past the divergence step the innovation reads 1e3, which would trip track_loss at the next step."""
+    flight, _ = scripted_page_flight(monkeypatch, tmp_path)
+
+    assert {name: found["track_loss"] for name, found in flight.trips().items()} == {"EKF": None, "UKF": None, "IMM": None}
+
+
+def test_starting_a_manoeuvre_drops_every_engaged_hold(tmp_path):
+    flight = manoeuvre_flight(tmp_path)
+    for name in ("heading", "altitude", "speed", "bank"):
+        flight.toggle_hold(name)
+    flight.start_manoeuvre("jink")
+    assert flight.holds.targets == {}
+
+
+def test_engaging_a_hold_cancels_the_running_manoeuvre(tmp_path):
+    flight = manoeuvre_flight(tmp_path)
+    flight.start_manoeuvre("jink")
+    flight.toggle_hold("heading")
+    assert flight.manoeuvre is None
+    assert "heading" in flight.holds.targets

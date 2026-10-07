@@ -3,9 +3,11 @@ export const PYODIDE_URL = "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/";
 export const toWorker = Object.freeze({
   load: () => ({ kind: "load" }),
   start: (setup) => ({ kind: "start", setup }),
-  advance: (controls) => ({ kind: "advance", controls }),
+  advance: (controls, manualAxes = []) => ({ kind: "advance", controls, manualAxes }),
+  toggleHold: (name) => ({ kind: "toggleHold", name }),
   setThresholds: (thresholds) => ({ kind: "setThresholds", thresholds }),
   exportScenario: () => ({ kind: "exportScenario" }),
+  manoeuvre: (name) => ({ kind: "manoeuvre", name }),
 });
 
 export const fromWorker = Object.freeze({

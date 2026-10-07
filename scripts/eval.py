@@ -21,6 +21,7 @@ from filters.knet import numpy_forward
 from filters.flags import until_diverged
 from filters.metrics import (
     anees_over_counted,
+    counted_mean,
     anees_with_bounds,
     counted_mask,
     counted_span,
@@ -148,8 +149,8 @@ def evaluate_dataset(filter_factory, run_fn, states, measurements):
 
 def summarize_rmse(result, burn_in=_BURN_IN):
     err = result["err"][:, :, burn_in:, :][counted_mask(result["err"])[:, :, burn_in:]]
-    pos_rmse = float(np.sqrt(np.mean(np.sum(err[..., POS] ** 2, axis=-1))))
-    vel_rmse = float(np.sqrt(np.mean(np.sum(err[..., VEL] ** 2, axis=-1))))
+    pos_rmse = float(np.sqrt(counted_mean(np.sum(err[..., POS] ** 2, axis=-1))))
+    vel_rmse = float(np.sqrt(counted_mean(np.sum(err[..., VEL] ** 2, axis=-1))))
     return pos_rmse, vel_rmse
 
 
@@ -168,16 +169,29 @@ def summarize_consistency(result, dim=STATE_DIM, meas_dim=3, burn_in=_BURN_IN):
     coverage = empirical_coverage(nees[counted], dim=dim, levels=(0.68, 0.95))
 
     return {
-        "anees_mean": float(np.mean(anees)),
+        "anees_mean": float(counted_mean(anees)),
         "anees_bounds": bounds,
         "anees_fraction_inside_95": anees_pass_frac,
-        "anis_mean": float(np.mean(anis)),
+        "anis_mean": float(counted_mean(anis)),
         "anis_bounds": nis_bounds,
         "anis_fraction_inside_95": anis_pass_frac,
         "coverage_68": coverage[0.68],
         "coverage_95": coverage[0.95],
         "n_mc": mc,
     }
+
+
+def scenarios_row(name, factory, run_fn, flights):
+    """flights: (states [T,9], z [T,3]) pairs of any lengths, each cut before its divergence step and pooled."""
+    runs = [run_fn(factory(), states, z) for states, z in flights]
+    result = {
+        key: np.concatenate([run[i][counted_span(run[0], _BURN_IN)] for run in runs])[None, None]
+        for i, key in enumerate(("err", "nees", "nis"))
+    }
+    pos_rmse, vel_rmse = summarize_rmse(result, burn_in=0)
+    divergence = divergence_summary([divergence_steps(run[0]) for run in runs])
+    return {"filter": name, "regime": "scenarios", "pos_rmse": pos_rmse, "vel_rmse": vel_rmse, **divergence,
+            **summarize_consistency(result, burn_in=0)}
 
 
 def main():
@@ -262,17 +276,10 @@ def main():
     if flights:
         print(f"evaluating scenarios regime ({len(flights)} recorded flights, nominal R)...", flush=True)
         for name, (factory, run_fn) in filters.items():
-            runs = [run_fn(factory(), states, z) for states, z in flights]
-            result = {
-                key: np.concatenate([run[i][counted_span(run[0], _BURN_IN)] for run in runs])[None, None]
-                for i, key in enumerate(("err", "nees", "nis"))
-            }
-            pos_rmse, vel_rmse = summarize_rmse(result, burn_in=0)
-            cons = summarize_consistency(result, burn_in=0)
-            divergence = divergence_summary([divergence_steps(run[0]) for run in runs])
-            rows.append({"filter": name, "regime": "scenarios", "pos_rmse": pos_rmse, "vel_rmse": vel_rmse, **divergence, **cons})
-            print(f"  {name}: pos_rmse={pos_rmse:.2f}m vel_rmse={vel_rmse:.2f}m/s "
-                  f"frac_in_95={cons['anees_fraction_inside_95']:.3f}")
+            row = scenarios_row(name, factory, run_fn, flights)
+            rows.append(row)
+            print(f"  {name}: pos_rmse={row['pos_rmse']:.2f}m vel_rmse={row['vel_rmse']:.2f}m/s "
+                  f"frac_in_95={row['anees_fraction_inside_95']:.3f}")
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
