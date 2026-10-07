@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -68,7 +69,7 @@ def hud_percent(page, axis):
 
 
 def key_lit(page, code):
-    return page.locator(f'[data-hud-key="{code}"]').get_attribute("data-held") == "true"
+    return page.locator(f'[data-hud-key~="{code}"]').get_attribute("data-held") == "true"
 
 
 def test_holding_right_arrow_for_a_quarter_second_reads_half_roll_with_the_key_lit(browser):
@@ -386,3 +387,34 @@ def test_gamepad_a_reads_full_afterburner_and_records_afterburner_one_brake_zero
     assert hud_percent(page, "afterburner") == 100
     assert row[ROW_AFTERBURNER] == 1
     assert row[ROW_BRAKE] == 0
+
+
+PAGE_JS = Path(__file__).resolve().parents[1] / "web" / "page.js"
+BINDING_DECLARATIONS = tuple(f"const {name} " for name in ("STEERING_KEYS", "MANOEUVRE_KEYS", "HOLD_KEYS"))
+KEY_CODE = re.compile(r"\b(?:Arrow[A-Z]\w+|Key[A-Z]|Digit\d|Space|Shift(?:Left|Right))\b")
+
+
+def bound_key_codes():
+    declarations = [line for line in PAGE_JS.read_text().splitlines() if line.startswith(BINDING_DECLARATIONS)]
+    assert len(declarations) == len(BINDING_DECLARATIONS)
+    return {code for line in declarations for code in KEY_CODE.findall(line)}
+
+
+def test_every_key_bound_in_page_js_appears_in_the_controls_table(browser):
+    page = boot_paused(browser)
+
+    listed = set(page.eval_on_selector_all("#controls-table [data-code]", "cells => cells.map(cell => cell.dataset.code)"))
+
+    assert bound_key_codes() - listed == set()
+
+
+@pytest.mark.parametrize("code", ["ShiftLeft", "ShiftRight"])
+def test_holding_either_shift_lights_the_one_afterburner_chip(browser, code):
+    page = flying_page(browser)
+    assert page.locator('[data-hud-key~="ShiftLeft"], [data-hud-key~="ShiftRight"]').count() == 1
+
+    press_and_wait_for_keydown(page, code)
+    page.clock.run_for(2 * FRAME_MS)
+
+    assert key_lit(page, code)
+    assert key_lit(page, "ShiftRight" if code == "ShiftLeft" else "ShiftLeft")
