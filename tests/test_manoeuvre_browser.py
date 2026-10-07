@@ -1,6 +1,6 @@
 import pytest
 
-from tests.test_steering_hud_browser import browser, browser_context, flying_page  # noqa: F401
+from tests.test_steering_hud_browser import browser, flying_page, press_and_wait_for_keydown  # noqa: F401
 from playwright.sync_api import TimeoutError as PlaywrightTimeout  # noqa: E402
 
 SETTLE_STEP_MS = 200
@@ -27,11 +27,11 @@ def run_until_hud_names(page, name):
     pytest.fail(f"HUD never read {name!r}, last read {hud_manoeuvre(page)!r}")
 
 
-def test_pressing_1_names_the_break_turn_on_the_hud_and_an_arrow_key_cancels_it(browser_context):  # noqa: F811
-    page = flying_page(browser_context)
+def test_pressing_1_names_the_break_turn_on_the_hud_and_an_arrow_key_cancels_it(browser):  # noqa: F811
+    page = flying_page(browser)
     assert hud_manoeuvre(page) == ""
 
-    page.keyboard.press("Digit1")
+    press_and_wait_for_keydown(page, "Digit1")
     run_until_hud_names(page, "break turn")
     assert page.locator("#manoeuvre-hud").inner_text() == "break turn"
 
