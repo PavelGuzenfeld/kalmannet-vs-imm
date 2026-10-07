@@ -218,6 +218,7 @@ def test_eval_reports_the_committed_scenarios_as_their_own_regime(imm_tuning, tm
     assert float(rows["EKF"]["pos_rmse"]) == ekf_pos_rmse
     assert float(rows["EKF"]["anees_mean"]) == np.mean(nees)
     assert float(rows["EKF"]["anis_fraction_inside_95"]) == ekf_nis_inside
+    assert (rows["EKF"]["diverged_fraction"], rows["EKF"]["median_divergence_step"]) == ("0.0", "")
 
 
 def overhead_crossing_step(scenario):

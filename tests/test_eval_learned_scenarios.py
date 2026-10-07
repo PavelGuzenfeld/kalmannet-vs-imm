@@ -215,13 +215,16 @@ def test_eval_rkn_scenarios_row_applies_the_checkpoint_gain_as_a_fixed_gain_obse
 
 
 class NonFiniteFilter:
+    steps = 0
+
     def __init__(self, net, dt):
-        pass
+        NonFiniteFilter.steps = 0
 
     def init_sequence(self, *priors):
         pass
 
     def step(self, z):
+        NonFiniteFilter.steps += 1
         return torch.tensor([[-np.inf, np.inf, np.nan, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], dtype=torch.float64)
 
 
@@ -231,4 +234,4 @@ def test_knet_run_whose_first_estimate_is_non_finite_is_stepped_no_further(monke
 
     errors = eval_knet.flight_errors(None, NOMINAL.dt, NOMINAL.R(), states, np.zeros((BURN_IN + 1, 3)))
 
-    assert errors.shape == (1, 9)
+    assert (errors.shape, NonFiniteFilter.steps) == ((1, 9), 1)

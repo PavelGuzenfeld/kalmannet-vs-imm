@@ -155,3 +155,9 @@ check = "no-citation"
 file = "tests/test_eval_rkn.py"
 test = "test_rkn_anees_cells_average_over_the_monte_carlo_runs_with_bounds_for_the_run_count"
 reason = "ANEES cells and their chi-square bounds are the Layer 5 harness (filters/metrics.py) over a hand-built result; no model line states them."
+
+[[waiver]]
+check = "no-citation"
+file = "tests/test_eval_rkn.py"
+test = "test_rkn_run_is_stepped_through_its_divergence_step_and_no_further"
+reason = "Stopping a diverged run is an evaluation-harness rule (#111), not model behaviour; the filter here is a stub, so no MS-n line states it."

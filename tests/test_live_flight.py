@@ -122,6 +122,7 @@ def test_exported_break_turn_replays_to_the_page_preview_flags(learned, tmp_path
     lines = replay_lines(exported, checkpoints)
 
     assert lines == preview_lines(flight)
+    assert [line.split(":")[0] for line in lines if " diverged=" in line] == ["KalmanNet", "RKN"]
     committed = json.loads(SEED_SCENARIO.read_text())
     assert json.loads(exported.read_text()) == {**committed, "git_tag": "unknown", "tripped": flight.trips()}
     assert flight.trips()["EKF"] == committed["tripped"]["EKF"]

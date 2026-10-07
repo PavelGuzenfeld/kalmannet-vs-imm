@@ -78,6 +78,7 @@ BENCH_STEPS = 30
 DIVERGES_AT = 25
 WITHIN_LIMIT_M = [3.0, 4.0, 0.0]
 PAST_LIMIT_M = [300.0, 0.0, 0.0]
+LAST_COUNTED_M = [19.0, 7.0, 0.0]
 
 
 class ScriptedPositionError:
@@ -97,8 +98,10 @@ class ScriptedPositionError:
 
 
 def test_benchmark_stops_one_of_four_runs_at_its_divergence_step_and_drops_that_step_from_the_rmse():
+    """Ten steps past burn-in per run at 25 m^2, but the diverging run's last counted step sits at 410 m^2: the
+    35 counted squares sum to 36 * 35, and that step's ANEES cell reads (25 + 410) / 2 among nineteen at 25."""
     within = [WITHIN_LIMIT_M] * BENCH_STEPS
-    diverging = within[:DIVERGES_AT] + [PAST_LIMIT_M] + within[DIVERGES_AT + 1 :]
+    diverging = within[: DIVERGES_AT - 1] + [LAST_COUNTED_M, PAST_LIMIT_M] + within[DIVERGES_AT + 1 :]
     filters = [ScriptedPositionError(errors_m) for errors_m in (within, within, within, diverging)]
     made = iter(filters)
 
@@ -106,7 +109,8 @@ def test_benchmark_stops_one_of_four_runs_at_its_divergence_step_and_drops_that_
         lambda: next(made), bench_eval.run_ekf_like, np.zeros((2, BENCH_STEPS, 9)), np.zeros((2, 2, BENCH_STEPS, 3))
     )
 
-    assert bench_eval.summarize_rmse(result) == (5.0, 0.0)
+    assert bench_eval.summarize_rmse(result) == (6.0, 0.0)
+    assert bench_eval.summarize_consistency(result)["anees_mean"] == (19 * 25.0 + (25.0 + 410.0) / 2) / 20
     assert divergence_summary(divergence_steps(result["err"])) == {
         "diverged_fraction": 0.25,
         "median_divergence_step": float(DIVERGES_AT),
@@ -167,3 +171,9 @@ def test_consistency_cells_average_over_the_monte_carlo_runs_with_bounds_for_the
 
     assert (consistency["anees_fraction_inside_95"], consistency["anis_fraction_inside_95"]) == (0.0, 0.0)
     assert (consistency["anees_bounds"], consistency["anis_bounds"]) == (two_sided_95(2, 9), two_sided_95(2, 3))
+
+
+def test_divergence_summary_is_the_diverged_share_of_runs_and_the_median_over_the_diverged_ones_only():
+    assert divergence_summary([np.nan, 3.0, 10.0, 4.0]) == {"diverged_fraction": 0.75, "median_divergence_step": 4.0}
+    assert divergence_summary([2.0, 5.0]) == {"diverged_fraction": 1.0, "median_divergence_step": 3.5}
+    assert divergence_summary([np.nan, np.nan]) == {"diverged_fraction": 0.0, "median_divergence_step": None}
