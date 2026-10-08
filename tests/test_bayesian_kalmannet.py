@@ -4,6 +4,7 @@ import subprocess
 import sys
 
 import numpy as np
+import pytest
 import torch
 
 from data.config import NOMINAL
@@ -242,6 +243,43 @@ def test_ensemble_filter_output_is_the_mean_and_spread_of_j_independent_kalmanne
             realisation.x_posterior = x
 
 
+@pytest.mark.parametrize("realisations", [3, 10, 20])
+def test_batched_ensemble_matches_j_serial_kalmannets_bit_for_bit_at_p_0_2_over_the_committed_scenario(flight, tmp_path, realisations):  # noqa: F811
+    """MS-39: one Generator drawn realisation by realisation, layer by layer, so stacking the J passes into one
+    changes no mask and no estimate. Exact equality: x, P and S of every step, not a tolerance."""
+    states, z = flight
+    weights = exported(knet_stand_in(), tmp_path)
+    F, Q = cv_model(NOMINAL.dt)
+    R = NOMINAL.R()
+    priors = (Q, np.eye(STATE_DIM) * 100.0, R)
+    x0 = states[0] + _INIT_OFFSET
+    batched = numpy_forward.BayesianKalmanNetFilter(
+        weights, NOMINAL.dt, R, STAND_IN_DROPOUT_P, numpy_forward.dropout_rng(TRAJECTORY_SEED), realisations
+    )
+    batched.init_sequence(x0, *priors)
+    dropout = numpy_forward.bernoulli_dropout(numpy_forward.dropout_rng(TRAJECTORY_SEED), STAND_IN_DROPOUT_P)
+    serial = [numpy_forward.KalmanNetFilter(numpy_forward.KalmanGainGRU(weights, dropout=dropout), NOMINAL.dt)
+              for _ in range(realisations)]
+    for realisation in serial:
+        realisation.init_sequence(x0, *priors)
+    x, P = x0, np.zeros((STATE_DIM, STATE_DIM))
+
+    for step, z_t in enumerate(z):
+        x_prior = F @ x
+        H = H_jacobian(x_prior)
+        expected_S = H @ F @ P @ F.T @ H.T + R
+        x, P = numpy_forward.ensemble_mean_and_covariance(np.array([r.step(z_t) for r in serial]))
+        for realisation in serial:
+            realisation.x_posterior = x
+
+        batched_x, batched_P, batched_innovation, batched_S = batched.step(z_t)
+
+        np.testing.assert_array_equal(batched_x, x, err_msg=f"x, step {step}")
+        np.testing.assert_array_equal(batched_P, P, err_msg=f"P, step {step}")
+        np.testing.assert_array_equal(batched_innovation, innovation(z_t, x_prior), err_msg=f"innovation, step {step}")
+        np.testing.assert_array_equal(batched_S, expected_S, err_msg=f"S, step {step}")
+
+
 def test_each_trajectory_draws_its_masks_from_one_generator_seeded_once(flight, tmp_path, monkeypatch):  # noqa: F811
     """MS-39: the seed is per trajectory, not per step: one dropout_rng call however many steps run."""
     states, z = flight
@@ -306,7 +344,7 @@ def test_ensemble_runs_the_20_realisations_validation_picked(tmp_path):
     """MS-39: J = 20 from scripts/tune_bkn.py on val.npz (write-up sec. 1.7); every consumer builds through bkn_filter."""
     flt = bkn_filter(exported(knet_stand_in(), tmp_path), NOMINAL.dt, NOMINAL.R(), TRAJECTORY_SEED)
 
-    assert len(flt.realisations) == 20
+    assert flt.realisations == 20
 
 
 def test_tuning_keeps_a_run_exactly_at_the_rmse_slack_of_the_best():
@@ -351,7 +389,7 @@ def test_tuning_script_scores_every_j_for_each_checkpoint_on_val_under_the_nomin
 
 
 def test_latency_bench_times_the_kalmannet_and_the_20_realisation_ensemble_forward_passes(tmp_path, monkeypatch):
-    """MS-39: the BKN figure is J numpy KalmanNet passes plus the NEES/NIS scoring the page runs each step."""
+    """MS-39: the BKN figure is one stacked pass over the J realisations plus the NEES/NIS scoring the page runs each step."""
     from scripts import bench_latency
 
     nominal = {"dt": NOMINAL.dt, "sigma_az_rad": 0.001, "sigma_el_rad": 0.001, "sigma_range_m": 2.0}
@@ -373,5 +411,5 @@ def test_latency_bench_times_the_kalmannet_and_the_20_realisation_ensemble_forwa
 
     timed = json.loads(out.read_text())["results_ms"]
     assert {"KalmanNet-numpy", "BKN-numpy-J20"} <= timed.keys()
-    assert [len(flt.realisations) for flt in built] == [20]
+    assert [flt.realisations for flt in built] == [20]
     assert all(timed[name]["median_ms"] > 0.0 for name in ("KalmanNet-numpy", "BKN-numpy-J20"))

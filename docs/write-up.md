@@ -258,6 +258,10 @@ for EKF/UKF and vanilla KalmanNet (112.59 m and 576.75 m nominal) are not compar
 below; for those filters, read the diverged fraction first. IMM and RKN never diverge, so their
 numbers mean the same thing as before.
 
+`scripts/eval_table.py` copies the IMM, KalmanNet, RKN and BKN rows of those files into one
+`results/eval_table.csv` (RKN's ANEES, coverage and n_mc from `results/rkn_eval.json`; empty cells
+where an evaluator reports no such column).
+
 Full CSV: `results/results_table.csv`
 (classical filters and Bayesian KalmanNet) + `results/knet_test_rmse.csv` / `results/rkn_test_rmse.csv`
 (learned filters); full high-MC JSON: `results/anees_highmc.json` (classical and BKN) +
@@ -473,7 +477,8 @@ a separate run on one pinned core of the same host (`results/eval_bkn/latency.js
 stay those of `results/latency.json`): a single numpy KalmanNet pass
 there takes 0.175 ms, and BKN runs `J = 20` of them one after another, plus the NEES/NIS scoring the
 page does every step. The realisations are independent, so one batched pass over all 20 is the
-obvious cut. It was not built here.
+obvious cut. Since #148 the 20 realisations run as one stacked pass, bit for bit the serial estimates;
+the row above is the serial figure and has not been re-measured on the quiet host.
 
 Every filter we trained and deployed, except Bayesian KalmanNet at J = 20, fits the <2 ms per-step target on CPU
 alone, single-threaded, with no DLA or PVA offload, including RKN once scaled to a
