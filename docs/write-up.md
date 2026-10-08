@@ -258,6 +258,10 @@ for EKF/UKF and vanilla KalmanNet (112.59 m and 576.75 m nominal) are not compar
 below; for those filters, read the diverged fraction first. IMM and RKN never diverge, so their
 numbers mean the same thing as before.
 
+`scripts/eval_table.py` copies the IMM, KalmanNet, RKN and BKN rows of those files into one
+`results/eval_table.csv` (RKN's ANEES, coverage and n_mc from `results/rkn_eval.json`; empty cells
+where an evaluator reports no such column).
+
 Full CSV: `results/results_table.csv`
 (classical filters and Bayesian KalmanNet) + `results/knet_test_rmse.csv` / `results/rkn_test_rmse.csv`
 (learned filters); full high-MC JSON: `results/anees_highmc.json` (classical and BKN) +
