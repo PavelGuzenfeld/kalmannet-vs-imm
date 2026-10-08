@@ -24,14 +24,18 @@ from filters.knet.numpy_forward import load_weights
 from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import POS, VEL
 from filters.ukf import UKF
-from scripts.eval import ekf_like_steps, imm_steps, knet_steps, rkn_steps
+from scripts.eval import bkn_filter, bkn_steps, ekf_like_steps, imm_steps, knet_steps, rkn_steps
 from web.evade import evade_rows
 from web.holds import Holds
 from web.manoeuvres import MANOEUVRES, manoeuvre_rows
 
 NOISE_REGIMES = ["nominal", "high_noise", "low_noise", "heavy_tailed"]
-FILTER_NAMES = ("EKF", "UKF", "IMM", "KalmanNet", "RKN")
-LEARNED_WEIGHTS = {"KalmanNet": "results/knet_vanilla/best.npz", "RKN": "results/rkn/best.npz"}
+FILTER_NAMES = ("EKF", "UKF", "IMM", "KalmanNet", "RKN", "BKN")
+LEARNED_WEIGHTS = {
+    "KalmanNet": "results/knet_vanilla/best.npz",
+    "RKN": "results/rkn/best.npz",
+    "BKN": "results/bkn/best.npz",
+}
 SETUP_KEYS = ("seed", "envelope", "noise_regime", "start")
 UNKNOWN_GIT_TAG = "unknown"
 STOPPED_READOUT = dict.fromkeys(("ellipsoid", "mode_probabilities", "estimate_m", "error_m", "nees", "nis"))
@@ -132,6 +136,9 @@ class LiveFlight:
             self._filters["KalmanNet"] = ((err,) for err in knet)
         if "RKN" in weights:
             self._filters["RKN"] = rkn_steps(load_weights(weights["RKN"]), dt, truth, z, snapshots["RKN"])
+        if "BKN" in weights:
+            bkn = bkn_filter(load_weights(weights["BKN"]), dt, R, setup["seed"])
+            self._filters["BKN"] = bkn_steps(bkn, dt, R, truth, z, snapshots["BKN"])
         self._filters = {name: until_diverged(steps) for name, steps in self._filters.items()}
         self._scores = {name: [] for name in self._filters}
 

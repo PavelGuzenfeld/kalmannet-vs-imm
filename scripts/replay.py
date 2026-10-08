@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay a data/scenarios/ flight natively through all five filters; print each flag's first trip step per filter.
+"""Replay a data/scenarios/ flight natively through all six filters; print each flag's first trip step per filter.
 
 --record writes the scripted seed scenario (a 9 g break turn in the benchmark envelope) to the given path first.
 """
@@ -36,7 +36,7 @@ from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import POS
 from filters.torch_ops import export_npz
 from filters.ukf import UKF
-from scripts.eval import knet_steps, rkn_steps, run_ekf_like, run_imm
+from scripts.eval import bkn_filter, bkn_steps, knet_steps, rkn_steps, run_ekf_like, run_imm
 from scripts.eval_knet import _INIT_OFFSET, _priors
 from scripts.eval_rkn import evaluate_dataset as rkn_errors_and_nees
 
@@ -118,10 +118,17 @@ def rkn_run_numpy(checkpoint, states, z):
     return np.array(err), np.array(nees)
 
 
+def bkn_run(checkpoint, seed, states, z, R):
+    """The page's numpy Bayesian KalmanNet, dropout seeded from the scenario seed as the page seeds it."""
+    flt = bkn_filter(numpy_weights(checkpoint), NOMINAL.dt, R, seed)
+    err, nees, nis = zip(*until_diverged(bkn_steps(flt, NOMINAL.dt, R, states, z)))
+    return np.array(err), np.array(nees), np.array(nis)
+
+
 LEARNED_BACKENDS = {"torch": (knet_errors, rkn_run), "numpy": (knet_errors_numpy, rkn_run_numpy)}
 
 
-def replay(scenario, imm_tuning, knet_checkpoint, rkn_checkpoint, learned_backend="torch"):
+def replay(scenario, imm_tuning, knet_checkpoint, rkn_checkpoint, learned_backend="torch", bkn_checkpoint=None):
     """Filters assume nominal R whatever the scenario's noise regime. Returns {filter: trips dict or skip reason}."""
     states, z = fly_scenario(scenario)
     R, dt = NOMINAL.R(), NOMINAL.dt
@@ -151,6 +158,10 @@ def replay(scenario, imm_tuning, knet_checkpoint, rkn_checkpoint, learned_backen
         out["RKN"] = trips(*rkn_backend_run(rkn_checkpoint, states, z))
     else:
         out["RKN"] = f"skipped, no checkpoint at {rkn_checkpoint}"
+    if bkn_checkpoint is not None and bkn_checkpoint.exists():
+        out["BKN"] = trips(*bkn_run(bkn_checkpoint, scenario["seed"], states, z, R))
+    else:
+        out["BKN"] = f"skipped, no checkpoint at {bkn_checkpoint}"
     return out
 
 
@@ -160,6 +171,7 @@ def main():
     ap.add_argument("--imm-tuning", type=Path, default=Path("results/imm_tuning.json"))
     ap.add_argument("--knet-checkpoint", type=Path, default=Path("results/knet_vanilla/best.pt"))
     ap.add_argument("--rkn-checkpoint", type=Path, default=Path("results/rkn/best.pt"))
+    ap.add_argument("--bkn-checkpoint", type=Path, default=Path("results/bkn/best.pt"))
     ap.add_argument("--learned-backend", choices=LEARNED_BACKENDS, default="torch")
     ap.add_argument("--record", action="store_true", help="write the scripted seed scenario to SCENARIO first")
     ap.add_argument("--overhead", action="store_true", help="with --record, write the overhead pass instead")
@@ -169,7 +181,9 @@ def main():
         scenario = overhead_scenario() if args.overhead else seed_scenario()
     else:
         scenario = json.loads(args.scenario.read_text())
-    results = replay(scenario, args.imm_tuning, args.knet_checkpoint, args.rkn_checkpoint, args.learned_backend)
+    results = replay(
+        scenario, args.imm_tuning, args.knet_checkpoint, args.rkn_checkpoint, args.learned_backend, args.bkn_checkpoint
+    )
     for name, trips in results.items():
         if isinstance(trips, str):
             print(f"{name}: {trips}")

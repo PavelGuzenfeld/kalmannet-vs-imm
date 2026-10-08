@@ -7,6 +7,7 @@ numbers are contention artifacts, not real per-step cost.
 """
 
 import argparse
+import itertools
 import json
 import os
 import time
@@ -17,6 +18,7 @@ import torch
 
 from filters.ekf import EKF
 from filters.imm import IMM
+from filters.knet import numpy_forward
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.knet_filter import KalmanNetFilter
 from filters.knet.rkn_filter import RKNFilter
@@ -24,6 +26,7 @@ from filters.knet.rkn_network import RKNGainCovNetwork
 from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import STATE_DIM
 from filters.ukf import UKF
+from scripts.eval import BKN_REALISATIONS, bkn_entry, bkn_steps, knet_steps
 
 
 def bench(step_fn, n_warmup=200, n_measure=10000):
@@ -53,6 +56,7 @@ def main():
     ap.add_argument("--bench-rkn-reference-default", action="store_true",
                      help="also benchmark RKN at the reference's default (10,10,20) sizing, "
                           "untrained -- forward-pass compute cost is independent of training")
+    ap.add_argument("--bkn-weights", type=Path, default=None, help="numpy .npz; times step plus NEES/NIS, as the page")
     ap.add_argument("--n-warmup", type=int, default=200)
     ap.add_argument("--n-measure", type=int, default=10000)
     ap.add_argument("--out", default="results/latency.json")
@@ -122,6 +126,14 @@ def main():
         ref_net = RKNGainCovNetwork().double()
         ref_net.eval()
         _bench_rkn(ref_net, "RKN-reference-default-untrained", x, P, z)
+
+    if args.bkn_weights and args.bkn_weights.exists():
+        weights = numpy_forward.load_weights(args.bkn_weights)
+        knet = knet_steps(weights, dt, R, itertools.repeat(x), itertools.repeat(z))
+        results["KalmanNet-numpy"] = bench(lambda: next(knet), args.n_warmup, args.n_measure)
+        bkn_factory, _ = bkn_entry(weights, dt, R)
+        bkn = bkn_steps(bkn_factory(), dt, R, itertools.repeat(x), itertools.repeat(z))
+        results[f"BKN-numpy-J{BKN_REALISATIONS}"] = bench(lambda: next(bkn), args.n_warmup, args.n_measure)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

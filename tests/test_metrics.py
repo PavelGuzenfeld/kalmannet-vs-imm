@@ -363,7 +363,8 @@ def test_eval_writes_the_divergence_columns_on_the_nominal_and_sweep_regime_rows
     }}))
     monkeypatch.setattr(bench_eval, "_load", lambda path: (np.zeros((1, BENCH_STEPS, 9)), np.zeros((1, 2, BENCH_STEPS, 3))))
     monkeypatch.setattr(bench_eval, "evaluate_dataset", lambda *_: diverging_and_healthy_runs())
-    argv = ["eval.py", "--data-dir", str(data_dir), "--imm-tuning", str(tuning), "--scenario-dir", str(scenarios), "--out", str(out)]
+    argv = ["eval.py", "--data-dir", str(data_dir), "--imm-tuning", str(tuning), "--scenario-dir", str(scenarios), "--out", str(out),
+            "--bkn-weights", str(tmp_path / "missing.npz")]
     monkeypatch.setattr("sys.argv", argv)
 
     bench_eval.main()

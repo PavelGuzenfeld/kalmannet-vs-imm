@@ -106,7 +106,7 @@ def test_record_rewrites_the_committed_seed_scenario_and_the_flags_it_tripped(tm
     """MS-19 start drawn from the recorded seed; controls, envelope, thresholds and flags recorded by value."""
     recorded, missing = tmp_path / "scenarios" / "seed.json", tmp_path / "missing"
     argv = ["replay.py", str(recorded), "--record", "--imm-tuning", str(PAGE_IMM_TUNING)]
-    monkeypatch.setattr(sys, "argv", [*argv, "--knet-checkpoint", str(missing), "--rkn-checkpoint", str(missing)])
+    monkeypatch.setattr(sys, "argv", [*argv, "--knet-checkpoint", str(missing), "--rkn-checkpoint", str(missing), "--bkn-checkpoint", str(missing)])
     monkeypatch.setenv("GIT_COMMIT", "recorded-sha")
 
     replay_main()
@@ -121,7 +121,7 @@ def test_record_overhead_rewrites_the_committed_overhead_scenario(tmp_path, monk
     """MS-35: --record --overhead regenerates the committed pass; only the git tag is the recording run's."""
     recorded, missing = tmp_path / "overhead.json", tmp_path / "missing"
     argv = ["replay.py", str(recorded), "--record", "--overhead", "--imm-tuning", str(PAGE_IMM_TUNING)]
-    monkeypatch.setattr(sys, "argv", [*argv, "--knet-checkpoint", str(missing), "--rkn-checkpoint", str(missing)])
+    monkeypatch.setattr(sys, "argv", [*argv, "--knet-checkpoint", str(missing), "--rkn-checkpoint", str(missing), "--bkn-checkpoint", str(missing)])
     monkeypatch.setenv("GIT_COMMIT", "recorded-sha")
 
     replay_main()
@@ -183,16 +183,25 @@ def test_replay_prints_the_recorded_first_trip_step_of_every_flag_per_filter(tmp
     missing = tmp_path / "missing.pt"
 
     lines = replay(
-        SEED_SCENARIO, "--imm-tuning", PAGE_IMM_TUNING, "--knet-checkpoint", missing, "--rkn-checkpoint", missing
+        SEED_SCENARIO,
+        "--imm-tuning",
+        PAGE_IMM_TUNING,
+        "--knet-checkpoint",
+        missing,
+        "--rkn-checkpoint",
+        missing,
+        "--bkn-checkpoint",
+        missing,
     )
 
-    assert set(lines) == {"EKF", "UKF", "IMM", "KalmanNet", "RKN"}
+    assert set(lines) == {"EKF", "UKF", "IMM", "KalmanNet", "RKN", "BKN"}
     assert set(scenario["tripped"]) == {"EKF", "UKF", "IMM"}
     assert BREAK_TURN_START_STEP < scenario["tripped"]["EKF"]["track_loss"] < BREAK_TURN_END_STEP
     for name, trips in scenario["tripped"].items():
         assert lines[name] == f"{name}: " + " ".join(f"{flag}={shown(trips[flag])}" for flag in FLAGS)
     assert lines["KalmanNet"] == f"KalmanNet: skipped, no checkpoint at {missing}"
     assert lines["RKN"] == f"RKN: skipped, no checkpoint at {missing}"
+    assert lines["BKN"] == f"BKN: skipped, no checkpoint at {missing}"
 
 
 def test_replay_skips_imm_without_a_tuning_file_instead_of_inventing_parameters(tmp_path):
@@ -253,7 +262,7 @@ def test_eval_reports_the_committed_scenarios_as_their_own_regime(imm_tuning, tm
     single_flight_nis_low, single_flight_nis_high = chi2.ppf(0.025, df=3), chi2.ppf(0.975, df=3)
     ekf_nis_inside = np.mean((nis >= single_flight_nis_low) & (nis <= single_flight_nis_high))
     eval_argv = ["eval.py", "--data-dir", str(data_dir), "--imm-tuning", str(imm_tuning), "--out", str(out)]
-    monkeypatch.setattr(sys, "argv", eval_argv)
+    monkeypatch.setattr(sys, "argv", [*eval_argv, "--bkn-weights", str(tmp_path / "missing.npz")])
     monkeypatch.chdir(REPO)
 
     bench_eval.main()
