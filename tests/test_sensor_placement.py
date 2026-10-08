@@ -21,6 +21,7 @@ from scripts.page_parity import (
 )
 from scripts.replay import RKN_LAYER_MULTS
 from web.live_flight import FILTER_NAMES, LEARNED_WEIGHTS, LiveFlight
+from tests.test_unscented_kalmannet import stand_in_network
 
 STAND_IN_SEED = 3
 EVADE_ENGAGE_STEP = 50
@@ -38,6 +39,7 @@ def weights_root(tmp_path_factory):
         "KalmanNet": KalmanGainGRU(),
         "RKN": RKNGainCovNetwork(**RKN_LAYER_MULTS),
         "BKN": KalmanGainGRU(),
+        "UKN": stand_in_network(),
     }
     for name, network in networks.items():
         (root / LEARNED_WEIGHTS[name]).parent.mkdir(parents=True)
