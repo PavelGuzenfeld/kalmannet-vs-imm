@@ -2,6 +2,8 @@
 Mirrors gain_network/knet_filter/rkn_network/rkn_filter on one unbatched flight; weights are the torch
 state_dict as arrays keyed by its own names, read by load_weights from torch_ops.export_npz's .npz."""
 
+import itertools
+
 import numpy as np
 
 from filters.measurement_model import HORIZONTAL_RANGE_FLOOR_M, H_jacobian, h, innovation, wrap_angle
@@ -11,6 +13,7 @@ from filters.state import ACC, AZIMUTH, MEAS_DIM, POS, STATE_DIM, VEL
 GRU_GATES = 3
 RKN_FEATURE_SPLITS = np.cumsum([MEAS_DIM, MEAS_DIM, STATE_DIM * MEAS_DIM])
 KINEMATIC_BLOCKS = len((POS, VEL, ACC))
+DROPOUT_LAYERS = ("FC5", "FC6", "FC1", "FC7", "FC2", "FC3", "FC4")
 
 
 def load_weights(npz):
@@ -74,9 +77,23 @@ def unchanged(x):
 
 
 def bernoulli_dropout(rng, dropout_p):
-    """torch.nn.Dropout's convention: zero with probability p, scale the kept units by 1/(1-p)."""
-    keep_p = 1.0 - dropout_p
-    return lambda x: x * (rng.random(x.shape) < keep_p) / keep_p
+    """torch.nn.Dropout's convention: zero with probability p, scale the kept units by 1/(1-p).
+    dropout_p is one p, or one per DROPOUT_LAYERS entry: the order KalmanGainGRU.forward applies them in."""
+    keep_ps = itertools.cycle(1.0 - np.atleast_1d(dropout_p))
+
+    def drop(x):
+        keep_p = next(keep_ps)
+        return x * (rng.random(x.shape) < keep_p) / keep_p
+
+    return drop
+
+
+def learned_dropout_p(weights):
+    """The per-layer p a concrete-dropout checkpoint learned (#149), in DROPOUT_LAYERS order; None at a fixed p."""
+    if "dropout.FC5.p_logit" not in weights:
+        return None
+    logits = np.concatenate([weights[f"dropout.{layer}.p_logit"] for layer in DROPOUT_LAYERS])
+    return sigmoid(logits)
 
 
 def dropout_rng(trajectory_seed):

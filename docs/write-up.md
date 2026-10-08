@@ -205,6 +205,7 @@ unchanged; only this differs:
   term plus a KL term on a learned `p`, initialised uniformly in [0.5, 0.8]) on its Architecture
   #1, with `J = 20`. #135 asks for plain MSE on our Architecture #2 with a fixed `p`. The
   calibration below is therefore that of MSE-trained MC dropout, not of the paper's full method.
+  The eq 23 training is built and measured separately below (#149); plain MSE stays the default.
 - **Dropout seed: per trajectory.** One numpy Generator per run, spawned from the run's seed
   (`dropout_rng`; its own stream, never the measurement-noise stream drawn from the same seed),
   draws every step's masks in realisation order. eval.py seeds runs with a counter per regime; the
@@ -238,6 +239,52 @@ Every run passes both accuracy filters; **`p = 0.2`, `J = 20`** wins on ANEES. T
 equally failed calibrations: no run puts a single counted step inside its 95% ellipsoid, and the
 ANEES mean swings by orders of magnitude with `J` because a few near-singular steps dominate it.
 Accuracy is flat in `J` (under 0.2 m) and within 1.7 m across `p`.
+
+**Eq 23 training with a learned p (#149).** `scripts/train_knet.py --learned-p` trains the same
+network the way the paper's sec. IV-B says (source-notes sec. 4), on our Architecture #2:
+
+- **Loss.** Per step, eq 20: `(1 - β) ℓ2 + β Σ_j |e_j² - Σ̂_jj|` (eq 19), on the mean and the
+  per-state spread of a `J = 10` training ensemble. The ensemble runs Algorithm 1 as the evaluator
+  does: every member predicts from the previous ensemble mean (`BayesianKalmanNetFilter` in
+  `filters/knet/knet_filter.py`). Both terms carry the sec. 1.5 per-state weights, so position does
+  not swamp the rest. The paper's expectation over dropout draws is one draw of `J` masks per step.
+- **Learned p.** One `p` per dropout layer (the seven above), as concrete dropout (Gal, Hron, Kendall
+  2017, the paper's [47]): a relaxed Bernoulli mask, temperature 0.1, eps 1e-7, from their code. Each
+  `p` starts uniform in [0.5, 0.8] (the paper's sec. V-A) and has no weight decay.
+- **KL term** (eq 24), added once per update: `c1 ‖θ_λ‖² / (1 - p_λ) - c2 H(p_λ) n(λ)`, with `c1 =
+  l²/N`, `c2 = 2/N`, `l = 1e-4` and `N = 1000` training trajectories, [47]'s scaling. Our dropout sits
+  on FC outputs, so `θ_λ` is the weight columns the dropped units feed and `n(λ)` their count: FC5 ->
+  GRU_Q input (45), FC6 -> GRU_Sigma input (45), FC1 and FC7 -> GRU_S input (9, 30), FC2's hidden
+  layer -> its output layer (3,600), FC3 -> FC4 (81), FC4 -> GRU_Sigma's hidden-to-hidden weights
+  (81), since FC4's output becomes that GRU's state. Adam's 1e-4 weight decay still applies to every
+  weight; `c1` is 1e-11, so the weight term is negligible next to it.
+- **Unspecified in the paper, chosen here:** `J_train = 10` (the fewest that give a 9-state `P` full
+  rank at inference; the 1/J normalisation biases the training spread to 0.9σ²); β ramps linearly to
+  its final value over 2 epochs and no checkpoint is kept before it gets there (the paper only says
+  "small, then increased"); early stopping on validation eq 20 at the final β, patience 4, at most 12
+  epochs. Patience and the cap are shorter than sec. 1.5's 10 and 100: an epoch took 20-45 min on the
+  shared CPU. Final β in {0.5, 0.9}; a first round that also tried 0.1 was stopped because every
+  run's best epoch fell inside the ramp, where the loss was at least 80% plain MSE.
+- **Inference** is unchanged: hard Bernoulli masks from the numpy forward pass, each layer at its
+  learned `p` (`learned_dropout_p`), not the relaxed masks training used.
+
+Both checkpoints went through the tuning rule above (`results/bkn_eq23_tuning.json`, `val.npz`):
+
+| β | best epoch | learned p (FC5, FC6, FC1, FC7, FC2, FC3, FC4) | J | Pos RMSE (m) | Diverged | ANEES | ANIS | Coverage@95 |
+|---|---|---|---|---|---|---|---|---|
+| 0.5 | 5 | 0.64, 0.55, 0.58, 0.63, 0.48, 0.51, 0.50 | 10 | 73.04 | 88.0% | 2.7e23 | 6,402 | 0 |
+| 0.5 | 5 | | 20 | 72.75 | 88.0% | 4.2e12 | 5,983 | 0 |
+| 0.5 | 5 | | 40 | 72.76 | 88.0% | 3.4e11 | 5,844 | 0 |
+| 0.9 | 3 | 0.70, 0.59, 0.60, 0.68, 0.50, 0.60, 0.52 | 10 | 73.69 | 91.5% | 9.2e16 | 6,372 | 0 |
+| 0.9 | 3 | | 20 | 73.62 | 91.5% | 1.3e11 | 6,235 | 0 |
+| **0.9** | **3** | | **40** | 73.87 | 90.5% | **5.6e10** | 6,188 | 0 |
+
+Every run passes both accuracy filters; **β = 0.9, J = 40** wins on ANEES. The learned `p` drifted
+down from their draws (0.55-0.79) and were still drifting when early stopping fired; FC2's hidden
+layer, where the entropy term weighs 3,600 units, settled at 0.48-0.49, next to the prior's 0.5. On
+validation the eq 23 runs sit in the plain-MSE band: at `J >= 20` ANEES 5.6e10 to 4.2e12 against
+plain MSE's 5.9e11 to 1.3e14, no counted step inside the 95% ellipsoid, the same accuracy and
+divergence.
 
 ## 2. Results
 
@@ -347,6 +394,7 @@ full-column-rank requirement, judged on the same metric code as every other filt
 |---|---|---|---|---|---|---|
 | KalmanNet (vanilla) | 74.57 | 86.3% (408) | N/A | N/A | N/A | N/A |
 | Bayesian KalmanNet (p 0.2, J 20) | 72.48 | 87.4% (395) | 1.2e12 | 2.6e12 | 577 | 0.000 / 0.000 |
+| Bayesian KalmanNet, eq 23 (learned p, β 0.9, J 40) | 74.39 | 87.8% (399) | 4.6e10 | 3.5e11 | 440 | 0.000 / 0.000 |
 | IMM | 1.17 | 0% | 8.98 | 9.53 | 2.95 | 0.702 / 0.862 |
 
 The ensemble mean tracks like vanilla KalmanNet (72.48 m vs. 74.57 m before divergence, 87.4% vs.
@@ -358,6 +406,22 @@ to that standard deviation was 1,400-3,600. That is MS-39's caveat in numbers: t
 step's gain times a milliradian-scale innovation is not the error the recursion has accumulated.
 This is MC dropout trained on plain MSE (the #135 scope), not the paper's eq 23 training, whose
 second-moment term exists to fix exactly this (sec. 1.7).
+
+**The paper's eq 23 training does not fix it (#149).** Trained with the second-moment and KL terms
+and a learned `p` per layer (sec. 1.7, `results/bkn_eq23_b0.9/`), BKN's covariance moves in the right
+direction and stays unusable (`results/eval_bkn_eq23/`, same evaluator and seeds as the plain row).
+High-MC ANEES drops 7.5x, from 2.6e12 to 3.5e11, against bounds 8.19-9.85; the main-set ANEES drops
+26x, ANIS from 577 to 440 against 2.54-3.50, and coverage stays 0 at both 68% and 95%. Over every
+counted high-MC step (about 153,000 per filter, divergence and burn-in cut as in the evaluator) the
+median position spread, `sqrt(tr P_pos)`, grows from 1.4 cm to 3.4 cm at the same `J = 20` (3.6 cm
+at `J = 40`), and the median ratio of position error to it falls from 2,900 to 1,060 (990 at `J =
+40`), while the median error is 40-48 m. The spread is 2.8x wider and still three orders of magnitude
+short (scratch diagnostic over `bkn_steps`, not committed; `results/spread_bkn_*.json`). Accuracy and divergence do not change: 74.39 m before divergence, 87.8% of
+runs diverged at a median step of 399, against 72.48 m, 87.4% and 395. On the four sweep regimes and the
+scenarios BKN's main ANEES falls 9x-25x (still 2.5e9 to 1.3e11) and coverage stays 0 everywhere. The loss asks the spread of one step's gain
+times the innovation to match the error the recursion has accumulated; with dropout at `p` 0.5-0.7
+the network still cannot spread that wide, and the tracking failure it shares with vanilla
+KalmanNet is untouched. The ensemble spread is not a usable covariance under either loss.
 
 ### 2.3 Recursive KalmanNet: close to IMM, ahead of it under hard maneuvers
 

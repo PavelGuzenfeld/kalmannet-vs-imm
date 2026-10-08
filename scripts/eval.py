@@ -233,6 +233,7 @@ def main():
     ap.add_argument("--imm-tuning", default="results/imm_tuning.json")
     ap.add_argument("--scenario-dir", default="data/scenarios")
     ap.add_argument("--bkn-weights", type=Path, default=Path("results/bkn/best.npz"))
+    ap.add_argument("--bkn-realisations", type=int, default=BKN_REALISATIONS)
     ap.add_argument("--out", default="results")
     args = ap.parse_args()
 
@@ -261,7 +262,9 @@ def main():
             ),
         }
         if bkn_weights is not None:
-            filters["BKN"] = bkn_entry(bkn_weights, dt, R)
+            learned = numpy_forward.learned_dropout_p(bkn_weights)
+            dropout_p = BKN_DROPOUT_P if learned is None else learned
+            filters["BKN"] = bkn_entry(bkn_weights, dt, R, dropout_p, args.bkn_realisations)
         return filters
 
     rows = []

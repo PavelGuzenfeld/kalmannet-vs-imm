@@ -8,7 +8,7 @@ import torch
 
 from data.config import NOMINAL
 from filters.knet import numpy_forward
-from filters.knet.numpy_forward import load_weights
+from filters.knet.numpy_forward import DROPOUT_LAYERS, load_weights
 from filters.torch_ops import export_npz
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.knet_filter import KalmanNetFilter
@@ -125,7 +125,8 @@ def test_torch_and_numpy_gain_networks_given_the_same_masks_track_the_committed_
     states, z = flight
     net = knet_stand_in()
     weights = exported(net, tmp_path)
-    net.dropout = NumpyMaskDropout(numpy_forward.bernoulli_dropout(numpy_forward.dropout_rng(TRAJECTORY_SEED), STAND_IN_DROPOUT_P))
+    shared = NumpyMaskDropout(numpy_forward.bernoulli_dropout(numpy_forward.dropout_rng(TRAJECTORY_SEED), STAND_IN_DROPOUT_P))
+    net.dropout = torch.nn.ModuleDict(dict.fromkeys(DROPOUT_LAYERS, shared))
     priors = _priors(NOMINAL.dt, NOMINAL.R())
     torch_filter = KalmanNetFilter(net, NOMINAL.dt)
     torch_filter.init_sequence(torch.tensor(states[None, 0]) + TORCH_INIT_OFFSET, *priors)
