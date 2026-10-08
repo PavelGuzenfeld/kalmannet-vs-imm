@@ -323,3 +323,21 @@ check = "no-citation"
 file = "tests/test_live_flight.py"
 test = "test_engaging_a_hold_cancels_the_running_manoeuvre"
 reason = "Holds and named manoeuvres are specified by decisions 11-16 in #106, which carry no MS-n line in the model spec; the author decides whether they join it."
+
+[[waiver]]
+file = "filters/knet/ukn_filter.py"
+line = 49
+old = "STATE_DIM + ukf.lam"
+new = "STATE_DIM - ukf.lam"
+reason = """The sigma-point spread n + lambda, with lambda = alpha^2 (n + kappa) - n = 0 at the MS-9
+constants alpha = 1, kappa = 0 that every UKF and UKN here runs at, so n - lambda is the same number.
+Rebuilt and diffed: a two-trajectory batched run gives bitwise-equal x and P. The term stays so the
+torch backbone reads the same lambda as filters/ukf.py if MS-9 ever moves."""
+
+[[waiver]]
+file = "scripts/train_ukn.py"
+uncovered = true
+reason = """Training driver, as scripts/train_knet.py: its output is a checkpoint after hours of CPU
+training, so a test would either retrain (too slow for the gate) or pin one run's weights (not a
+requirement). The loss terms, warmup ramp, EMA, adaptive weight and epoch diagnostics it calls are
+tested in tests/test_train_ukn.py; the filter step is gated in filters/knet/."""

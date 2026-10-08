@@ -24,17 +24,18 @@ from filters.knet.numpy_forward import load_weights
 from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import POS, VEL
 from filters.ukf import UKF
-from scripts.eval import bkn_filter, bkn_steps, ekf_like_steps, imm_steps, knet_steps, rkn_steps
+from scripts.eval import bkn_filter, bkn_steps, ekf_like_steps, imm_steps, knet_steps, rkn_steps, ukn_steps
 from web.evade import evade_rows
 from web.holds import Holds
 from web.manoeuvres import MANOEUVRES, manoeuvre_rows
 
 NOISE_REGIMES = ["nominal", "high_noise", "low_noise", "heavy_tailed"]
-FILTER_NAMES = ("EKF", "UKF", "IMM", "KalmanNet", "RKN", "BKN")
+FILTER_NAMES = ("EKF", "UKF", "IMM", "KalmanNet", "RKN", "BKN", "UKN")
 LEARNED_WEIGHTS = {
     "KalmanNet": "results/knet_vanilla/best.npz",
     "RKN": "results/rkn/best.npz",
     "BKN": "results/bkn/best.npz",
+    "UKN": "results/ukn/best.npz",
 }
 SETUP_KEYS = ("seed", "envelope", "noise_regime", "start")
 UNKNOWN_GIT_TAG = "unknown"
@@ -139,6 +140,8 @@ class LiveFlight:
         if "BKN" in weights:
             bkn = bkn_filter(load_weights(weights["BKN"]), dt, R, setup["seed"])
             self._filters["BKN"] = bkn_steps(bkn, dt, R, truth, z, snapshots["BKN"])
+        if "UKN" in weights:
+            self._filters["UKN"] = ukn_steps(load_weights(weights["UKN"]), dt, R, truth, z, snapshots["UKN"])
         self._filters = {name: until_diverged(steps) for name, steps in self._filters.items()}
         self._scores = {name: [] for name in self._filters}
 
