@@ -117,3 +117,15 @@ def test_the_flight_panel_checkbox_engages_evade_and_unticks_when_a_hold_takes_o
 
     assert not page.is_checked("#evade")
     assert run_until(page, hold_engaged_js("heading", True))
+
+
+def test_pressing_e_a_second_time_turns_evade_off(browser):  # noqa: F811
+    page = head_on_flight(browser)
+
+    press_and_wait_for_keydown(page, "KeyE")
+    assert run_until(page, EVADE_HUD.format("true"))
+    page.keyboard.up("KeyE")
+    page.keyboard.press("KeyE")
+
+    assert run_until(page, EVADE_HUD.format("false"))
+    assert not page.evaluate("window.flownFrames.at(-1).evade")

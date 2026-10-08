@@ -28,7 +28,7 @@ def h(x):
     px, py, pz = x[PX], x[PY], x[PZ]
     rho = np.hypot(px, py)
     r = np.hypot(rho, pz)
-    az = np.arctan2(py, px)
+    az = np.where(rho == 0.0, 0.0, np.arctan2(py, px))
     el = np.arctan2(pz, rho)
     return np.array([az, el, r])
 

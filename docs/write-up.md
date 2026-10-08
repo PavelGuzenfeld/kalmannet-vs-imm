@@ -22,7 +22,9 @@ extraction this implementation is grounded in.
     model/reality mismatch is deliberate; the robustness sweep probes it.
 - **Measurement model** (`filters/measurement_model.py`): nonlinear az/el/range,
   `h: Cartesian -> spherical`, sensor at the origin. Every filter shares this same `h()` and its
-  Jacobian/sigma-point handling.
+  Jacobian/sigma-point handling. A scenario may place the fixed sensor elsewhere
+  (`"sensor": {"position": [e, n, u]}`); the flight, its measurements and every filter then run in
+  the sensor-centred frame, and only the displayed positions are shifted back.
 - **Angle wrapping**: `wrap_angle` (`filters/measurement_model.py`) wraps every angular residual to
   `[-pi, pi)` before use, in three independent code paths (numpy filters, UKF's circular sigma-point
   mean, and the torch path used by KalmanNet's BPTT). Each path has its own wrap-boundary
@@ -286,6 +288,65 @@ validation the eq 23 runs sit in the plain-MSE band: at `J >= 20` ANEES 5.6e10 t
 plain MSE's 5.9e11 to 1.3e14, no counted step inside the 95% ellipsoid, the same accuracy and
 divergence.
 
+### 1.8 Unscented KalmanNet (`filters/knet/ukn_*.py`, `filters/knet/numpy_forward.py`, `scripts/train_ukn.py`, `scripts/tune_ukn.py`, #129)
+
+Unscented KalmanNet (UKN; Ko & Shafieezadeh, arXiv:2608.04201v2) keeps the UKF of sec. 1.1 as its
+backbone and learns three things on top: the process noise, the measurement noise and a correction
+to the gain. No reference code exists, so this is built from the paper. Spec lines MS-43 to MS-48 in #1.
+
+- **Backbone (MS-43).** f, h, the sigma points, the MS-33 jitter, the circular azimuth mean and the
+  Joseph update are `filters/ukf.py`'s own; UKN calls them. The weights stay at α = 1, β = 2, κ = 0.
+  The paper uses β = 0, so this is a **deviation**, by the author's ruling on #129: untrained UKN is
+  our UKF, not the paper's. Both output layers start at zero, so the untrained filter is the UKF bit
+  for bit on estimate, `P`, `y` and `S` (`tests/test_unscented_kalmannet.py`, the slice test).
+- **NoiseNet (MS-44)** scales the CV `Q` and the nominal `R` through lower-triangular Cholesky
+  multipliers `A` (eq 9, 12, 13). Each diagonal entry is `sqrt(clip(exp(4 tanh q), 0.1, 50))`, each
+  strictly lower entry `tanh(a)`. The product is computed as `base + L(A Aᵀ − I)Lᵀ`, equal to eq 9 in
+  exact arithmetic and the baseline bit for bit at `A = I`. **No jitter floor was needed**: the CV
+  `Q` has eigenvalues from 4.4e-13 to 1.4e-3 (cond 3.1e9) and its Cholesky succeeds in float64 in
+  numpy and torch. The classical UKF is therefore unchanged, and its rows in sec. 2.5 reproduce the
+  sec. 2.1 and 2.4 numbers exactly. Ceiling: 50× the variance of σ_a = 0.05 m/s² is about
+  0.35 m/s², far below the manoeuvres, so NoiseNet alone cannot absorb a turn.
+- **Features (MS-45).** GainNet reads eq 19 (whitened innovation, NIS, log det S, predicted
+  increment, log diag P, `K_UKF y`), 32 inputs. NoiseNet reads eq 10 and 11 with the measurement as
+  `[sin az, cos az, el, range]` and no control term, so 25 inputs, one more than #129 counted. Every
+  innovation-derived input uses the wrapped residual. Sizes as the paper's manoeuvring-target
+  example: d_e 32, H_G 128, H_N 64; 130,420 parameters.
+- **GainNet (MS-46), deviation.** Column `j` of `ΔK` is bounded by `c_K ‖K_UKF[:, j]‖`, not by eq 20's
+  single `c_K ‖K_UKF‖_F`. K's angle columns are in m/rad (about the range, up to km) and its range
+  column in m/m, so eq 20 lets the range column move by thousands of times its own entries. With eq
+  20 as written at `c_K = 1`, one Adam step made every later training batch lose positive
+  definiteness; per column, none did.
+- **Posterior (MS-47).** `x = x⁻ + (K_UKF + ΔK) y`, `P = P_UKF + ΔK S ΔKᵀ` (eq 17), the paper's
+  plug-in form: it treats `ΔK` as fixed although it depends on the innovation.
+- **Training (MS-48)**, `scripts/train_ukn.py`, nominal training set only. Loss eq 28: KalmanNet's
+  weighted state MSE + `r w_cal L_cal` (eq 23) + `r w_meas L_meas` (eq 24) + `w_ΔK ‖ΔK‖²/‖K_UKF‖²`.
+  **Deviations:** the ΔK term is relative to `‖K_UKF‖²` (the units of MS-46), and the MSE carries
+  KalmanNet's per-group weights. Constants fixed before any run: soft clamp `c = 9`, Student-t
+  `ν_df = 4`, EMA `β = 0.7`, `η = 0.5`, `τ = 0.1`, `w` in [0.1, 10], `w_ΔK = 0.01`, 2 MSE-only
+  epochs then a 3-epoch ramp, Adam lr 1e-3 without weight decay, batch 32, truncated BPTT 25 steps,
+  gradient clip 1, at most 30 epochs with patience 6 on validation position RMSE (no burn-in, no
+  divergence cut) once the ramp is complete, seed 0, start `x0 ~ N(truth, P0)` with eval.py's `P0`.
+  The adaptive weights went to their cap of 10 in the first epoch and stayed there: the smoothed
+  discrepancies never fell below τ (at the chosen run, `g_cal` 1.2 and `g_meas` 0.55 at the end),
+  so after warmup eq 27 acted as fixed weights of 10.
+
+**Choosing `c_K` on validation only** (`results/ukn_tuning.json`, `val.npz`, 200 trajectories, 1
+noise realisation each, through the page's numpy forward pass). One training run per `c_K` in
+{0.1, 0.3, 1.0}; best epochs 11, 14 and 8 of 18, 21 and 15 run (about 2.4-3 h each on 3 threads).
+The rule is BKN's (sec. 1.7), fixed before the runs: within 5 points of the fewest diverged and 10%
+of the best position RMSE, the ANEES closest to 9 in log ratio, the smaller `c_K` on a tie.
+
+| c_K | Pos RMSE (m) | Vel RMSE (m/s) | Diverged | ANEES | ANIS | Coverage@68/95 |
+|---|---|---|---|---|---|---|
+| 0.1 | 3.50 | 19.85 | 0% | 4,902 | 20.4 | 0.095 / 0.176 |
+| **0.3** | **1.71** | **8.78** | 0% | **101** | **5.55** | **0.362 / 0.491** |
+| 1.0 | 11.74 | 19.54 | 0% | 11,063 | 187.5 | 0.153 / 0.223 |
+
+**`c_K = 0.3`** is the only run inside the accuracy band, and it is also the best on every other
+column; it sits inside the grid. The checkpoints were trained from the tree of this PR's first
+commit before its last bitwise-equivalent rewrites (artifacts stamped `staged-129`).
+
 ## 2. Results
 
 All numbers below: full `datasets/test.npz` (200 trajectories x 5 Monte Carlo noise
@@ -304,6 +365,10 @@ not the whole-run error. The earlier revision of this report counted every step,
 for EKF/UKF and vanilla KalmanNet (112.59 m and 576.75 m nominal) are not comparable with the ones
 below; for those filters, read the diverged fraction first. IMM and RKN never diverge, so their
 numbers mean the same thing as before.
+
+`scripts/eval_table.py` copies the IMM, KalmanNet, RKN and BKN rows of those files into one
+`results/eval_table.csv` (RKN's ANEES, coverage and n_mc from `results/rkn_eval.json`; empty cells
+where an evaluator reports no such column).
 
 Full CSV: `results/results_table.csv`
 (classical filters and Bayesian KalmanNet) + `results/knet_test_rmse.csv` / `results/rkn_test_rmse.csv`
@@ -512,6 +577,41 @@ IMM's accuracy holds across every shifted regime (sub-4 m position RMSE througho
 diverging, vs. 14-50% diverged runs for the CV-only floor). The tuning in sec. 1.4 generalizes past
 the validation conditions it was chosen on.
 
+### 2.5 Unscented KalmanNet: no diverged runs, IMM-range accuracy, overconfident
+
+`c_K = 0.3` (sec. 1.8), same test sets and metric code as every other filter
+(`results/results_table.csv`, `results/anees_highmc.json`; run `results/eval_ukn/` at `ba851f9`,
+whose EKF/UKF/IMM rows reproduce the `f74fc30` numbers exactly). Pos RMSE in metres; ANEES is the
+full 9-dim one; coverage is joint 9-dim.
+
+| Regime | UKF | IMM | RKN | BKN | UKN | UKN ANEES (main) | UKN ANIS | UKN coverage@68/95 |
+|---|---|---|---|---|---|---|---|---|
+| nominal | 55.89 (29.5%) | **1.17** | 1.49 | 72.48 (87.4%) | 1.66 | 70.8 | 5.48 | 0.351 / 0.480 |
+| high_maneuver | 71.11 (50%) | 2.53 | **1.89** | 79.30 (97.6%) | 2.35 | 362.0 | 6.28 | 0.247 / 0.330 |
+| high_noise | 65.44 (48%) | **3.88** | 5.00 | 80.31 (91.2%) | 5.39 | 49.7 | 5.48 | 0.316 / 0.445 |
+| low_noise | 51.37 (14%) | **0.44** | 0.68 | 67.43 (78.0%) | 0.73 | 422.4 | 6.14 | 0.343 / 0.451 |
+| heavy_tailed | 60.62 (44%) | **2.09** | 2.46 | 76.85 (92.0%) | 2.78 | 75.0 | 14.98 | 0.130 / 0.271 |
+| scenarios (2 flights) | 71.94 (0%) | **1.49** | 1.49 | 52.82 (50%) | 1.58 | 14,484 | 5.64 | 0.375 / 0.487 |
+
+High-MC calibration (5 trajectories x 100 realisations, bounds 8.19-9.85): UKN ANEES **50.8**,
+ANIS 5.61 (bounds 2.54-3.50), coverage 0.256 / 0.350. Against UKF 906,769 (0.036 / 0.047), IMM
+9.53 (0.702 / 0.862), RKN 15.02 (0.553 / 0.732) and BKN 2.6e12 (0 / 0).
+
+- **Accuracy.** UKN never diverges in any regime, where its own backbone diverges in 14-50% of runs.
+  Its error sits in IMM's range: 1.41x IMM nominal, 1.11x RKN, and lower than IMM on
+  `high_maneuver` (2.35 m vs 2.53 m; no significance test was run, so this is not a "beats" claim
+  under MS-26). The gain residual does the work NoiseNet's 50x ceiling cannot (MS-44).
+- **Clean vs heavy-tailed.** UKN does not reject Student-t outliers here. Its error grows from 1.66 m
+  (nominal) to 2.78 m (`heavy_tailed`), 1.33x IMM's 2.09 m, and its coverage collapses to
+  0.13 / 0.27 with ANIS 15.0. The paper's gain over UKF is mostly heavy-tail rejection, but it
+  trains on data with 10% heavy-tailed returns; ours trains on Gaussian nominal data only, and the
+  shifted regimes stay test-only (sec. 2.4). The eq 24 Student-t term alone did not teach it.
+- **Calibration.** Overconfident everywhere: the high-MC ANEES of 50.8 is 5.2x its upper bound,
+  between RKN's 15.0 and the UKF's 9e5, with joint coverage 0.26 / 0.35 against nominal 0.68 / 0.95.
+  ANIS sits near 5.5 against an expected 3 in the Gaussian regimes, so `S` is also too small. As
+  the paper admits, L_cal sees only diag(P) (MS-48); this run does not separate the diagonal from
+  the joint shortfall, because per-axis coverage is not computed (follow-up).
+
 ## 3. Deployment analysis (Jetson Orin, JetPack 6.2; GPU reserved for vision, CPU/DLA/PVA only)
 
 Component versions confirmed from NVIDIA's JetPack 6.2 archived release notes:
@@ -529,6 +629,7 @@ median/p99 — methodology per the brief; `results/latency.json`)
 | KalmanNet (vanilla, 3 GRUs, 526,116 params) | 0.333 | 0.669 | 6x headroom |
 | Recursive KalmanNet (trained, 2 GRUs, 301,266 params) | 0.559 | 0.772 | 3.6x headroom |
 | Bayesian KalmanNet (numpy, J = 20 passes of the 526,116-param gain network, plus NEES/NIS) | **4.183** | **4.548** | **over budget, 2.1x at the median** |
+| Unscented KalmanNet (numpy, UKF backbone + 3 GRU calls, 130,420 params, plus NEES/NIS; separate loaded run, see below) | 0.644 | 0.762 | 3.1x headroom |
 | Recursive KalmanNet (**reference-default sizing**, 7,847,112 params, untrained) | **2.759** | **3.831** | **over budget at median, not just p99** |
 
 Measured on an x86 dev host (not the Orin), one container pinned to a single idle core
@@ -536,12 +637,20 @@ Measured on an x86 dev host (not the Orin), one container pinned to a single idl
 from the earlier revision's 0.391 ms; its gain has since moved into the line-of-sight frame (#94),
 and this run does not isolate how much of the change that accounts for.
 
+The UKN row is the page's numpy forward pass (`scripts/bench_latency.py --ukn-weights`), measured in
+a separate run pinned to one idle core of the same host while other jobs loaded it (load average
+~9 on 20 cores; `results/eval_ukn/latency.json`). That run put the UKF at 0.343 ms and EKF at
+0.059 ms, 3.0x and 2.3x their rows above, so UKN is about 1.9x the UKF in the same run, and its
+unloaded figure is likely lower than 0.644 ms. A step is 19 sigma points twice, three GRU calls
+(NoiseNet's Q and R stages, GainNet) and three Cholesky factorisations (two of P, one of S).
+
 The BKN row is the page's numpy forward pass (`scripts/bench_latency.py --bkn-weights`), measured in
 a separate run on one pinned core of the same host (`results/eval_bkn/latency.json`; the other rows
 stay those of `results/latency.json`): a single numpy KalmanNet pass
 there takes 0.175 ms, and BKN runs `J = 20` of them one after another, plus the NEES/NIS scoring the
 page does every step. The realisations are independent, so one batched pass over all 20 is the
-obvious cut. It was not built here.
+obvious cut. Since #148 the 20 realisations run as one stacked pass, bit for bit the serial estimates;
+the row above is the serial figure and has not been re-measured on the quiet host.
 
 Every filter we trained and deployed, except Bayesian KalmanNet at J = 20, fits the <2 ms per-step target on CPU
 alone, single-threaded, with no DLA or PVA offload, including RKN once scaled to a

@@ -14,6 +14,9 @@ from filters.motion_models import MOTION_LABELS, ca_model, ct_model, cv_model, s
 from filters.state import POS, PX, PY, PZ, STATE_DIM, VEL, VX, VY, VZ
 
 
+START_SPEC_KEYS = frozenset({"range_m", "bearing_deg", "altitude_m", "heading_deg", "speed_m_s"})
+
+
 def _sample_initial_state(rng, regime, speed_range=None):
     r0 = rng.uniform(*regime.range0)
     az0 = rng.uniform(-np.pi, np.pi)
@@ -114,22 +117,75 @@ def _start_speed_range(envelope, regime):
     return (low, high) if low <= high else (envelope["min_speed_m_s"], envelope["max_speed_m_s"])
 
 
+def _refuse_start_spec(spec, envelope):
+    unknown = spec.keys() - START_SPEC_KEYS
+    if unknown:
+        raise ValueError(f"unknown start fields {sorted(unknown)}; the fields are {sorted(START_SPEC_KEYS)}")
+    if spec.get("range_m", 0.0) < 0.0:
+        raise ValueError(f"range {spec['range_m']} m is below 0 m")
+    if spec.get("altitude_m", 0.0) < 0.0:
+        raise ValueError(f"altitude {spec['altitude_m']} m is below the z = 0 plane")
+    low, high = envelope["min_speed_m_s"], envelope["max_speed_m_s"]
+    if not low <= spec.get("speed_m_s", low) <= high:
+        raise ValueError(f"speed {spec['speed_m_s']} m/s is outside the envelope's {low} to {high} m/s")
+
+
+def _with_start_spec(drawn, spec, envelope, sensor):
+    """drawn is sensor-centred, the start is not: range is horizontal from the sensor, altitude is above z = 0.
+    Bearing and heading are degrees clockwise from north; a set heading or speed flies level."""
+    _refuse_start_spec(spec, envelope)
+    position, velocity = drawn[POS] + sensor, drawn[VEL]
+    if spec.keys() & {"range_m", "bearing_deg", "altitude_m"}:
+        ground_range = spec.get("range_m", np.hypot(drawn[PX], drawn[PY]))
+        bearing = (
+            np.deg2rad(spec["bearing_deg"]) if "bearing_deg" in spec else np.arctan2(drawn[PX], drawn[PY])
+        )
+        position = np.array(
+            [
+                sensor[0] + ground_range * np.sin(bearing),
+                sensor[1] + ground_range * np.cos(bearing),
+                spec.get("altitude_m", position[2]),
+            ]
+        )
+    if spec.keys() & {"heading_deg", "speed_m_s"}:
+        speed = spec.get("speed_m_s", np.linalg.norm(velocity))
+        heading = (
+            np.deg2rad(spec["heading_deg"]) if "heading_deg" in spec else np.arctan2(velocity[0], velocity[1])
+        )
+        velocity = np.array([speed * np.sin(heading), speed * np.cos(heading), 0.0])
+    return {"position": position, "velocity": velocity}
+
+
+def sensor_position(scenario):
+    """East, north, up in m of the fixed sensor; the origin when the scenario has no "sensor"."""
+    return np.asarray(scenario.get("sensor", {}).get("position", (0.0, 0.0, 0.0)), dtype=np.float64)
+
+
 def scenario_start(scenario, rng, regime):
-    """The scenario's recorded "start", or else one drawn from rng, drawn before any measurement noise."""
+    """The scenario's recorded "start", or else one drawn from rng around the sensor, before any measurement noise.
+    A partial "start_spec" fills its unset fields from that same draw."""
     start = scenario.get("start")
     if start is None:
         x0 = _sample_initial_state(rng, regime, _start_speed_range(scenario["envelope"], regime))
-        start = {"position": x0[POS], "velocity": x0[VEL]}
+        start = _with_start_spec(
+            x0, scenario.get("start_spec", {}), scenario["envelope"], sensor_position(scenario)
+        )
     return start
 
 
+def sensor_centred(start, sensor):
+    """The one place a flight leaves the world frame: truth, measurements and every filter run from here on."""
+    return np.asarray(start["position"], dtype=np.float64) - sensor, start["velocity"]
+
+
 def fly_scenario(scenario):
-    """(states[T, 9], measurements[T, 3]) of a data/scenarios/ flight: its "start" or else a seeded one, wings level."""
+    """Sensor-centred (states[T, 9], measurements[T, 3]) of a data/scenarios/ flight: its "start" or else a seeded
+    one, wings level."""
     regime = REGIMES[scenario["noise_regime"]]
     rng = np.random.default_rng(scenario["seed"])
-    start = scenario_start(scenario, rng, regime)
+    position, velocity = sensor_centred(scenario_start(scenario, rng, regime), sensor_position(scenario))
     controls = np.asarray(scenario["controls"], dtype=np.float64)
     envelope_changes = {step: Envelope(**fields) for step, fields in scenario.get("envelope_changes", [])}
     envelope = Envelope(**scenario["envelope"])
-    states = fly(envelope, start["position"], start["velocity"], 0.0, controls, regime.dt, envelope_changes)
+    states = fly(envelope, position, velocity, 0.0, controls, regime.dt, envelope_changes)
     return states, measure(rng, states, regime)

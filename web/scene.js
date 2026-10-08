@@ -12,6 +12,8 @@ const WING_SPAN_M = TRUTH_SIZE_M * 3;
 const WING_CHORD_M = TRUTH_SIZE_M / 2;
 const WING_THICKNESS_M = TRUTH_SIZE_M / 12;
 const ESTIMATE_RADIUS_M = 2;
+const SENSOR_SIZE_M = 20;
+const SENSOR_COLOR = 0x7f7f7f;
 const GRID_SIZE_M = 6000;
 const GRID_CELLS = 60;
 const GRID_CELL_M = GRID_SIZE_M / GRID_CELLS;
@@ -65,6 +67,8 @@ export async function createScene(container) {
   const truth = new THREE.Mesh(new THREE.ConeGeometry(TRUTH_SIZE_M / 2, TRUTH_SIZE_M * 2, 12), truthMaterial);
   truth.add(new THREE.Mesh(new THREE.BoxGeometry(WING_SPAN_M, WING_CHORD_M, WING_THICKNESS_M), truthMaterial));
   scene.add(truth);
+  const sensor = new THREE.Mesh(new THREE.BoxGeometry(SENSOR_SIZE_M, SENSOR_SIZE_M, SENSOR_SIZE_M), new THREE.MeshBasicMaterial({ color: SENSOR_COLOR }));
+  scene.add(sensor);
   const trailOf = (color) => {
     const line = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color }));
     line.frustumCulled = false;
@@ -168,6 +172,8 @@ export async function createScene(container) {
       const [east, north, up] = frame.truth_velocity_m_s;
       heading = Math.atan2(north, east);
       truth.position.copy(truthPosition);
+      sensor.position.set(...toThree(frame.sensor_m));
+      container.dataset.sensorPosition = fromThree(sensor.position.toArray()).join(" ");
       const forward = new THREE.Vector3(...toThree(frame.truth_velocity_m_s)).normalize();
       const lift = new THREE.Vector3(...toThree(frame.truth_lift_direction));
       const rightWing = new THREE.Vector3().crossVectors(forward, lift).normalize();

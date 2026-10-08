@@ -44,8 +44,13 @@ for p in 0.05 0.1 0.2; do ./docker_run.sh python scripts/train_knet.py --dropout
     && ./docker_run.sh python scripts/export_weights.py results/bkn_p$p/best.pt; done
 ./docker_run.sh python scripts/tune_bkn.py results/bkn_p*/best.npz   # picks p and J on val.npz
 cp -r results/bkn_p0.2 results/bkn && ./docker_run.sh python scripts/eval.py   # adds the BKN rows
+for c in 0.1 0.3 1.0; do ./docker_run.sh python scripts/train_ukn.py --gain-scale $c --out results/ukn_ck$c \
+    && ./docker_run.sh python scripts/export_weights.py results/ukn_ck$c/best.pt; done
+./docker_run.sh python scripts/tune_ukn.py results/ukn_ck*/best.npz   # picks c_K on val.npz
+cp -r results/ukn_ck0.3 results/ukn && ./docker_run.sh python scripts/eval.py   # adds the UKN rows
 ./docker_run.sh python scripts/bench_latency.py --knet-checkpoint results/knet_vanilla/best.pt \
-    --rkn-checkpoint results/rkn/best.pt --bench-rkn-reference-default --bkn-weights results/bkn/best.npz
+    --rkn-checkpoint results/rkn/best.pt --bench-rkn-reference-default --bkn-weights results/bkn/best.npz \
+    --ukn-weights results/ukn/best.npz
 ./docker_run.sh python scripts/make_plots.py
 ./docker_run.sh python scripts/make_animation.py
 ```
@@ -94,7 +99,7 @@ What the filters and the comparison are built on (extracted in [the source notes
 7. M. Mari, L. Snidaro, "Ensemble of KalmanNets for maneuvering target tracking," *FUSION*, 2024. [doi:10.23919/FUSION59988.2024.10706253](https://doi.org/10.23919/FUSION59988.2024.10706253); and "Ensemble of KalmanNets with innovation-based attention for robust target tracking," *Information Fusion* 127, 103777, 2026. [doi:10.1016/j.inffus.2025.103777](https://doi.org/10.1016/j.inffus.2025.103777)
 8. N. Shlezinger, G. Revach, A. Ghosh, S. Chatterjee, S. Tang, T. Imbiriba, J. Duník, O. Straka, P. Closas, Y. C. Eldar, "Artificial intelligence-aided Kalman filters: AI-augmented designs for Kalman-type algorithms," *IEEE Signal Processing Magazine* 42(3), 52–76, 2025. [doi:10.1109/MSP.2025.3569395](https://doi.org/10.1109/MSP.2025.3569395), [arXiv:2410.12289](https://arxiv.org/abs/2410.12289)
 
-2026 work on the same question, not yet folded into the benchmark:
+2026 work on the same question, not yet folded into the benchmark (read-up and verdicts in #128):
 
 - Y. Zhao, C. Yang, L. Gao, Y. Tian, T. Yuan, "IMMNet: Hybrid fusion of model-based and data-driven approaches for maneuvering target tracking," 2026. [arXiv:2607.13573](https://arxiv.org/abs/2607.13573) — IMM structure with learned components; the closest direct competitor.
 - Z. Li, Y. Guo, J. Wang, "IMMnet: Learned multiple model fusion filter for intelligent vehicle pose estimation," *IEEE Sensors J.* 26(4), 5769–5776, 2026. [doi:10.1109/JSEN.2025.3646621](https://doi.org/10.1109/JSEN.2025.3646621) — learns the IMM fusion step.
@@ -102,5 +107,5 @@ What the filters and the comparison are built on (extracted in [the source notes
 - W. Zhang, X. Ni, N. Shlezinger, Z. Wang, "Change-aware self-adaptive AI-aided Kalman filters with neural change point detection," 2026. [arXiv:2607.13387](https://arxiv.org/abs/2607.13387) — online change detection, the role IMM mode probabilities play.
 - O. Cohen, N. Shlezinger, T. Routtenberg, "EM-KalmanNet: Learned expectation-maximization for adaptive tracking in partially known, block-wise time-varying state-space models," 2026. [arXiv:2608.24404](https://arxiv.org/abs/2608.24404) — regime switching, close to IMM's assumption.
 - M. Ko, A. Shafieezadeh, "Unscented KalmanNet: Structure-preserving deep learning with calibrated posterior uncertainty under incomplete physics and unknown noise," 2026. [arXiv:2608.04201](https://arxiv.org/abs/2608.04201) — calibrated covariance, the axis vanilla KalmanNet fails on here.
-- A. Mehrfard, B. Duraisamy, S. Haag, F. Geiss, M. Mählisch, "Adaptive learned state estimation based on KalmanNet," 2026. [arXiv:2604.02441](https://arxiv.org/abs/2604.02441) — scenario-adaptive KalmanNet with covariance estimation.
+- A. Mehrfard, B. Duraisamy, S. Haag, F. Geiss, M. Mählisch, "Adaptive learned state estimation based on KalmanNet," 2026. [arXiv:2604.02441v1](https://arxiv.org/abs/2604.02441v1) (v1; v2 withdrawn) — scenario-adaptive KalmanNet with covariance estimation.
 - J. Song, W. Mei, Y. Xu, Q. Fu, R. Kou, L. Bu, Y. Long, "Motion estimation for multi-object tracking using KalmanNet with semantic-independent encoding," *Information Fusion* 136, 104513, 2026. [doi:10.1016/j.inffus.2026.104513](https://doi.org/10.1016/j.inffus.2026.104513) — KalmanNet under mismatched KF parameters in MOT.

@@ -1,4 +1,4 @@
-export const FILTER_COLORS = { EKF: "#d62728", UKF: "#ff7f0e", IMM: "#2ca02c", KalmanNet: "#1f77b4", RKN: "#9467bd", BKN: "#8c564b" };
+export const FILTER_COLORS = { EKF: "#d62728", UKF: "#ff7f0e", IMM: "#2ca02c", KalmanNet: "#1f77b4", RKN: "#9467bd", BKN: "#8c564b", UKN: "#e377c2" };
 export const TRUTH_COLOR = "#000000";
 export const MODE_NAMES = ["CV", "CT+", "CT−", "CA"];
 const MODE_COLORS = ["#4c78a8", "#f58518", "#54a24b", "#b279a2"];

@@ -26,7 +26,7 @@ from filters.knet.rkn_network import RKNGainCovNetwork
 from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import STATE_DIM
 from filters.ukf import UKF
-from scripts.eval import BKN_REALISATIONS, bkn_entry, bkn_steps, knet_steps
+from scripts.eval import BKN_REALISATIONS, bkn_entry, bkn_steps, knet_steps, ukn_steps
 
 
 def bench(step_fn, n_warmup=200, n_measure=10000):
@@ -57,6 +57,7 @@ def main():
                      help="also benchmark RKN at the reference's default (10,10,20) sizing, "
                           "untrained -- forward-pass compute cost is independent of training")
     ap.add_argument("--bkn-weights", type=Path, default=None, help="numpy .npz; times step plus NEES/NIS, as the page")
+    ap.add_argument("--ukn-weights", type=Path, default=None, help="numpy .npz; times step plus NEES/NIS, as the page")
     ap.add_argument("--n-warmup", type=int, default=200)
     ap.add_argument("--n-measure", type=int, default=10000)
     ap.add_argument("--out", default="results/latency.json")
@@ -134,6 +135,10 @@ def main():
         bkn_factory, _ = bkn_entry(weights, dt, R)
         bkn = bkn_steps(bkn_factory(), dt, R, itertools.repeat(x), itertools.repeat(z))
         results[f"BKN-numpy-J{BKN_REALISATIONS}"] = bench(lambda: next(bkn), args.n_warmup, args.n_measure)
+
+    if args.ukn_weights and args.ukn_weights.exists():
+        ukn = ukn_steps(numpy_forward.load_weights(args.ukn_weights), dt, R, itertools.repeat(x), itertools.repeat(z))
+        results["UKN-numpy"] = bench(lambda: next(ukn), args.n_warmup, args.n_measure)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

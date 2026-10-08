@@ -75,6 +75,14 @@
     <legend>Flight</legend>
     <label>noise regime <select id="noise_regime"></select></label>
     <label>seed <input id="seed" type="number" min="0" step="1"></label>
+    <label>sensor east (m) <input id="sensor_east_m" type="number" step="any" value="0"></label>
+    <label>sensor north (m) <input id="sensor_north_m" type="number" step="any" value="0"></label>
+    <label>sensor altitude (m) <input id="sensor_altitude_m" type="number" step="any" value="0"></label>
+    <label>start range (m) <input id="start_range_m" type="number" min="0" step="any"> <input id="start_range_m_random" type="checkbox" checked> random</label>
+    <label>start bearing (° from north) <input id="start_bearing_deg" type="number" step="any"> <input id="start_bearing_deg_random" type="checkbox" checked> random</label>
+    <label>start altitude (m) <input id="start_altitude_m" type="number" min="0" step="any"> <input id="start_altitude_m_random" type="checkbox" checked> random</label>
+    <label>start heading (° from north) <input id="start_heading_deg" type="number" step="any"> <input id="start_heading_deg_random" type="checkbox" checked> random</label>
+    <label>start speed (m/s) <input id="start_speed_m_s" type="number" step="any"> <input id="start_speed_m_s_random" type="checkbox" checked> random</label>
     <label><input id="evade" type="checkbox"> evade (E)</label>
   </fieldset>
 

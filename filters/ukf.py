@@ -38,15 +38,15 @@ class UKF:
             pts[1 + n + i] = x - S[:, i]
         return pts
 
-    def predict(self, x, P):
+    def predict(self, x, P, Q=None):
         pts = self._sigma_points(x, P)
         pts_pred = pts @ self.F.T
         x_pred = self.Wm @ pts_pred
         diff = pts_pred - x_pred
-        P_pred = (diff.T * self.Wc) @ diff + self.Q
+        P_pred = (diff.T * self.Wc) @ diff + (self.Q if Q is None else Q)
         return x_pred, P_pred, self._sigma_points(x_pred, P_pred)
 
-    def update(self, x_pred, P_pred, pts_pred, z):
+    def innovation(self, x_pred, pts_pred, z):
         Z = np.array([h(p) for p in pts_pred])
 
         # Circular mean for azimuth (column 0); ordinary weighted mean for
@@ -58,17 +58,23 @@ class UKF:
         dz[:, 0] = wrap_angle(dz[:, 0])
 
         dx = pts_pred - x_pred
-        S = (dz.T * self.Wc) @ dz + self.R
+        y = z - z_mean
+        y[0] = wrap_angle(y[0])
+        return dx, dz, y
+
+    def analytic_update(self, P_pred, dx, dz, R):
+        S = (dz.T * self.Wc) @ dz + R
         Pxz = (dx.T * self.Wc) @ dz
 
         K = Pxz @ np.linalg.inv(S)
-        y = z - z_mean
-        y[0] = wrap_angle(y[0])
-
-        x_upd = x_pred + K @ y
         cross_term = Pxz @ K.T
         P_upd = P_pred - cross_term - cross_term.T + K @ S @ K.T
-        return x_upd, P_upd, y, S
+        return K, P_upd, S
+
+    def update(self, x_pred, P_pred, pts_pred, z):
+        dx, dz, y = self.innovation(x_pred, pts_pred, z)
+        K, P_upd, S = self.analytic_update(P_pred, dx, dz, self.R)
+        return x_pred + K @ y, P_upd, y, S
 
     def step(self, x, P, z):
         x_pred, P_pred, pts_pred = self.predict(x, P)

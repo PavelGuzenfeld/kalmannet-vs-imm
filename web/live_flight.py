@@ -6,7 +6,7 @@ import numpy as np
 
 from data.config import NOMINAL, REGIMES
 from data.fixed_wing import DEFAULT_PRESET, NEUTRAL_ROW, PRESETS, Envelope, fly_steps, full_control_row
-from data.trajectory_gen import measure, scenario_start
+from data.trajectory_gen import measure, scenario_start, sensor_centred, sensor_position
 from filters.ekf import EKF
 from filters.flags import (
     DEFAULT_THRESHOLDS,
@@ -24,19 +24,20 @@ from filters.knet.numpy_forward import load_weights
 from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import POS, VEL
 from filters.ukf import UKF
-from scripts.eval import bkn_filter, bkn_steps, ekf_like_steps, imm_steps, knet_steps, rkn_steps
+from scripts.eval import bkn_filter, bkn_steps, ekf_like_steps, imm_steps, knet_steps, rkn_steps, ukn_steps
 from web.evade import evade_rows
 from web.holds import Holds
 from web.manoeuvres import MANOEUVRES, manoeuvre_rows
 
 NOISE_REGIMES = ["nominal", "high_noise", "low_noise", "heavy_tailed"]
-FILTER_NAMES = ("EKF", "UKF", "IMM", "KalmanNet", "RKN", "BKN")
+FILTER_NAMES = ("EKF", "UKF", "IMM", "KalmanNet", "RKN", "BKN", "UKN")
 LEARNED_WEIGHTS = {
     "KalmanNet": "results/knet_vanilla/best.npz",
     "RKN": "results/rkn/best.npz",
     "BKN": "results/bkn/best.npz",
+    "UKN": "results/ukn/best.npz",
 }
-SETUP_KEYS = ("seed", "envelope", "noise_regime", "start")
+SETUP_KEYS = ("seed", "envelope", "noise_regime", "start", "sensor")
 UNKNOWN_GIT_TAG = "unknown"
 STOPPED_READOUT = dict.fromkeys(("ellipsoid", "mode_probabilities", "estimate_m", "error_m", "nees", "nis"))
 
@@ -80,11 +81,11 @@ def _ellipsoid(P):
     }
 
 
-def _readout(truth, err, nees=None, nis=None, *, snapshot):
+def _readout(truth, err, nees=None, nis=None, *, snapshot, sensor):
     return {
         "ellipsoid": _ellipsoid(snapshot["P"]) if "P" in snapshot else None,
         "mode_probabilities": snapshot["mu"].tolist() if "mu" in snapshot else None,
-        "estimate_m": (truth[POS] + err[POS]).tolist(),
+        "estimate_m": (truth[POS] + err[POS] + sensor).tolist(),
         "error_m": float(np.linalg.norm(err[POS])),
         "nees": None if nees is None else float(nees),
         "nis": None if nis is None else float(nis),
@@ -93,7 +94,8 @@ def _readout(truth, err, nees=None, nis=None, *, snapshot):
 
 class LiveFlight:
     """scripts/replay.py's flight advanced one control row at a time: same seed draws, filters on nominal R.
-    A learned filter runs when weights_root holds its LEARNED_WEIGHTS .npz."""
+    A learned filter runs when weights_root holds its LEARNED_WEIGHTS .npz.
+    A start_spec draws on its own rng: replay of the exported explicit start draws none before the noise."""
 
     def __init__(self, setup, imm_best, weights_root):
         self.setup = {key: setup[key] for key in SETUP_KEYS if key in setup}
@@ -101,17 +103,19 @@ class LiveFlight:
         self.controls = []
         self._regime = REGIMES[setup["noise_regime"]]
         self._rng = np.random.default_rng(setup["seed"])
-        start = scenario_start(setup, self._rng, self._regime)
+        start_spec = setup.get("start_spec")
+        start_rng = np.random.default_rng(setup["seed"]) if start_spec else self._rng
+        start = scenario_start(setup, start_rng, self._regime)
+        if start_spec:
+            self.setup["start"] = {name: np.asarray(value).tolist() for name, value in start.items()}
         self._start_envelope = self._envelope = envelope = Envelope(**setup["envelope"])
         self._envelope_changes = {}
         self._scripted_envelopes = dict(setup.get("envelope_changes", []))
         self._manoeuvre_rows = self._evade_rows = None
         self.manoeuvre = None
-        position, velocity, latest_control = (
-            start["position"],
-            start["velocity"],
-            _latest(lambda: self.controls[-1]),
-        )
+        self._sensor = sensor_position(setup)
+        position, velocity = sensor_centred(start, self._sensor)
+        latest_control = _latest(lambda: self.controls[-1])
         self._flight = fly_steps(
             envelope, position, velocity, 0.0, latest_control, self._regime.dt, self._envelope_changes
         )
@@ -139,6 +143,8 @@ class LiveFlight:
         if "BKN" in weights:
             bkn = bkn_filter(load_weights(weights["BKN"]), dt, R, setup["seed"])
             self._filters["BKN"] = bkn_steps(bkn, dt, R, truth, z, snapshots["BKN"])
+        if "UKN" in weights:
+            self._filters["UKN"] = ukn_steps(load_weights(weights["UKN"]), dt, R, truth, z, snapshots["UKN"])
         self._filters = {name: until_diverged(steps) for name, steps in self._filters.items()}
         self._scores = {name: [] for name in self._filters}
 
@@ -219,7 +225,11 @@ class LiveFlight:
     def _readout(self, name, scores):
         step = divergence_step(_position_errors_m([err for err, *_ in scores]))
         stopped = len(scores) < len(self.controls)
-        readout = STOPPED_READOUT if stopped else _readout(self._truth, *scores[-1], snapshot=self._snapshots[name])
+        readout = (
+            STOPPED_READOUT
+            if stopped
+            else _readout(self._truth, *scores[-1], snapshot=self._snapshots[name], sensor=self._sensor)
+        )
         return {**readout, "diverged": step is not None, "diverged_step": step}
 
     def frame(self):
@@ -230,7 +240,8 @@ class LiveFlight:
             "step": len(self.controls),
             "manoeuvre": self.manoeuvre,
             "evade": self._evade_rows is not None,
-            "truth_m": self._truth[POS].tolist(),
+            "truth_m": (self._truth[POS] + self._sensor).tolist(),
+            "sensor_m": self._sensor.tolist(),
             "truth_velocity_m_s": self._truth[VEL].tolist(),
             "truth_lift_direction": self._lift_direction.tolist(),
             "holds": dict(self.holds.targets),

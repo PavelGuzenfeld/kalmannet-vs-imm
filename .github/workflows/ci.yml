@@ -96,7 +96,7 @@ jobs:
             pip install -q pytest==8.3.3 playwright==1.48.0
             python -m http.server 8000 >/dev/null 2>&1 &
             sleep 1
-            PAGE_BASE_URL=http://localhost:8000 python -m pytest -q -p no:cacheprovider tests/test_page_flags_browser.py tests/test_steering_hud_browser.py tests/test_manoeuvre_browser.py
+            PAGE_BASE_URL=http://localhost:8000 python -m pytest -q -p no:cacheprovider tests/test_page_flags_browser.py tests/test_steering_hud_browser.py tests/test_manoeuvre_browser.py tests/test_target_start_browser.py tests/test_sensor_placement_browser.py
             python tests/browser/slice_page_views.py http://localhost:8000 build/replay'
 
   site-docs:

@@ -123,8 +123,8 @@ def error_and_nees(x, P_factor, truth):
 
 
 def bkn_filter(weights, dt, R, trajectory_seed, dropout_p=BKN_DROPOUT_P, realisations=BKN_REALISATIONS):
-    dropout = numpy_forward.bernoulli_dropout(numpy_forward.dropout_rng(trajectory_seed), dropout_p)
-    return numpy_forward.BayesianKalmanNetFilter(weights, dt, R, dropout, realisations)
+    rng = numpy_forward.dropout_rng(trajectory_seed)
+    return numpy_forward.BayesianKalmanNetFilter(weights, dt, R, dropout_p, rng, realisations)
 
 
 def bkn_steps(flt, dt, R, x_true, z, snapshot=None):
@@ -149,6 +149,24 @@ def bkn_entry(weights, dt, R, dropout_p=BKN_DROPOUT_P, realisations=BKN_REALISAT
     return (
         lambda: bkn_filter(weights, dt, R, next(trajectory_seeds), dropout_p, realisations),
         lambda flt, x_true, z: _stacked(until_diverged(bkn_steps(flt, dt, R, x_true, z))),
+    )
+
+
+def ukn_steps(weights, dt, R, x_true, z, snapshot=None):
+    """Yields (err[9], nees, nis) per step of the numpy Unscented KalmanNet, started as the UKF; live-drivable."""
+    flt = numpy_forward.UnscentedKalmanNetFilter(numpy_forward.UnscentedKalmanNetwork(weights), dt, R)
+    for t, (truth, z_t) in enumerate(zip(x_true, z)):
+        if t == 0:
+            flt.init_sequence(truth + _INIT_OFFSET, _P0.copy())
+        x, P, y, S = flt.step(z_t)
+        _remember(snapshot, P=P)
+        yield _scored(x, P, y, S, truth)
+
+
+def ukn_entry(weights, dt, R):
+    return (
+        lambda: weights,
+        lambda flt_weights, x_true, z: _stacked(until_diverged(ukn_steps(flt_weights, dt, R, x_true, z))),
     )
 
 
@@ -234,6 +252,7 @@ def main():
     ap.add_argument("--scenario-dir", default="data/scenarios")
     ap.add_argument("--bkn-weights", type=Path, default=Path("results/bkn/best.npz"))
     ap.add_argument("--bkn-realisations", type=int, default=BKN_REALISATIONS)
+    ap.add_argument("--ukn-weights", type=Path, default=Path("results/ukn/best.npz"))
     ap.add_argument("--out", default="results")
     args = ap.parse_args()
 
@@ -250,6 +269,7 @@ def main():
     print(f"using tuned IMM: {best}")
 
     bkn_weights = numpy_forward.load_weights(args.bkn_weights) if args.bkn_weights.exists() else None
+    ukn_weights = numpy_forward.load_weights(args.ukn_weights) if args.ukn_weights.exists() else None
 
     def make_filters(regime_name):
         R = R_for(regime_name)
@@ -265,6 +285,8 @@ def main():
             learned = numpy_forward.learned_dropout_p(bkn_weights)
             dropout_p = BKN_DROPOUT_P if learned is None else learned
             filters["BKN"] = bkn_entry(bkn_weights, dt, R, dropout_p, args.bkn_realisations)
+        if ukn_weights is not None:
+            filters["UKN"] = ukn_entry(ukn_weights, dt, R)
         return filters
 
     rows = []
