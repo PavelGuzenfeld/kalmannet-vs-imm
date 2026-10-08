@@ -84,7 +84,7 @@ def test_chase_camera_sits_behind_the_truth_along_its_velocity(browser_context):
           const container = document.createElement("div");
           document.body.append(container);
           const scene = await (await import("/web/scene.js")).createScene(container);
-          scene.update({ truth_m: [0, 0, 400], truth_velocity_m_s: [100, 0, 0], truth_lift_direction: [0, 0, 1], filters: {} });
+          scene.update({ truth_m: [0, 0, 400], truth_velocity_m_s: [100, 0, 0], truth_lift_direction: [0, 0, 1], sensor_m: [0, 0, 0], filters: {} });
           return container.dataset.cameraOffset.split(" ").map(Number);
         }"""
     )
@@ -222,6 +222,7 @@ def test_scene_hides_the_ellipsoid_of_a_diverged_filter(browser_context):
             truth_m: [0, 0, 400],
             truth_velocity_m_s: [100, 0, 0],
             truth_lift_direction: [0, 0, 1],
+            sensor_m: [0, 0, 0],
             filters: { EKF: readout(false), UKF: readout(true) },
           });
           return container.dataset.shownEllipsoids;
@@ -298,6 +299,7 @@ def test_scale_bar_is_a_one_two_five_value_whose_length_matches_metres_per_pixel
             truth_m: [0, 0, 400],
             truth_velocity_m_s: [100, 0, 0],
             truth_lift_direction: [0, 0, 1],
+            sensor_m: [0, 0, 0],
             filters: {},
           });
           scene.setMode(mode);
@@ -395,7 +397,7 @@ def scene_wing_axis(page, velocity, lift):
           const container = document.createElement("div");
           document.body.append(container);
           const scene = await (await import("/web/scene.js")).createScene(container);
-          scene.update({ truth_m: [0, 0, 400], truth_velocity_m_s: velocity, truth_lift_direction: lift, filters: {} });
+          scene.update({ truth_m: [0, 0, 400], truth_velocity_m_s: velocity, truth_lift_direction: lift, sensor_m: [0, 0, 0], filters: {} });
           return container.dataset.truthWingAxis.split(" ").map(Number);
         }""",
         [velocity, lift],

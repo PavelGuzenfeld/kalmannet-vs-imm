@@ -5,6 +5,9 @@ import { createScene } from "./scene.js";
 const FLAGS = ["track_loss", "overconfidence", "raw_error"];
 const THRESHOLD_INPUTS = ["innovation_gate_nis", "nees_upper", "overconfident_steps", "raw_error_m"];
 const START_KEYS = ["range_m", "bearing_deg", "altitude_m", "heading_deg", "speed_m_s"];
+const SENSOR_INPUTS = ["sensor_east_m", "sensor_north_m", "sensor_altitude_m"];
+const SENSOR_COLOR = "#7f7f7f";
+const SENSOR_MARK_PX = 6;
 const INTEGER_THRESHOLDS = new Set(["overconfident_steps"]);
 const ENVELOPE_SLIDERS = {
   min_speed_m_s: { toSlider: (value) => value, fromSlider: (value) => value },
@@ -92,6 +95,13 @@ function applyScenarioToUi(scenario) {
   byId("seed").value = scenario.seed;
   byId("noise_regime").value = scenario.noise_regime;
   for (const key of THRESHOLD_INPUTS) byId(key).value = String(scenario.thresholds[key]);
+  const sensor = scenario.sensor?.position ?? [0, 0, 0];
+  SENSOR_INPUTS.forEach((key, axis) => (byId(key).value = String(sensor[axis])));
+}
+
+function sensorSetup() {
+  const position = SENSOR_INPUTS.map((key) => parseFloat(byId(key).value) || 0);
+  return position.some((value) => value !== 0) ? { sensor: { position } } : {};
 }
 
 function populate() {
@@ -124,6 +134,7 @@ function startFlight(scriptControls, recordedStart, recordedEnvelopeChanges) {
     envelope: { ...envelope },
     noise_regime: byId("noise_regime").value,
     thresholds: thresholds(),
+    ...sensorSetup(),
     ...(recordedStart && { start: recordedStart }),
     ...(Object.keys(spec).length && { start_spec: spec }),
     ...(recordedEnvelopeChanges && { envelope_changes: recordedEnvelopeChanges }),
@@ -332,6 +343,11 @@ function renderPlan(frame) {
     context.fillStyle = TRAIL_COLORS[name];
     context.fillText(name, ...toCanvas(trail.at(-1)));
   }
+  const [sensorX, sensorY] = toCanvas(frame.sensor_m);
+  canvas.dataset.sensorM = frame.sensor_m.slice(0, 2).join(" ");
+  context.fillStyle = SENSOR_COLOR;
+  context.fillRect(sensorX - SENSOR_MARK_PX / 2, sensorY - SENSOR_MARK_PX / 2, SENSOR_MARK_PX, SENSOR_MARK_PX);
+  context.fillText("sensor", sensorX + SENSOR_MARK_PX, sensorY);
   context.fillStyle = "#666666";
   context.fillText(`plan view, x east, y north, ${span.toFixed(0)} m across`, 8, canvas.height - 8);
 }
