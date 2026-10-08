@@ -21,11 +21,13 @@ from tests.test_numpy_forward import REPO, exported, knet_stand_in
 from tests.test_replay import imm_tuning  # noqa: F401
 
 P_INIT_LOW, P_INIT_HIGH = 0.5, 0.8
+P_MOVED_FLOOR = 1e-4
 
 
 def test_eq23_training_learns_one_p_per_dropout_layer_and_the_ensemble_runs_at_the_learned_p(tmp_path, monkeypatch):
-    """MS-39, MS-42 (proposed, #149): train_knet --learned-p keeps a checkpoint only once beta is ramped up, with seven
-    per-layer p drawn in [0.5, 0.8] and trained; validation and evaluation run the ensemble at exactly those p."""
+    """MS-39, MS-42 (proposed, #149): --learned-p keeps a checkpoint only once beta is ramped up; seven p drawn in
+    [0.5, 0.8] each move > 1e-4 (76 Adam steps of ~3e-4 in logit, far above a round trip's ulp); validation and
+    evaluation run the ensemble at exactly those p."""
     data_dir, out = tmp_path / "datasets", tmp_path / "bkn_eq23"
     toy = ["--n-train", "2", "--n-val", "1", "--n-test", "1", "--n-sweep", "1", "--mc-test", "1", "--n-highmc", "1"]
     subprocess.run([sys.executable, "scripts/make_dataset.py", "--out", data_dir, *toy, "--mc-highmc", "1"], cwd=REPO, check=True)
@@ -46,7 +48,7 @@ def test_eq23_training_learns_one_p_per_dropout_layer_and_the_ensemble_runs_at_t
     learned = numpy_forward.learned_dropout_p(weights)
     assert list(initial) == list(DROPOUT_LAYERS)
     assert all(P_INIT_LOW <= p <= P_INIT_HIGH for p in initial.values())
-    assert not np.array_equal(learned, list(initial.values()))
+    assert np.all(np.abs(learned - list(initial.values())) > P_MOVED_FLOOR)
     states, measurements = bench_eval._load(data_dir / "val.npz")
     row = tune_bkn.validation_row(out / "best.npz", 10, NOMINAL.dt, NOMINAL.R(), states, measurements)
     expected = bench_eval.evaluate_dataset(
@@ -218,8 +220,8 @@ def test_learned_p_reads_each_layers_logit_in_forward_order_and_is_absent_at_a_f
 
 
 def test_eval_runs_a_concrete_dropout_checkpoint_at_its_learned_p(imm_tuning, tmp_path, monkeypatch):  # noqa: F811
-    """MS-42 (proposed, #149): results_table.csv's BKN row for eq 23 weights is the ensemble at the learned p and at
-    the J validation picked for that checkpoint."""
+    """MS-42 (proposed, #149): results_table.csv's BKN row for eq 23 weights is the ensemble at the learned p, not at
+    the fixed BKN_DROPOUT_P, and at the J that --bkn-realisations names."""
     data_dir, out, weights = tmp_path / "datasets", tmp_path / "results", tmp_path / "bkn.npz"
     toy = ["--n-train", "1", "--n-val", "1", "--n-test", "1", "--n-sweep", "1", "--mc-test", "2", "--n-highmc", "1"]
     subprocess.run([sys.executable, "scripts/make_dataset.py", "--out", data_dir, *toy, "--mc-highmc", "2"], cwd=REPO, check=True)
@@ -243,3 +245,7 @@ def test_eval_runs_a_concrete_dropout_checkpoint_at_its_learned_p(imm_tuning, tm
     )
     assert float(nominal["pos_rmse"]) == bench_eval.summarize_rmse(expected)[0]
     assert float(nominal["anees_mean"]) == bench_eval.summarize_consistency(expected)["anees_mean"]
+    fixed_p = bench_eval.evaluate_dataset(
+        *bench_eval.bkn_entry(loaded, NOMINAL.dt, NOMINAL.R(), bench_eval.BKN_DROPOUT_P, 10), states, measurements
+    )
+    assert float(nominal["anees_mean"]) != bench_eval.summarize_consistency(fixed_p)["anees_mean"]
