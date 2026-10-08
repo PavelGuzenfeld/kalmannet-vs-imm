@@ -22,7 +22,9 @@ extraction this implementation is grounded in.
     model/reality mismatch is deliberate; the robustness sweep probes it.
 - **Measurement model** (`filters/measurement_model.py`): nonlinear az/el/range,
   `h: Cartesian -> spherical`, sensor at the origin. Every filter shares this same `h()` and its
-  Jacobian/sigma-point handling.
+  Jacobian/sigma-point handling. A scenario may place the fixed sensor elsewhere
+  (`"sensor": {"position": [e, n, u]}`); the flight, its measurements and every filter then run in
+  the sensor-centred frame, and only the displayed positions are shifted back.
 - **Angle wrapping**: `wrap_angle` (`filters/measurement_model.py`) wraps every angular residual to
   `[-pi, pi)` before use, in three independent code paths (numpy filters, UKF's circular sigma-point
   mean, and the torch path used by KalmanNet's BPTT). Each path has its own wrap-boundary

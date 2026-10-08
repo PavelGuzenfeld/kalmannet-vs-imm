@@ -6,7 +6,7 @@ import numpy as np
 
 from data.config import NOMINAL, REGIMES
 from data.fixed_wing import DEFAULT_PRESET, NEUTRAL_ROW, PRESETS, Envelope, fly_steps, full_control_row
-from data.trajectory_gen import measure, scenario_start
+from data.trajectory_gen import measure, scenario_start, sensor_centred, sensor_position
 from filters.ekf import EKF
 from filters.flags import (
     DEFAULT_THRESHOLDS,
@@ -36,7 +36,7 @@ LEARNED_WEIGHTS = {
     "RKN": "results/rkn/best.npz",
     "BKN": "results/bkn/best.npz",
 }
-SETUP_KEYS = ("seed", "envelope", "noise_regime", "start")
+SETUP_KEYS = ("seed", "envelope", "noise_regime", "start", "sensor")
 UNKNOWN_GIT_TAG = "unknown"
 STOPPED_READOUT = dict.fromkeys(("ellipsoid", "mode_probabilities", "estimate_m", "error_m", "nees", "nis"))
 
@@ -80,11 +80,11 @@ def _ellipsoid(P):
     }
 
 
-def _readout(truth, err, nees=None, nis=None, *, snapshot):
+def _readout(truth, err, nees=None, nis=None, *, snapshot, sensor):
     return {
         "ellipsoid": _ellipsoid(snapshot["P"]) if "P" in snapshot else None,
         "mode_probabilities": snapshot["mu"].tolist() if "mu" in snapshot else None,
-        "estimate_m": (truth[POS] + err[POS]).tolist(),
+        "estimate_m": (truth[POS] + err[POS] + sensor).tolist(),
         "error_m": float(np.linalg.norm(err[POS])),
         "nees": None if nees is None else float(nees),
         "nis": None if nis is None else float(nis),
@@ -112,11 +112,9 @@ class LiveFlight:
         self._scripted_envelopes = dict(setup.get("envelope_changes", []))
         self._manoeuvre_rows = self._evade_rows = None
         self.manoeuvre = None
-        position, velocity, latest_control = (
-            start["position"],
-            start["velocity"],
-            _latest(lambda: self.controls[-1]),
-        )
+        self._sensor = sensor_position(setup)
+        position, velocity = sensor_centred(start, self._sensor)
+        latest_control = _latest(lambda: self.controls[-1])
         self._flight = fly_steps(
             envelope, position, velocity, 0.0, latest_control, self._regime.dt, self._envelope_changes
         )
@@ -224,7 +222,11 @@ class LiveFlight:
     def _readout(self, name, scores):
         step = divergence_step(_position_errors_m([err for err, *_ in scores]))
         stopped = len(scores) < len(self.controls)
-        readout = STOPPED_READOUT if stopped else _readout(self._truth, *scores[-1], snapshot=self._snapshots[name])
+        readout = (
+            STOPPED_READOUT
+            if stopped
+            else _readout(self._truth, *scores[-1], snapshot=self._snapshots[name], sensor=self._sensor)
+        )
         return {**readout, "diverged": step is not None, "diverged_step": step}
 
     def frame(self):
@@ -235,7 +237,8 @@ class LiveFlight:
             "step": len(self.controls),
             "manoeuvre": self.manoeuvre,
             "evade": self._evade_rows is not None,
-            "truth_m": self._truth[POS].tolist(),
+            "truth_m": (self._truth[POS] + self._sensor).tolist(),
+            "sensor_m": self._sensor.tolist(),
             "truth_velocity_m_s": self._truth[VEL].tolist(),
             "truth_lift_direction": self._lift_direction.tolist(),
             "holds": dict(self.holds.targets),
