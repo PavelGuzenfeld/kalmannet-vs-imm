@@ -110,6 +110,66 @@ class KalmanGainGRU:
         return out_FC2.reshape(self.m, self.n), (h_Q, h_Sigma, h_S)
 
 
+def rowwise_matvec(matrix, rows):
+    """matrix @ row for every row of [J, in]. Not rows @ matrix.T: that is a gemm, whose summation order differs
+    from the gemv a single `matrix @ row` runs, so the last bits would move."""
+    return (matrix @ rows[:, :, np.newaxis])[:, :, 0]
+
+
+def stacked_linear(weights, prefix, x):
+    return rowwise_matvec(weights[f"{prefix}weight"], x) + weights[f"{prefix}bias"]
+
+
+def stacked_gru_cell(weights, prefix, x, hidden):
+    """gru_cell over [J, ·] rows."""
+    input_gates = rowwise_matvec(weights[f"{prefix}weight_ih_l0"], x) + weights[f"{prefix}bias_ih_l0"]
+    hidden_gates = rowwise_matvec(weights[f"{prefix}weight_hh_l0"], hidden) + weights[f"{prefix}bias_hh_l0"]
+    i_r, i_z, i_n = np.split(input_gates, GRU_GATES, axis=-1)
+    h_r, h_z, h_n = np.split(hidden_gates, GRU_GATES, axis=-1)
+    r = sigmoid(i_r + h_r)
+    z = sigmoid(i_z + h_z)
+    n = np.tanh(i_n + r * h_n)
+    return (1.0 - z) * n + z * hidden
+
+
+class BatchedKalmanGainGRU:
+    """J dropout realisations of KalmanGainGRU in one pass. The inputs are shared, the hidden states are [J, ·].
+    Masks come from one Generator, drawn realisation by realisation and layer by layer in DROPOUT_LAYERS order:
+    the order J serial passes draw them in."""
+
+    DROPOUT_LAYERS = ("FC5.0.", "FC6.0.", "FC1.0.", "FC7.0.", "FC2.0.", "FC3.0.", "FC4.0.")
+
+    def __init__(self, weights, dropout_p, rng, realisations, m=STATE_DIM, n=MEAS_DIM):
+        self.weights, self.rng, self.realisations, self.m, self.n = weights, rng, realisations, m, n
+        self.keep_p = 1.0 - dropout_p
+        widths = [weights[f"{layer}weight"].shape[0] for layer in self.DROPOUT_LAYERS]
+        self.mask_width = sum(widths)
+        self.mask_splits = np.cumsum(widths)[:-1]
+
+    def draw_masks(self):
+        draws = self.rng.random((self.realisations, self.mask_width))
+        return iter(np.split(draws < self.keep_p, self.mask_splits, axis=-1))
+
+    def forward(self, obs_diff, obs_innov_diff, fw_evol_diff, fw_update_diff, hidden):
+        w, masks = self.weights, self.draw_masks()
+
+        def drop(x):
+            return x * next(masks) / self.keep_p
+
+        h_Q, h_Sigma, h_S = hidden
+        out_Q = h_Q = stacked_gru_cell(w, "GRU_Q.", drop(relu(linear(w, "FC5.0.", fw_update_diff))), h_Q)
+        out_FC6 = drop(relu(linear(w, "FC6.0.", fw_evol_diff)))
+        out_Sigma = stacked_gru_cell(w, "GRU_Sigma.", np.concatenate([out_Q, out_FC6], axis=-1), h_Sigma)
+        out_FC1 = drop(relu(stacked_linear(w, "FC1.0.", out_Sigma)))
+        out_FC7 = drop(relu(linear(w, "FC7.0.", np.concatenate([obs_diff, obs_innov_diff]))))
+        out_S = h_S = stacked_gru_cell(w, "GRU_S.", np.concatenate([out_FC1, out_FC7], axis=-1), h_S)
+        hidden_FC2 = drop(relu(stacked_linear(w, "FC2.0.", np.concatenate([out_Sigma, out_S], axis=-1))))
+        out_FC2 = stacked_linear(w, "FC2.2.", hidden_FC2)
+        out_FC3 = drop(relu(stacked_linear(w, "FC3.0.", np.concatenate([out_S, out_FC2], axis=-1))))
+        h_Sigma = drop(relu(stacked_linear(w, "FC4.0.", np.concatenate([out_Sigma, out_FC3], axis=-1))))
+        return out_FC2.reshape(self.realisations, self.m, self.n), (h_Q, h_Sigma, h_S)
+
+
 class KalmanNetFilter:
     def __init__(self, gain_net, dt):
         self.net = gain_net
@@ -143,24 +203,35 @@ class BayesianKalmanNetFilter:
     """Dahan et al. 2025 Algorithm 1: every realisation predicts from the ensemble mean, keeping its own GRU state.
     S = H F P Fᵀ Hᵀ + R is this benchmark's, for NIS; the paper defines none (MS-40)."""
 
-    def __init__(self, weights, dt, R, dropout, realisations):
-        self.realisations = [KalmanNetFilter(KalmanGainGRU(weights, dropout=dropout), dt) for _ in range(realisations)]
+    def __init__(self, weights, dt, R, dropout_p, rng, realisations):
+        self.net = BatchedKalmanGainGRU(weights, dropout_p, rng, realisations)
+        self.realisations = realisations
         self.F, _ = cv_model(dt)
         self.R = R
 
     def init_sequence(self, x0, prior_Q, prior_Sigma, prior_S):
-        for realisation in self.realisations:
-            realisation.init_sequence(x0, prior_Q, prior_Sigma, prior_S)
-        self.x, self.P = x0, np.zeros((STATE_DIM, STATE_DIM))
+        priors = (prior_Q, prior_Sigma, prior_S)
+        self.hidden = tuple(np.tile(prior.flatten(), (self.realisations, 1)) for prior in priors)
+        self.x = self.x_prev = self.x_prior_prev = x0
+        self.y_prev = h(x0)
+        self.P = np.zeros((STATE_DIM, STATE_DIM))
 
     def step(self, z):
         x_prior = self.F @ self.x
         H = H_jacobian(x_prior)
         S = H @ self.F @ self.P @ self.F.T @ H.T + self.R
-        self.x, self.P = ensemble_mean_and_covariance(np.array([r.step(z) for r in self.realisations]))
-        for realisation in self.realisations:
-            realisation.x_posterior = self.x
-        return self.x, self.P, innovation(z, x_prior), S
+        innov = innovation(z, x_prior)
+        gains, self.hidden = self.net.forward(
+            normalize(wrap_measurement_diff(z - self.y_prev)),
+            normalize(innov),
+            normalize(self.x - self.x_prev),
+            normalize(self.x - self.x_prior_prev),
+            self.hidden,
+        )
+        estimates = x_prior + gains @ innov
+        self.x_prev, self.x_prior_prev, self.y_prev = self.x, x_prior, z
+        self.x, self.P = ensemble_mean_and_covariance(estimates)
+        return self.x, self.P, innov, S
 
 
 class GRUNetwork:

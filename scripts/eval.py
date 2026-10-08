@@ -123,8 +123,8 @@ def error_and_nees(x, P_factor, truth):
 
 
 def bkn_filter(weights, dt, R, trajectory_seed, dropout_p=BKN_DROPOUT_P, realisations=BKN_REALISATIONS):
-    dropout = numpy_forward.bernoulli_dropout(numpy_forward.dropout_rng(trajectory_seed), dropout_p)
-    return numpy_forward.BayesianKalmanNetFilter(weights, dt, R, dropout, realisations)
+    rng = numpy_forward.dropout_rng(trajectory_seed)
+    return numpy_forward.BayesianKalmanNetFilter(weights, dt, R, dropout_p, rng, realisations)
 
 
 def bkn_steps(flt, dt, R, x_true, z, snapshot=None):
