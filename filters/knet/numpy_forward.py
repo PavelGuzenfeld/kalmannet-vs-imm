@@ -1,4 +1,4 @@
-"""Torch-free forward pass of KalmanNet, Bayesian KalmanNet and RKN for Pyodide, which has numpy but no torch (#2 decision 5).
+"""Torch-free forward pass of KalmanNet, Bayesian KalmanNet, RKN and Unscented KalmanNet for Pyodide, which has numpy but no torch (#2 decision 5).
 Mirrors gain_network/knet_filter/rkn_network/rkn_filter on one unbatched flight; weights are the torch
 state_dict as arrays keyed by its own names, read by load_weights from torch_ops.export_npz's .npz."""
 
@@ -6,11 +6,20 @@ import numpy as np
 
 from filters.measurement_model import HORIZONTAL_RANGE_FLOOR_M, H_jacobian, h, innovation, wrap_angle
 from filters.motion_models import cv_model
-from filters.state import ACC, AZIMUTH, MEAS_DIM, POS, STATE_DIM, VEL
+from filters.state import ACC, AZIMUTH, ELEVATION, MEAS_DIM, POS, RANGE, STATE_DIM, VEL
+from filters.ukf import UKF
 
 GRU_GATES = 3
 RKN_FEATURE_SPLITS = np.cumsum([MEAS_DIM, MEAS_DIM, STATE_DIM * MEAS_DIM])
 KINEMATIC_BLOCKS = len((POS, VEL, ACC))
+NOISE_STAGES = {"process": STATE_DIM, "measurement": MEAS_DIM}
+MEASUREMENT_FEATURE_DIM = MEAS_DIM + 1
+NOISE_FEATURE_DIM = MEASUREMENT_FEATURE_DIM + MEAS_DIM + 2 * STATE_DIM
+GAIN_FEATURE_DIM = MEAS_DIM + 2 + 3 * STATE_DIM
+VARIANCE_MULTIPLIER_MIN, VARIANCE_MULTIPLIER_MAX = 0.1, 50.0
+LOG_VARIANCE_SATURATION = 4.0
+OFF_DIAGONAL_SATURATION = 1.0
+TORCH_LAYER_NORM_EPS = 1e-5
 
 
 def load_weights(npz):
@@ -232,6 +241,108 @@ class BayesianKalmanNetFilter:
         self.x_prev, self.x_prior_prev, self.y_prev = self.x, x_prior, z
         self.x, self.P = ensemble_mean_and_covariance(estimates)
         return self.x, self.P, innov, S
+
+
+def layer_norm(weights, prefix, x):
+    centred = x - np.mean(x)
+    return centred / np.sqrt(np.mean(centred**2) + TORCH_LAYER_NORM_EPS) * weights[f"{prefix}weight"] + weights[
+        f"{prefix}bias"
+    ]
+
+
+def encoded(weights, prefix, x):
+    hidden = relu(linear(weights, f"{prefix}1.", layer_norm(weights, f"{prefix}0.", x)))
+    return relu(linear(weights, f"{prefix}3.", hidden))
+
+
+def cholesky_multiplier(diagonal, lower):
+    """Eq 12-13: each variance direction scaled into [0.1, 50]x its baseline, strictly lower entries within ±c_off."""
+    size = len(diagonal)
+    multiplier = np.zeros((size, size))
+    multiplier[np.tril_indices(size, -1)] = OFF_DIAGONAL_SATURATION * np.tanh(lower)
+    variance_scale = np.exp(LOG_VARIANCE_SATURATION * np.tanh(diagonal))
+    bounded_scale = np.clip(variance_scale, VARIANCE_MULTIPLIER_MIN, VARIANCE_MULTIPLIER_MAX)
+    multiplier[np.diag_indices(size)] = np.sqrt(bounded_scale)
+    return multiplier
+
+
+def scaled_covariance(base, base_factor, multiplier):
+    """Eq 9 as base + L (A Aᵀ - I) Lᵀ: (L A)(L A)ᵀ in exact arithmetic, and base bit for bit at A = I (MS-44)."""
+    return base + base_factor @ (multiplier @ multiplier.T - np.eye(len(base))) @ base_factor.T
+
+
+def noise_features(z, y, x, P):
+    """Eq 10-11 without the control term; azimuth enters as its sine and cosine, so the ±π cut never shows."""
+    measurement = [np.sin(z[AZIMUTH]), np.cos(z[AZIMUTH]), z[ELEVATION], z[RANGE]]
+    return np.concatenate([measurement, y, x, np.log(np.diag(P))])
+
+
+def gain_features(y, S, x_increment, P_pred, K):
+    """Eq 19: whitened innovation, NIS, log det S, predicted increment, log diag P, K_UKF y; y is wrapped."""
+    S_factor = np.linalg.cholesky(S)
+    whitened = np.linalg.solve(S_factor, y)
+    surprise = [whitened @ whitened, 2.0 * np.sum(np.log(np.diag(S_factor)))]
+    return np.concatenate([whitened, surprise, x_increment, np.log(np.diag(P_pred)), K @ y])
+
+
+class UnscentedKalmanNetwork:
+    def __init__(self, weights):
+        self.weights = weights
+
+    def init_hidden(self):
+        w = self.weights
+        noise_hidden = np.zeros(w["noise_net.gru.weight_hh_l0"].shape[1])
+        return {**dict.fromkeys(NOISE_STAGES, noise_hidden), "gain": np.zeros(w["gain_net.gru.weight_hh_l0"].shape[1])}
+
+    def noise(self, stage, features, hidden):
+        w = self.weights
+        adapted = linear(w, f"noise_net.{stage}_adapter.", features)
+        hidden = gru_cell(w, "noise_net.gru.", encoded(w, "noise_net.encoder.", adapted), hidden)
+        shared = relu(linear(w, "noise_net.post.0.", hidden))
+        diagonal = linear(w, f"noise_net.{stage}_diagonal.", shared)
+        return cholesky_multiplier(diagonal, linear(w, f"noise_net.{stage}_lower.", shared)), hidden
+
+    def gain_residual(self, features, gain, hidden):
+        w = self.weights
+        hidden = gru_cell(w, "gain_net.gru.", encoded(w, "gain_net.encoder.", features), hidden)
+        decoded = relu(linear(w, "gain_net.decoder.2.", relu(linear(w, "gain_net.decoder.0.", hidden))))
+        residual = np.tanh(linear(w, "gain_net.decoder.4.", decoded)).reshape(STATE_DIM, MEAS_DIM)
+        return w["gain_net.gain_scale"] * np.linalg.norm(gain, axis=0) * residual, hidden
+
+
+class UnscentedKalmanNetFilter:
+    """Ko & Shafieezadeh on filters/ukf.py's sigma points (MS-43 to MS-48): NoiseNet scales Q and R, GainNet adds
+    ΔK to K_UKF, and P = P_UKF + ΔK S ΔKᵀ. Step 0 is update-only, as eval.py starts the UKF."""
+
+    def __init__(self, network, dt, R):
+        self.net = network
+        self.ukf = UKF(dt, R)
+        self.Q_factor = np.linalg.cholesky(self.ukf.Q)
+        self.R_factor = np.linalg.cholesky(R)
+
+    def init_sequence(self, x0, P0):
+        self.hidden = self.net.init_hidden()
+        self.x, self.P = x0, P0
+        self.z_previous = self.y_previous = None
+
+    def step(self, z):
+        ukf, hidden = self.ukf, self.hidden
+        if self.z_previous is None:
+            x_pred, P_pred, pts_pred = self.x, self.P, ukf._sigma_points(self.x, self.P)
+        else:
+            features = noise_features(self.z_previous, self.y_previous, self.x, self.P)
+            A_Q, hidden["process"] = self.net.noise("process", features, hidden["process"])
+            x_pred, P_pred, pts_pred = ukf.predict(self.x, self.P, scaled_covariance(ukf.Q, self.Q_factor, A_Q))
+        dx, dz, y = ukf.innovation(x_pred, pts_pred, z)
+        features = noise_features(z, y, x_pred, P_pred)
+        A_R, hidden["measurement"] = self.net.noise("measurement", features, hidden["measurement"])
+        K, P_ukf, S = ukf.analytic_update(P_pred, dx, dz, scaled_covariance(ukf.R, self.R_factor, A_R))
+        features = gain_features(y, S, x_pred - self.x, P_pred, K)
+        delta_K, hidden["gain"] = self.net.gain_residual(features, K, hidden["gain"])
+        self.x = x_pred + (K + delta_K) @ y
+        self.P = P_ukf + delta_K @ S @ delta_K.T
+        self.z_previous, self.y_previous = z, y
+        return self.x, self.P, y, S
 
 
 class GRUNetwork:

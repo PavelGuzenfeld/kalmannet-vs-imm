@@ -15,9 +15,10 @@ from tests.test_bayesian_kalmannet import knet_stand_in
 from tests.test_eval_learned_scenarios import RKN_MULTIPLIERS, zeroed
 from tests.test_numpy_forward import REPO
 from tests.test_replay import imm_tuning  # noqa: F401
+from tests.test_unscented_kalmannet import stand_in_network
 
 REGIMES = ["nominal", "high_maneuver", "high_noise", "low_noise", "heavy_tailed", "scenarios"]
-FILTERS = ["IMM", "KalmanNet-vanilla", "RKN", "BKN"]
+FILTERS = ["IMM", "KalmanNet-vanilla", "RKN", "BKN", "UKN"]
 RKN_JSON_KEYS = ("anees_mean", "anees_fraction_inside_95", "coverage_68", "coverage_95", "n_mc")
 EVALUATOR_CSVS = ("results_table.csv", "knet_test_rmse.csv", "rkn_test_rmse.csv")
 
@@ -38,19 +39,21 @@ def evaluator_outputs(imm_tuning, tmp_path, monkeypatch):  # noqa: F811
     results.mkdir()
     toy = ["--n-train", "1", "--n-val", "1", "--n-test", "1", "--n-sweep", "1", "--mc-test", "2", "--n-highmc", "1"]
     subprocess.run([sys.executable, "scripts/make_dataset.py", "--out", data_dir, *toy, "--mc-highmc", "2"], cwd=REPO, check=True)
-    bkn_weights = tmp_path / "bkn.npz"
+    bkn_weights, ukn_weights = tmp_path / "bkn.npz", tmp_path / "ukn.npz"
     export_npz(knet_stand_in().state_dict(), bkn_weights)
+    export_npz(stand_in_network().state_dict(), ukn_weights)
     knet = zeroed(KalmanGainGRU(), tmp_path / "knet.pt")
     rkn = zeroed(RKNGainCovNetwork(**RKN_MULTIPLIERS), tmp_path / "rkn.pt")
     monkeypatch.chdir(REPO)
-    run(monkeypatch, bench_eval.main, "--data-dir", data_dir, "--imm-tuning", imm_tuning, "--bkn-weights", bkn_weights, "--out", results)
+    run(monkeypatch, bench_eval.main, "--data-dir", data_dir, "--imm-tuning", imm_tuning, "--bkn-weights", bkn_weights,
+        "--ukn-weights", ukn_weights, "--out", results)
     run(monkeypatch, eval_knet.main, "--data-dir", data_dir, "--checkpoint", knet, "--out", results / "knet_test_rmse.csv")
     run(monkeypatch, eval_rkn.main, "--data-dir", data_dir, "--checkpoint", rkn, "--out", results / "rkn_eval.json",
         "--out-csv", results / "rkn_test_rmse.csv")
     return results
 
 
-def test_one_table_holds_imm_knet_rkn_and_bkn_on_every_regime_with_each_evaluators_own_values(evaluator_outputs, monkeypatch):
+def test_one_table_holds_imm_knet_rkn_bkn_and_ukn_on_every_regime_with_each_evaluators_own_values(evaluator_outputs, monkeypatch):
     """MS-42: every row is its evaluator's own, RKN's consistency cells coming from rkn_eval.json."""
     out = evaluator_outputs / "eval_table.csv"
 
@@ -64,7 +67,7 @@ def test_one_table_holds_imm_knet_rkn_and_bkn_on_every_regime_with_each_evaluato
         combined = next(r for r in table if (r["regime"], r["filter"]) == (row["regime"], row["filter"]))
         assert {key: combined[key] for key in row} == row
     assert all(row["anees_mean"] == "" for row in table if row["filter"] == "KalmanNet-vanilla")
-    assert all(row["anees_mean"] != "" for row in table if row["filter"] in ("IMM", "BKN"))
+    assert all(row["anees_mean"] != "" for row in table if row["filter"] in ("IMM", "BKN", "UKN"))
     rkn_json = json.loads((evaluator_outputs / "rkn_eval.json").read_text())
     for row in (r for r in table if r["filter"] == "RKN"):
         summary = rkn_json[row["regime"]]

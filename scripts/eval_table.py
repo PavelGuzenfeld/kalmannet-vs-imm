@@ -25,6 +25,7 @@ SOURCES = (
     Source("knet_test_rmse.csv", "KalmanNet-vanilla"),
     Source("rkn_test_rmse.csv", "RKN", "rkn_eval.json"),
     Source("results_table.csv", "BKN"),
+    Source("results_table.csv", "UKN"),
 )
 
 
