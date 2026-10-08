@@ -14,7 +14,7 @@ FORCED_DIVE_SPEED_OVER_MIN_SPEED = 1.5
 
 
 def beam_direction(position_m, velocity_m_s, jink, climb):
-    """Unit velocity across the line of sight from the sensor at the origin, on the side the target already leans to.
+    """Unit velocity across the line of sight from the sensor at position_m's origin, on the side the target leans to.
     climb tilts it up or down within the beam plane; jink tilts it off the beam, toward or away from the sensor."""
     line_of_sight = position_m / np.linalg.norm(position_m)
     across = np.cross(UP, line_of_sight)
@@ -77,7 +77,7 @@ def evade_rows(
     read_envelope: Callable[[], Envelope], dt_s: float, rng: np.random.Generator, read_truth: Callable
 ) -> Iterator[Row]:
     """Control rows that keep the velocity across the sensor's line of sight, jinking and climbing on rng's schedule.
-    read_truth returns the target's own (position, velocity, lift direction or None before the first row)."""
+    read_truth returns the target's own sensor-centred position, velocity, and lift direction (None before row 0)."""
     for jink, climb in zip(
         alternating_signs(rng, JINK_INTERVAL_S, dt_s), alternating_signs(rng, CLIMB_INTERVAL_S, dt_s)
     ):

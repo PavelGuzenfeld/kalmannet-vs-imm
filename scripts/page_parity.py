@@ -39,6 +39,9 @@ EVADE_START = {"position": [0.0, 4000.0, 300.0], "velocity": [0.0, -110.0, 0.0]}
 EVADE_ENGAGE_STEP = 50
 EVADE_CASE_STEPS = 400
 PILOT_ROW = [0.0, 1.0, 0.6, 0.0, 0.0, 0.0]
+SENSOR_MOVED_CASE = "break_turn_9g_sensor_moved"
+SENSOR_MOVED_M = [1000.0, -500.0, 0.0]
+SENSOR_MOVED_START = {"position": [3123.456, 987.654, 300.0], "velocity": [-150.0, 0.0, 0.0]}
 
 
 def native_flags(scenario):
@@ -85,6 +88,11 @@ def case_scenarios():
             ],
         },
         EVADE_CASE: evasive,
+        SENSOR_MOVED_CASE: {
+            **break_turn,
+            "start": SENSOR_MOVED_START,
+            "sensor": {"position": SENSOR_MOVED_M},
+        },
     }
 
 
