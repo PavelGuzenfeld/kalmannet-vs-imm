@@ -25,7 +25,7 @@ P_MOVED_FLOOR = 1e-4
 
 
 def test_eq23_training_learns_one_p_per_dropout_layer_and_the_ensemble_runs_at_the_learned_p(tmp_path, monkeypatch):
-    """MS-39, MS-42 (proposed, #149): --learned-p keeps a checkpoint only once beta is ramped up; seven p drawn in
+    """MS-39, MS-50: --learned-p keeps a checkpoint only once beta is ramped up; seven p drawn in
     [0.5, 0.8] each move > 1e-4 (76 Adam steps of ~3e-4 in logit, far above a round trip's ulp); validation and
     evaluation run the ensemble at exactly those p."""
     data_dir, out = tmp_path / "datasets", tmp_path / "bkn_eq23"
@@ -89,7 +89,7 @@ def concrete_net(p=EVEN_P):
 
 
 def test_each_dropout_layers_regularised_weights_are_the_columns_its_dropped_units_feed():
-    """MS-42 (proposed, #149): eq 24's θ_λ per [47] is the next layer's input weights for the dropped units; FC4's
+    """MS-50: eq 24's θ_λ per [47] is the next layer's input weights for the dropped units; FC4's
     units become the Sigma GRU's hidden state, so its columns are that GRU's hidden-to-hidden weights."""
     for layer, (name, start, stop) in CONSUMER_COLUMNS.items():
         net = concrete_net()
@@ -103,7 +103,7 @@ def test_each_dropout_layers_regularised_weights_are_the_columns_its_dropped_uni
 
 
 def test_kl_weight_term_is_c1_times_the_squared_dropped_unit_weights_over_1_minus_p():
-    """MS-42 (proposed, #149), eq 24 with c2 = 0: FC2's 27 x 3600 output weights at 0.5 square to 24,300; p = 0.5 doubles it."""
+    """MS-50, eq 24 with c2 = 0: FC2's 27 x 3600 output weights at 0.5 square to 24,300; p = 0.5 doubles it."""
     net = concrete_net()
     with torch.no_grad():
         net.FC2[2].weight.fill_(0.5)
@@ -112,7 +112,7 @@ def test_kl_weight_term_is_c1_times_the_squared_dropped_unit_weights_over_1_minu
 
 
 def test_kl_entropy_term_is_c2_times_the_bernoulli_entropy_per_dropped_unit_and_rewards_spread():
-    """MS-42 (proposed, #149), eq 24/25 with c1 = 0: H(0.5) = ln 2 per dropped unit, 3,891 units, subtracted.
+    """MS-50, eq 24/25 with c1 = 0: H(0.5) = ln 2 per dropped unit, 3,891 units, subtracted.
     rtol: seven products and seven sums, each rounded to half an ulp."""
     units = sum(DROPPED_UNITS.values())
 
@@ -123,7 +123,7 @@ def test_kl_entropy_term_is_c2_times_the_bernoulli_entropy_per_dropped_unit_and_
 
 
 def test_concrete_mask_keeps_the_lowest_uniform_draw_and_drops_the_highest_without_nan(monkeypatch):
-    """MS-42 (proposed, #149), [47]: a unit drops when u > 1 - p; at temperature 0.1 the extreme draws 0 and
+    """MS-50, [47]: a unit drops when u > 1 - p; at temperature 0.1 the extreme draws 0 and
     1 - 2⁻⁵³ saturate the mask to exactly 1 and 0, and eps keeps both logs finite."""
     draws = torch.tensor([0.0, 1.0 - 2.0**-53], dtype=torch.float64)
     monkeypatch.setattr(torch, "rand_like", lambda x: draws)
@@ -134,7 +134,7 @@ def test_concrete_mask_keeps_the_lowest_uniform_draw_and_drops_the_highest_witho
 
 
 def test_concrete_mask_at_p_0_keeps_every_unit_and_at_p_next_to_1_drops_it_without_nan(monkeypatch):
-    """MS-42 (proposed, #149): eps keeps log p and log(1 - p) finite when the learned p saturates; u = 0.5."""
+    """MS-50: eps keeps log p and log(1 - p) finite when the learned p saturates; u = 0.5."""
     monkeypatch.setattr(torch, "rand_like", lambda x: torch.full_like(x, 0.5))
     x = torch.ones(1, dtype=torch.float64)
 
@@ -143,7 +143,7 @@ def test_concrete_mask_at_p_0_keeps_every_unit_and_at_p_next_to_1_drops_it_witho
 
 
 def test_concrete_dropout_drops_a_fraction_p_of_the_units_and_passes_gradient_to_p():
-    """MS-42 (proposed, #149): the relaxed mask passes 1/2 exactly when u = 1 - p, so P(dropped) = p.
+    """MS-50: the relaxed mask passes 1/2 exactly when u = 1 - p, so P(dropped) = p.
     10,000 draws at p = 0.25: the fraction's sigma is 0.0043."""
     torch.manual_seed(0)
     dropout = ConcreteDropout(CONCRETE_P)
@@ -157,7 +157,7 @@ def test_concrete_dropout_drops_a_fraction_p_of_the_units_and_passes_gradient_to
 
 
 def test_eq20_loss_blends_the_weighted_mse_and_the_absolute_second_moment_gap_by_beta():
-    """MS-42 (proposed, #149): on ax the loss weight is 1/0.5² = 4. e = 1 with Σ = 0.25 gives MSE 4 and M2 4 x 0.75 = 3."""
+    """MS-50: on ax the loss weight is 1/0.5² = 4. e = 1 with Σ = 0.25 gives MSE 4 and M2 4 x 0.75 = 3."""
     truth = torch.zeros(1, STATE_DIM, dtype=torch.float64)
     mean = truth.clone()
     mean[0, ACC.start] = 1.0
@@ -168,7 +168,7 @@ def test_eq20_loss_blends_the_weighted_mse_and_the_absolute_second_moment_gap_by
 
 
 def test_second_moment_term_penalises_an_overdispersed_spread_as_much_as_an_underdispersed_one():
-    """MS-42 (proposed, #149), eq 19's absolute value: Σ = 2.25 over e² = 1 costs 4 x 1.25 = 5, not -5."""
+    """MS-50, eq 19's absolute value: Σ = 2.25 over e² = 1 costs 4 x 1.25 = 5, not -5."""
     truth = torch.zeros(1, STATE_DIM, dtype=torch.float64)
     mean = truth.clone()
     mean[0, ACC.start] = 1.0
@@ -179,7 +179,7 @@ def test_second_moment_term_penalises_an_overdispersed_spread_as_much_as_an_unde
 
 
 def test_training_ensemble_returns_mean_and_spread_and_reanchors_every_realisation_at_the_mean(monkeypatch):
-    """MS-39, MS-42 (proposed, #149): px at 0, 1, 5 across J = 3 has mean 2 and spread (4 + 1 + 9) / 3; every
+    """MS-39, MS-50: px at 0, 1, 5 across J = 3 has mean 2 and spread (4 + 1 + 9) / 3; every
     realisation's next prediction starts from that mean, as Algorithm 1 line 6 and the numpy filter do."""
     estimates = torch.zeros(3, STATE_DIM, dtype=torch.float64)
     estimates[:, 0] = torch.tensor([0.0, 1.0, 5.0])
@@ -198,7 +198,7 @@ def test_training_ensemble_returns_mean_and_spread_and_reanchors_every_realisati
 
 
 def test_numpy_dropout_takes_one_p_per_layer_in_forward_order_and_wraps_to_the_first(tmp_path):
-    """MS-42 (proposed, #149): p 0.5 on FC6 only: its units are 0 or 2, every other layer passes through; the
+    """MS-50: p 0.5 on FC6 only: its units are 0 or 2, every other layer passes through; the
     eighth call is the next realisation's FC5."""
     per_layer = [0.0, EVEN_P, 0.0, 0.0, 0.0, 0.0, 0.0]
     dropout = numpy_forward.bernoulli_dropout(numpy_forward.dropout_rng(0), per_layer)
@@ -211,7 +211,7 @@ def test_numpy_dropout_takes_one_p_per_layer_in_forward_order_and_wraps_to_the_f
 
 
 def test_learned_p_reads_each_layers_logit_in_forward_order_and_is_absent_at_a_fixed_p(tmp_path):
-    """MS-42 (proposed, #149): logits 0, -inf and +inf are p = 0.5, 0 and 1 exactly."""
+    """MS-50: logits 0, -inf and +inf are p = 0.5, 0 and 1 exactly."""
     logits = [0.0, -np.inf, np.inf, 0.0, -np.inf, np.inf, 0.0]
     weights = {f"dropout.{layer}.p_logit": np.array([logit]) for layer, logit in zip(DROPOUT_LAYERS, logits)}
 
@@ -220,7 +220,7 @@ def test_learned_p_reads_each_layers_logit_in_forward_order_and_is_absent_at_a_f
 
 
 def test_eval_runs_a_concrete_dropout_checkpoint_at_its_learned_p(imm_tuning, tmp_path, monkeypatch):  # noqa: F811
-    """MS-42 (proposed, #149): results_table.csv's BKN row for eq 23 weights is the ensemble at the learned p, not at
+    """MS-50: results_table.csv's BKN row for eq 23 weights is the ensemble at the learned p, not at
     the fixed BKN_DROPOUT_P, and at the J that --bkn-realisations names."""
     data_dir, out, weights = tmp_path / "datasets", tmp_path / "results", tmp_path / "bkn.npz"
     toy = ["--n-train", "1", "--n-val", "1", "--n-test", "1", "--n-sweep", "1", "--mc-test", "2", "--n-highmc", "1"]

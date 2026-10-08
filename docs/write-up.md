@@ -409,14 +409,18 @@ second-moment term exists to fix exactly this (sec. 1.7).
 
 **The paper's eq 23 training does not fix it (#149).** Trained with the second-moment and KL terms
 and a learned `p` per layer (sec. 1.7, `results/bkn_eq23_b0.9/`), BKN's covariance moves in the right
-direction and stays unusable (`results/eval_bkn_eq23/`, same evaluator and seeds as the plain row).
-High-MC ANEES drops 7.5x, from 2.6e12 to 3.5e11, against bounds 8.19-9.85; the main-set ANEES drops
-26x, ANIS from 577 to 440 against 2.54-3.50, and coverage stays 0 at both 68% and 95%. Over every
+direction and stays unusable (`results/eval_bkn_eq23/`, stamped `33c301d+149wip`, the code of
+`2a71d30`; same seeds as the plain row, and its EKF/UKF/IMM rows reproduce sec. 2.1 exactly).
+High-MC ANEES drops 7.4x, from 2.6e12 to 3.5e11, against bounds 8.19-9.85; the main-set ANEES drops
+26x, ANIS from 577 to 440 against 2.54-3.50, and coverage stays 0 at both 68% and 95%. Part of that
+drop is `J`: the eq 23 row runs at the `J = 40` validation picked, the plain row at 20, and ANEES moves
+by orders of magnitude with `J` (sec. 1.7). At the same `J = 20` the gain is smaller: 4.6x on
+validation ANEES (1.3e11 against 5.9e11) and 2.7x on the median high-MC NEES (8.8e7 against 2.4e8). Over every
 counted high-MC step (about 153,000 per filter, divergence and burn-in cut as in the evaluator) the
 median position spread, `sqrt(tr P_pos)`, grows from 1.4 cm to 3.4 cm at the same `J = 20` (3.6 cm
 at `J = 40`), and the median ratio of position error to it falls from 2,900 to 1,060 (990 at `J =
-40`), while the median error is 40-48 m. The spread is 2.8x wider and still three orders of magnitude
-short (scratch diagnostic over `bkn_steps`, not committed; `results/spread_bkn_*.json`). Accuracy and divergence do not change: 74.39 m before divergence, 87.8% of
+40`), while the median error drops from 48 m to 41 m. The spread is 2.5x wider and still three orders
+of magnitude short (scratch diagnostic over `bkn_steps`, not committed; `results/spread_bkn_*.json`). Accuracy and divergence do not change: 74.39 m before divergence, 87.8% of
 runs diverged at a median step of 399, against 72.48 m, 87.4% and 395. On the four sweep regimes and the
 scenarios BKN's main ANEES falls 9x-25x (still 2.5e9 to 1.3e11) and coverage stays 0 everywhere. The loss asks the spread of one step's gain
 times the innovation to match the error the recursion has accumulated; with dropout at `p` 0.5-0.7
