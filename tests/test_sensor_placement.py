@@ -23,14 +23,11 @@ from scripts.replay import RKN_LAYER_MULTS
 from web.live_flight import FILTER_NAMES, LEARNED_WEIGHTS, LiveFlight
 
 STAND_IN_SEED = 3
-SHIFTED_START = {
-    "position": [p - s for p, s in zip(SENSOR_MOVED_START["position"], SENSOR_MOVED_M)],
-    "velocity": SENSOR_MOVED_START["velocity"],
-}
 EVADE_ENGAGE_STEP = 50
 EVADE_STEPS = 200
 PILOT_ROW = [0.0, 1.0, 0.6, 0.0, 0.0, 0.0]
 RAISED_SENSOR_M = [1000.0, -500.0, 50.0]
+MOVED_SENSORS = [SENSOR_MOVED_M, RAISED_SENSOR_M]
 
 
 @pytest.fixture(scope="module")
@@ -52,6 +49,16 @@ def break_turn():
     return json.loads((SCENARIOS_DIR / "break_turn_9g.json").read_text())
 
 
+def placed_and_shifted(sensor, scenario=None):
+    scenario = scenario or break_turn()
+    shifted_start = {
+        "position": [p - s for p, s in zip(SENSOR_MOVED_START["position"], sensor)],
+        "velocity": SENSOR_MOVED_START["velocity"],
+    }
+    placed = {**scenario, "start": SENSOR_MOVED_START, "sensor": {"position": sensor}}
+    return placed, {**scenario, "start": shifted_start}
+
+
 def flown(setup, weights_root, evade_at=None, controls=None):
     flight = LiveFlight(setup, json.loads(IMM_TUNING.read_text())["best"], weights_root)
     frames = []
@@ -67,45 +74,59 @@ def without_estimate(readout):
     return {**readout, "estimate_m": None}
 
 
-def shifted(position):
-    return None if position is None else [p + s for p, s in zip(position, SENSOR_MOVED_M)]
+def shifted(position, sensor):
+    return None if position is None else [p + s for p, s in zip(position, sensor)]
 
 
-def assert_frames_match_shifted(placed, origin):
+def assert_frames_match_shifted(placed, origin, sensor):
     for at_placed, at_origin in zip(placed, origin, strict=True):
-        assert at_placed["truth_m"] == shifted(at_origin["truth_m"])
+        assert at_placed["sensor_m"] == sensor
+        assert at_placed["truth_m"] == shifted(at_origin["truth_m"], sensor)
         assert (at_placed["trips"], at_placed["flags"]) == (at_origin["trips"], at_origin["flags"])
+        assert at_placed["filters"].keys() == at_origin["filters"].keys()
         for name, readout in at_placed["filters"].items():
-            assert readout["estimate_m"] == shifted(at_origin["filters"][name]["estimate_m"])
+            assert readout["estimate_m"] == shifted(at_origin["filters"][name]["estimate_m"], sensor)
             assert without_estimate(readout) == without_estimate(at_origin["filters"][name])
 
 
+@pytest.mark.parametrize("sensor", MOVED_SENSORS)
 def test_moved_sensor_scores_all_six_filters_as_the_origin_sensor_scores_the_start_shifted_by_minus_it(
-    weights_root,
+    weights_root, sensor
 ):
     """MS-49: every filter runs sensor-centred, so moving sensor and start together changes no score."""
-    _, placed = flown(
-        {**break_turn(), "start": SENSOR_MOVED_START, "sensor": {"position": SENSOR_MOVED_M}}, weights_root
-    )
-    _, origin = flown({**break_turn(), "start": SHIFTED_START}, weights_root)
+    placed_setup, origin_setup = placed_and_shifted(sensor)
+    _, placed = flown(placed_setup, weights_root)
+    _, origin = flown(origin_setup, weights_root)
 
-    assert set(placed[-1]["filters"]) == set(FILTER_NAMES)
+    assert set(placed[0]["filters"]) == set(FILTER_NAMES)
     assert placed[-1]["truth_m"] != origin[-1]["truth_m"]
-    assert_frames_match_shifted(placed, origin)
+    assert_frames_match_shifted(placed, origin, sensor)
 
 
-def test_evade_from_a_moved_sensor_flies_the_rows_it_flies_from_the_origin_with_the_start_shifted():
+@pytest.mark.parametrize("sensor", MOVED_SENSORS)
+def test_measurements_from_a_moved_sensor_are_those_of_the_origin_sensor_with_the_start_shifted(sensor):
+    """MS-49: az/el/range are of the target relative to the sensor, its altitude included."""
+    placed_setup, origin_setup = placed_and_shifted(sensor)
+    placed_states, placed_z = fly_scenario(placed_setup)
+    origin_states, origin_z = fly_scenario(origin_setup)
+
+    assert (placed_states.tobytes(), placed_z.tobytes()) == (origin_states.tobytes(), origin_z.tobytes())
+    assert not np.array_equal(
+        placed_z, fly_scenario({**placed_setup, "sensor": {"position": [0.0, 0.0, 0.0]}})[1]
+    )
+
+
+@pytest.mark.parametrize("sensor", MOVED_SENSORS)
+def test_evade_from_a_moved_sensor_flies_the_rows_it_flies_from_the_origin_with_the_start_shifted(sensor):
     """MS-49: evade aims across the line of sight from the sensor, wherever the sensor is."""
-    placed_setup = {**break_turn(), "start": SENSOR_MOVED_START, "sensor": {"position": SENSOR_MOVED_M}}
+    placed_setup, origin_setup = placed_and_shifted(sensor)
     controls = [PILOT_ROW] * EVADE_STEPS
     placed_flight, placed = flown(placed_setup, NO_WEIGHTS, EVADE_ENGAGE_STEP, controls)
-    origin_flight, origin = flown(
-        {**break_turn(), "start": SHIFTED_START}, NO_WEIGHTS, EVADE_ENGAGE_STEP, controls
-    )
+    origin_flight, origin = flown(origin_setup, NO_WEIGHTS, EVADE_ENGAGE_STEP, controls)
 
     assert placed_flight.controls[EVADE_ENGAGE_STEP:] == origin_flight.controls[EVADE_ENGAGE_STEP:]
     assert placed_flight.controls[EVADE_ENGAGE_STEP] != PILOT_ROW
-    assert_frames_match_shifted(placed, origin)
+    assert_frames_match_shifted(placed, origin, sensor)
 
 
 def test_exported_moved_sensor_flight_replays_natively_to_the_flags_the_live_flight_showed():
