@@ -4,6 +4,7 @@ import { createScene } from "./scene.js";
 
 const FLAGS = ["track_loss", "overconfidence", "raw_error"];
 const THRESHOLD_INPUTS = ["innovation_gate_nis", "nees_upper", "overconfident_steps", "raw_error_m"];
+const START_KEYS = ["range_m", "bearing_deg", "altitude_m", "heading_deg", "speed_m_s"];
 const INTEGER_THRESHOLDS = new Set(["overconfident_steps"]);
 const ENVELOPE_SLIDERS = {
   min_speed_m_s: { toSlider: (value) => value, fromSlider: (value) => value },
@@ -111,13 +112,20 @@ function thresholds() {
   );
 }
 
+function startSpec() {
+  const setKeys = START_KEYS.filter((key) => !byId(`start_${key}_random`).checked && byId(`start_${key}`).value !== "");
+  return Object.fromEntries(setKeys.map((key) => [key, parseFloat(byId(`start_${key}`).value)]));
+}
+
 function startFlight(scriptControls, recordedStart, recordedEnvelopeChanges) {
+  const spec = recordedStart ? {} : startSpec();
   flightSetup = {
     seed: parseInt(byId("seed").value, 10),
     envelope: { ...envelope },
     noise_regime: byId("noise_regime").value,
     thresholds: thresholds(),
     ...(recordedStart && { start: recordedStart }),
+    ...(Object.keys(spec).length && { start_spec: spec }),
     ...(recordedEnvelopeChanges && { envelope_changes: recordedEnvelopeChanges }),
   };
   script = scriptControls;
@@ -381,6 +389,7 @@ const replies = {
   },
   failed({ message }) {
     awaitingWorker = false;
+    flying = false;
     speed = 0;
     setStatus(`worker error: ${message}`);
   },
@@ -403,6 +412,9 @@ for (const [key, slider] of Object.entries(ENVELOPE_SLIDERS)) {
     envelope[key] = slider.fromSlider(Number(event.target.value));
     event.target.nextElementSibling.textContent = Number(event.target.value).toFixed(1);
   });
+}
+for (const key of START_KEYS) {
+  byId(`start_${key}`).addEventListener("input", () => (byId(`start_${key}_random`).checked = false));
 }
 for (const key of THRESHOLD_INPUTS) {
   byId(key).addEventListener("change", () => flightSetup && worker.postMessage(toWorker.setThresholds(thresholds())));
