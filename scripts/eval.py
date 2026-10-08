@@ -7,6 +7,7 @@ results/anees_highmc.json (the headline calibration numbers).
 """
 
 import argparse
+import itertools
 import json
 import os
 from pathlib import Path
@@ -39,6 +40,8 @@ _P0 = np.diag([50.0, 50.0, 50.0, 5.0, 5.0, 5.0, 1.0, 1.0, 1.0])
 LEARNED_P0_VARIANCE = 100.0
 DIVERGED_ERROR = 1e5
 SINGULAR_P_NEES = 1e10
+BKN_DROPOUT_P = 0.2
+BKN_REALISATIONS = 20
 _BURN_IN = 20  # steps skipped for RMSE/consistency stats, letting initial-condition error settle
 
 
@@ -117,6 +120,36 @@ def error_and_nees(x, P_factor, truth):
         return e, whitened @ whitened
     except np.linalg.LinAlgError:
         return e, SINGULAR_P_NEES
+
+
+def bkn_filter(weights, dt, R, trajectory_seed, dropout_p=BKN_DROPOUT_P, realisations=BKN_REALISATIONS):
+    dropout = numpy_forward.bernoulli_dropout(numpy_forward.dropout_rng(trajectory_seed), dropout_p)
+    return numpy_forward.BayesianKalmanNetFilter(weights, dt, R, dropout, realisations)
+
+
+def bkn_steps(flt, dt, R, x_true, z, snapshot=None):
+    """Yields (err[9], nees, nis) per step of the numpy Bayesian KalmanNet, priors as knet_steps; live-drivable.
+    A P of rank < 9 (J <= 9 realisations) scores SINGULAR_P_NEES."""
+    _, Q = cv_model(dt)
+    for t, (truth, z_t) in enumerate(zip(x_true, z)):
+        if t == 0:
+            flt.init_sequence(truth + _INIT_OFFSET, Q, np.eye(STATE_DIM) * LEARNED_P0_VARIANCE, R)
+        x, P, y, S = flt.step(z_t)
+        _remember(snapshot, P=P)
+        try:
+            P_factor = np.linalg.cholesky(P)
+        except np.linalg.LinAlgError:
+            P_factor = np.zeros_like(P)
+        yield *error_and_nees(x, P_factor, truth), y @ np.linalg.solve(S, y)
+
+
+def bkn_entry(weights, dt, R, dropout_p=BKN_DROPOUT_P, realisations=BKN_REALISATIONS):
+    """(factory, run_fn) for evaluate_dataset; each run's dropout is seeded by its index in the dataset."""
+    trajectory_seeds = itertools.count()
+    return (
+        lambda: bkn_filter(weights, dt, R, next(trajectory_seeds), dropout_p, realisations),
+        lambda flt, x_true, z: _stacked(until_diverged(bkn_steps(flt, dt, R, x_true, z))),
+    )
 
 
 def rkn_steps(weights, dt, x_true, z, snapshot=None):
@@ -199,6 +232,7 @@ def main():
     ap.add_argument("--data-dir", default="datasets")
     ap.add_argument("--imm-tuning", default="results/imm_tuning.json")
     ap.add_argument("--scenario-dir", default="data/scenarios")
+    ap.add_argument("--bkn-weights", type=Path, default=Path("results/bkn/best.npz"))
     ap.add_argument("--out", default="results")
     args = ap.parse_args()
 
@@ -214,9 +248,11 @@ def main():
     best = imm_tuning["best"]
     print(f"using tuned IMM: {best}")
 
+    bkn_weights = numpy_forward.load_weights(args.bkn_weights) if args.bkn_weights.exists() else None
+
     def make_filters(regime_name):
         R = R_for(regime_name)
-        return {
+        filters = {
             "EKF": (lambda: EKF(dt, R), run_ekf_like),
             "UKF": (lambda: UKF(dt, R), run_ekf_like),
             "IMM": (
@@ -224,6 +260,9 @@ def main():
                 run_imm,
             ),
         }
+        if bkn_weights is not None:
+            filters["BKN"] = bkn_entry(bkn_weights, dt, R)
+        return filters
 
     rows = []
 

@@ -91,9 +91,37 @@ jobs:
           name: rkn-checkpoint
           path: results/rkn/
 
+  train-bkn:
+    needs: dataset
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build bench image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          tags: kalmannet-bench:cpu
+          load: true
+          cache-from: type=gha
+      - uses: actions/download-artifact@v8
+        with:
+          name: datasets
+          path: datasets/
+      - name: Train Bayesian KalmanNet
+        run: |
+          ./docker_run.sh python scripts/train_knet.py --dropout-p 0.2 --out results/bkn
+          ./docker_run.sh python scripts/export_weights.py results/bkn/best.pt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bkn-checkpoint
+          path: results/bkn/
+
   release:
     if: github.ref_type == 'tag'
-    needs: [train-knet, train-rkn]
+    needs: [train-knet, train-rkn, train-bkn]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
@@ -104,12 +132,16 @@ jobs:
         with:
           name: rkn-checkpoint
           path: rkn/
+      - uses: actions/download-artifact@v8
+        with:
+          name: bkn-checkpoint
+          path: bkn/
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir assets
-          for model in knet rkn; do
+          for model in knet rkn bkn; do
             for file in best.pt best.npz training_log.json; do
               cp "$model/$file" "assets/$model-$file"
             done
@@ -118,7 +150,7 @@ jobs:
 
   site:
     if: github.ref_type == 'tag'
-    needs: [train-knet, train-rkn]
+    needs: [train-knet, train-rkn, train-bkn]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -139,6 +171,10 @@ jobs:
         with:
           name: rkn-checkpoint
           path: results/rkn/
+      - uses: actions/download-artifact@v8
+        with:
+          name: bkn-checkpoint
+          path: results/bkn/
       - name: Build site
         run: |
           ./docker_run.sh python scripts/build_site.py --tag "$GITHUB_REF_NAME"

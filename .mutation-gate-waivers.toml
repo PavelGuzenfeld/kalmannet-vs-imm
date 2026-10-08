@@ -164,7 +164,7 @@ reason = "Stopping a diverged run is an evaluation-harness rule (#111), not mode
 
 [[waiver]]
 file = "scripts/eval.py"
-line = 152
+line = 185
 column = 74
 old = "-1"
 new = "1"
@@ -173,7 +173,7 @@ boolean mask: axis=-1 and axis=1 are the same axis, so this mutant is equivalent
 
 [[waiver]]
 file = "scripts/eval.py"
-line = 153
+line = 186
 column = 74
 old = "-1"
 new = "1"

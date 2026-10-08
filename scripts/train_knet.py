@@ -138,6 +138,7 @@ def main():
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--weight-decay", type=float, default=1e-4)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--dropout-p", type=float, default=0.0, help="Bayesian KalmanNet (#135); 0 is vanilla")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -155,7 +156,7 @@ def main():
     train_states, train_meas = _load_split(data_dir / "train.npz")
     val_states, val_meas = _load_split(data_dir / "val.npz")
 
-    net = KalmanGainGRU().double()
+    net = KalmanGainGRU(dropout_p=args.dropout_p).double()
     optimizer = torch.optim.Adam(net.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     out = Path(args.out)

@@ -40,8 +40,12 @@ Everything runs in a CPU-only Docker image; `docker_run.sh` builds it and mounts
 ./docker_run.sh python scripts/eval.py           # classical filters -> results/
 ./docker_run.sh python scripts/train_knet.py && ./docker_run.sh python scripts/eval_knet.py
 ./docker_run.sh python scripts/train_rkn.py  && ./docker_run.sh python scripts/eval_rkn.py
+for p in 0.05 0.1 0.2; do ./docker_run.sh python scripts/train_knet.py --dropout-p $p --out results/bkn_p$p \
+    && ./docker_run.sh python scripts/export_weights.py results/bkn_p$p/best.pt; done
+./docker_run.sh python scripts/tune_bkn.py results/bkn_p*/best.npz   # picks p and J on val.npz
+cp -r results/bkn_p0.2 results/bkn && ./docker_run.sh python scripts/eval.py   # adds the BKN rows
 ./docker_run.sh python scripts/bench_latency.py --knet-checkpoint results/knet_vanilla/best.pt \
-    --rkn-checkpoint results/rkn/best.pt --bench-rkn-reference-default
+    --rkn-checkpoint results/rkn/best.pt --bench-rkn-reference-default --bkn-weights results/bkn/best.npz
 ./docker_run.sh python scripts/make_plots.py
 ./docker_run.sh python scripts/make_animation.py
 ```

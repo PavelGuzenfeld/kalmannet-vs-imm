@@ -1,8 +1,10 @@
 import re
 from pathlib import Path
 
+from scripts.eval import BKN_DROPOUT_P
+
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "release.yml"
-MODELS = ["knet", "rkn"]
+MODELS = ["knet", "rkn", "bkn"]
 CHECKPOINT_FILES = ["best.pt", "best.npz", "training_log.json"]
 
 
@@ -23,7 +25,12 @@ def test_release_attaches_every_model_checkpoint_and_exported_weight_as_an_asset
 
 
 def test_training_jobs_export_the_weights_the_release_attaches():
-    for job, model_dir in [("train-knet", "knet_vanilla"), ("train-rkn", "rkn")]:
+    for job, model_dir in [("train-knet", "knet_vanilla"), ("train-rkn", "rkn"), ("train-bkn", "bkn")]:
         block = job_block(job)
         assert f"scripts/export_weights.py results/{model_dir}/best.pt" in block
         assert f"path: results/{model_dir}/" in block
+
+
+def test_bayesian_kalmannet_trains_at_the_dropout_p_its_ensemble_runs_at():
+    """MS-39: the dropout p chosen on validation is the one the release trains, not a second copy that can drift."""
+    assert f"scripts/train_knet.py --dropout-p {BKN_DROPOUT_P} --out results/bkn" in job_block("train-bkn")

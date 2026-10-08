@@ -47,7 +47,7 @@ LEVEL_RUN_IN_STEPS = 50
 def learned(tmp_path):
     """Seeded stand-in checkpoints for replay, and their .npz where the page looks for them."""
     checkpoints = {}
-    for name, net in (("KalmanNet", knet_stand_in()), ("RKN", rkn_stand_in())):
+    for name, net in (("KalmanNet", knet_stand_in()), ("RKN", rkn_stand_in()), ("BKN", knet_stand_in())):
         checkpoints[name] = tmp_path / f"{name}.pt"
         torch.save(net.state_dict(), checkpoints[name])
         npz = tmp_path / "site" / LEARNED_WEIGHTS[name]
@@ -86,6 +86,8 @@ def replay_lines(scenario_path, checkpoints):
             str(checkpoints["KalmanNet"]),
             "--rkn-checkpoint",
             str(checkpoints["RKN"]),
+            "--bkn-checkpoint",
+            str(checkpoints["BKN"]),
         ],
         cwd=REPO,
         capture_output=True,
@@ -113,8 +115,8 @@ def preview_lines(flight):
 
 
 def test_exported_break_turn_replays_to_the_page_preview_flags(learned, tmp_path):
-    """MS-10, MS-11, MS-12: page and replay fly one seed and controls under nominal R, the benchmarked IMM,
-    and the learned filters' numpy forward on the weights replay runs through torch."""
+    """MS-10, MS-11, MS-12, MS-39: page and replay fly one seed and controls under nominal R, the benchmarked IMM,
+    the learned filters' numpy forward on the weights replay runs through torch, and BKN's dropout seeded alike."""
     weights_root, checkpoints = learned
     flight = page_flight(weights_root)
     exported = tmp_path / "flight.json"
@@ -123,7 +125,7 @@ def test_exported_break_turn_replays_to_the_page_preview_flags(learned, tmp_path
     lines = replay_lines(exported, checkpoints)
 
     assert lines == preview_lines(flight)
-    assert [line.split(":")[0] for line in lines if " diverged=" in line] == ["KalmanNet", "RKN"]
+    assert [line.split(":")[0] for line in lines if " diverged=" in line] == ["KalmanNet", "RKN", "BKN"]
     committed = json.loads(SEED_SCENARIO.read_text())
     assert json.loads(exported.read_text()) == {**committed, "git_tag": "unknown", "tripped": flight.trips()}
     assert {name: flight.trips()[name] for name in committed["tripped"]} == committed["tripped"]
@@ -180,6 +182,7 @@ def test_learned_filter_without_exported_weights_reads_unavailable_and_is_left_o
         "overconfidence": "not available (no weights at results/rkn/best.npz)",
         "raw_error": "not available (no weights at results/rkn/best.npz)",
     }
+    assert flags["BKN"] == dict.fromkeys(FLAGS, "not available (no weights at results/bkn/best.npz)")
     assert set(json.loads(flight.scenario_json())["tripped"]) == {"EKF", "UKF", "IMM"}
 
 

@@ -1,4 +1,4 @@
-"""Torch-free forward pass of KalmanNet and RKN for Pyodide, which has numpy but no torch (#2 decision 5).
+"""Torch-free forward pass of KalmanNet, Bayesian KalmanNet and RKN for Pyodide, which has numpy but no torch (#2 decision 5).
 Mirrors gain_network/knet_filter/rkn_network/rkn_filter on one unbatched flight; weights are the torch
 state_dict as arrays keyed by its own names, read by load_weights from torch_ops.export_npz's .npz."""
 
@@ -69,22 +69,44 @@ def wrap_measurement_diff(diff):
     return wrapped
 
 
+def unchanged(x):
+    return x
+
+
+def bernoulli_dropout(rng, dropout_p):
+    """torch.nn.Dropout's convention: zero with probability p, scale the kept units by 1/(1-p)."""
+    keep_p = 1.0 - dropout_p
+    return lambda x: x * (rng.random(x.shape) < keep_p) / keep_p
+
+
+def dropout_rng(trajectory_seed):
+    """Spawned off the seed, so never the stream default_rng(seed) draws measurement noise from."""
+    return np.random.default_rng(np.random.SeedSequence(trajectory_seed).spawn(1)[0])
+
+
+def ensemble_mean_and_covariance(estimates):
+    """Eq 22a/22b over [J, m], normalised by J. Anchored at the first estimate, so J equal estimates average exactly."""
+    mean = estimates[0] + np.mean(estimates - estimates[0], axis=0)
+    spread = estimates - mean
+    return mean, spread.T @ spread / len(estimates)
+
+
 class KalmanGainGRU:
-    def __init__(self, weights, m=STATE_DIM, n=MEAS_DIM):
-        self.weights, self.m, self.n = weights, m, n
+    def __init__(self, weights, m=STATE_DIM, n=MEAS_DIM, dropout=unchanged):
+        self.weights, self.m, self.n, self.dropout = weights, m, n, dropout
 
     def forward(self, obs_diff, obs_innov_diff, fw_evol_diff, fw_update_diff, hidden):
-        w = self.weights
+        w, drop = self.weights, self.dropout
         h_Q, h_Sigma, h_S = hidden
-        out_Q = h_Q = gru_cell(w, "GRU_Q.", relu(linear(w, "FC5.0.", fw_update_diff)), h_Q)
-        out_FC6 = relu(linear(w, "FC6.0.", fw_evol_diff))
+        out_Q = h_Q = gru_cell(w, "GRU_Q.", drop(relu(linear(w, "FC5.0.", fw_update_diff))), h_Q)
+        out_FC6 = drop(relu(linear(w, "FC6.0.", fw_evol_diff)))
         out_Sigma = gru_cell(w, "GRU_Sigma.", np.concatenate([out_Q, out_FC6]), h_Sigma)
-        out_FC1 = relu(linear(w, "FC1.0.", out_Sigma))
-        out_FC7 = relu(linear(w, "FC7.0.", np.concatenate([obs_diff, obs_innov_diff])))
+        out_FC1 = drop(relu(linear(w, "FC1.0.", out_Sigma)))
+        out_FC7 = drop(relu(linear(w, "FC7.0.", np.concatenate([obs_diff, obs_innov_diff]))))
         out_S = h_S = gru_cell(w, "GRU_S.", np.concatenate([out_FC1, out_FC7]), h_S)
-        out_FC2 = linear(w, "FC2.2.", relu(linear(w, "FC2.0.", np.concatenate([out_Sigma, out_S]))))
-        out_FC3 = relu(linear(w, "FC3.0.", np.concatenate([out_S, out_FC2])))
-        h_Sigma = relu(linear(w, "FC4.0.", np.concatenate([out_Sigma, out_FC3])))
+        out_FC2 = linear(w, "FC2.2.", drop(relu(linear(w, "FC2.0.", np.concatenate([out_Sigma, out_S])))))
+        out_FC3 = drop(relu(linear(w, "FC3.0.", np.concatenate([out_S, out_FC2]))))
+        h_Sigma = drop(relu(linear(w, "FC4.0.", np.concatenate([out_Sigma, out_FC3]))))
         return out_FC2.reshape(self.m, self.n), (h_Q, h_Sigma, h_S)
 
 
@@ -115,6 +137,30 @@ class KalmanNetFilter:
         self.x_posterior = x_upd
         self.y_prev = z
         return x_upd
+
+
+class BayesianKalmanNetFilter:
+    """Dahan et al. 2025 Algorithm 1: every realisation predicts from the ensemble mean, keeping its own GRU state.
+    S = H F P Fᵀ Hᵀ + R is this benchmark's, for NIS; the paper defines none (MS-40)."""
+
+    def __init__(self, weights, dt, R, dropout, realisations):
+        self.realisations = [KalmanNetFilter(KalmanGainGRU(weights, dropout=dropout), dt) for _ in range(realisations)]
+        self.F, _ = cv_model(dt)
+        self.R = R
+
+    def init_sequence(self, x0, prior_Q, prior_Sigma, prior_S):
+        for realisation in self.realisations:
+            realisation.init_sequence(x0, prior_Q, prior_Sigma, prior_S)
+        self.x, self.P = x0, np.zeros((STATE_DIM, STATE_DIM))
+
+    def step(self, z):
+        x_prior = self.F @ self.x
+        H = H_jacobian(x_prior)
+        S = H @ self.F @ self.P @ self.F.T @ H.T + self.R
+        self.x, self.P = ensemble_mean_and_covariance(np.array([r.step(z) for r in self.realisations]))
+        for realisation in self.realisations:
+            realisation.x_posterior = self.x
+        return self.x, self.P, innovation(z, x_prior), S
 
 
 class GRUNetwork:

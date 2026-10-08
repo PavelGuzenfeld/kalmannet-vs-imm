@@ -19,9 +19,10 @@ from filters.state import MEAS_DIM, STATE_DIM
 
 
 class KalmanGainGRU(nn.Module):
-    def __init__(self, m=STATE_DIM, n=MEAS_DIM, in_mult=5, out_mult=40):
+    def __init__(self, m=STATE_DIM, n=MEAS_DIM, in_mult=5, out_mult=40, dropout_p=0.0):
         super().__init__()
         self.m, self.n = m, n
+        self.dropout = nn.Dropout(dropout_p)
 
         self.d_hidden_Q = m * m
         self.GRU_Q = nn.GRU(m * in_mult, self.d_hidden_Q)
@@ -74,29 +75,29 @@ class KalmanGainGRU(nn.Module):
         fw_evol_diff = fw_evol_diff.unsqueeze(0)
         fw_update_diff = fw_update_diff.unsqueeze(0)
 
-        out_FC5 = self.FC5(fw_update_diff)
+        out_FC5 = self.dropout(self.FC5(fw_update_diff))
         out_Q, h_Q = self.GRU_Q(out_FC5, h_Q)
 
-        out_FC6 = self.FC6(fw_evol_diff)
+        out_FC6 = self.dropout(self.FC6(fw_evol_diff))
         in_Sigma = torch.cat((out_Q, out_FC6), dim=-1)
         out_Sigma, h_Sigma = self.GRU_Sigma(in_Sigma, h_Sigma)
 
-        out_FC1 = self.FC1(out_Sigma)
+        out_FC1 = self.dropout(self.FC1(out_Sigma))
 
         in_FC7 = torch.cat((obs_diff, obs_innov_diff), dim=-1)
-        out_FC7 = self.FC7(in_FC7)
+        out_FC7 = self.dropout(self.FC7(in_FC7))
 
         in_S = torch.cat((out_FC1, out_FC7), dim=-1)
         out_S, h_S = self.GRU_S(in_S, h_S)
 
         in_FC2 = torch.cat((out_Sigma, out_S), dim=-1)
-        out_FC2 = self.FC2(in_FC2)
+        out_FC2 = self.FC2[2](self.dropout(self.FC2[1](self.FC2[0](in_FC2))))
 
         in_FC3 = torch.cat((out_S, out_FC2), dim=-1)
-        out_FC3 = self.FC3(in_FC3)
+        out_FC3 = self.dropout(self.FC3(in_FC3))
 
         in_FC4 = torch.cat((out_Sigma, out_FC3), dim=-1)
-        out_FC4 = self.FC4(in_FC4)
+        out_FC4 = self.dropout(self.FC4(in_FC4))
         h_Sigma = out_FC4  # backward flow: overwrite Sigma-GRU's hidden state
 
         gain_flat = out_FC2.squeeze(0)  # [batch, n*m]
