@@ -8,6 +8,7 @@ import torch
 
 from data.config import NOMINAL
 from filters.knet import numpy_forward
+from filters.knet.numpy_forward import load_weights
 from filters.torch_ops import export_npz
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.knet_filter import KalmanNetFilter
@@ -25,10 +26,11 @@ NON_POWER_OF_TWO_REALISATIONS = 3
 FULL_RANK_REALISATIONS = STATE_DIM + 1
 TRAJECTORY_SEED = 8
 STAND_IN_DROPOUT_P = 0.2
-HALF = 0.5
 DROPOUT_DRAWS = 10_000
-DROPOUT_FRACTION_4_SIGMA = 4 * np.sqrt(HALF * HALF / DROPOUT_DRAWS)
+DROPOUT_FRACTION_4_SIGMA = 4 * np.sqrt(STAND_IN_DROPOUT_P * (1 - STAND_IN_DROPOUT_P) / DROPOUT_DRAWS)
 MASK_EFFECT_FLOOR_M = 1.0
+MEAN_SUMMATION_ATOL = 4 * np.spacing(2048.0)
+SPREAD_SUMMATION_ATOL = 2 * MEAN_SUMMATION_ATOL
 
 
 class NumpyMaskDropout(torch.nn.Module):
@@ -98,12 +100,15 @@ def test_ensemble_of_three_equal_estimates_averages_to_that_estimate_exactly():
     np.testing.assert_array_equal(P, np.zeros((STATE_DIM, STATE_DIM)))
 
 
-def test_dropout_at_one_half_zeroes_half_the_units_and_doubles_the_rest():
-    """MS-39: torch.nn.Dropout's convention. 10,000 Bernoulli(1/2) draws: the zeroed fraction's sigma is 0.005."""
-    dropped = numpy_forward.bernoulli_dropout(numpy_forward.dropout_rng(TRAJECTORY_SEED), HALF)(np.ones(DROPOUT_DRAWS))
+def test_dropout_zeroes_a_fraction_p_of_the_units_and_scales_the_rest_by_one_over_1_minus_p():
+    """MS-39: torch.nn.Dropout's convention at p = 0.2: 1/0.8 rounds to 1.25 exactly. 10,000 Bernoulli(0.2) draws:
+    the zeroed fraction's sigma is 0.004."""
+    dropout = numpy_forward.bernoulli_dropout(numpy_forward.dropout_rng(TRAJECTORY_SEED), STAND_IN_DROPOUT_P)
 
-    assert set(np.unique(dropped)) == {0.0, 2.0}
-    assert abs(np.mean(dropped == 0.0) - HALF) < DROPOUT_FRACTION_4_SIGMA
+    dropped = dropout(np.ones(DROPOUT_DRAWS))
+
+    assert set(np.unique(dropped)) == {0.0, 1.25}
+    assert abs(np.mean(dropped == 0.0) - STAND_IN_DROPOUT_P) < DROPOUT_FRACTION_4_SIGMA
 
 
 def test_dropout_stream_is_reproducible_and_is_not_the_measurement_noise_stream_of_the_same_seed():
@@ -188,7 +193,64 @@ def test_innovation_covariance_propagates_the_previous_steps_spread_and_starts_a
 
 def test_dropout_adds_no_weights_so_a_bayesian_checkpoint_loads_into_the_kalmannet_forward_pass():
     """MS-39: f, h and the GRU structure stay KalmanNet's; the exported .npz keys are the same."""
-    assert KalmanGainGRU(dropout_p=STAND_IN_DROPOUT_P).state_dict().keys() == KalmanGainGRU().state_dict().keys()
+    bayesian, vanilla = KalmanGainGRU(dropout_p=STAND_IN_DROPOUT_P).state_dict(), KalmanGainGRU().state_dict()
+
+    assert {name: w.shape for name, w in bayesian.items()} == {name: w.shape for name, w in vanilla.items()}
+
+
+def test_dropout_hits_the_seven_fc_relu_outputs_in_forward_order_and_never_the_gain(tmp_path):
+    """MS-39: FC5, FC6, FC1, FC7, FC2's hidden layer, FC3, FC4 (m = 9, n = 3, in_mult 5, out_mult 40)."""
+    widths = []
+
+    def recording(x):
+        widths.append(x.shape)
+        return x
+
+    net = numpy_forward.KalmanGainGRU(exported(knet_stand_in(), tmp_path), dropout=recording)
+    hidden = (np.zeros(81), np.zeros(81), np.zeros(9))
+    net.forward(np.ones(3), np.ones(3), np.ones(9), np.ones(9), hidden)
+
+    assert widths == [(45,), (45,), (9,), (30,), (90 * 40,), (81,), (81,)]
+
+
+def test_ensemble_filter_output_is_the_mean_and_spread_of_j_independent_kalmannets_from_the_shared_prior(flight, tmp_path):  # noqa: F811
+    """MS-39, eq 22a/22b: J KalmanNets drawing masks from one stream in realisation order, re-anchored at the mean
+    each step, give the filter's x and P. A plain mean and the anchored one differ only in rounding: 4 ulp at
+    |x| < 2048 m is 1.8e-12; P then moves by at most 2 x |deviation| (< 1 m) x 1.8e-12."""
+    states, z = flight
+    weights = exported(knet_stand_in(), tmp_path)
+    _, Q = cv_model(NOMINAL.dt)
+    priors = (Q, np.eye(STATE_DIM) * 100.0, NOMINAL.R())
+    x0 = states[0] + _INIT_OFFSET
+    flt = stand_in_bkn(weights)
+    flt.init_sequence(x0, *priors)
+    dropout = numpy_forward.bernoulli_dropout(numpy_forward.dropout_rng(TRAJECTORY_SEED), STAND_IN_DROPOUT_P)
+    by_hand = [numpy_forward.KalmanNetFilter(numpy_forward.KalmanGainGRU(weights, dropout=dropout), NOMINAL.dt)
+               for _ in range(FULL_RANK_REALISATIONS)]
+    for realisation in by_hand:
+        realisation.init_sequence(x0, *priors)
+
+    for z_t in z[:3]:
+        x, P, _, _ = flt.step(z_t)
+        estimates = np.array([realisation.step(z_t) for realisation in by_hand])
+        mean = estimates.mean(axis=0)
+        np.testing.assert_allclose(x, mean, rtol=0.0, atol=MEAN_SUMMATION_ATOL)
+        spread = (estimates - mean).T @ (estimates - mean) / FULL_RANK_REALISATIONS
+        np.testing.assert_allclose(P, spread, rtol=0.0, atol=SPREAD_SUMMATION_ATOL)
+        assert np.linalg.matrix_rank(P) == STATE_DIM
+        for realisation in by_hand:
+            realisation.x_posterior = x
+
+
+def test_each_trajectory_draws_its_masks_from_one_generator_seeded_once(flight, tmp_path, monkeypatch):  # noqa: F811
+    """MS-39: the seed is per trajectory, not per step: one dropout_rng call however many steps run."""
+    states, z = flight
+    seeded = []
+    monkeypatch.setattr(numpy_forward, "dropout_rng", lambda seed: seeded.append(seed) or np.random.default_rng(seed))
+
+    bkn_run(stand_in_bkn(exported(knet_stand_in(), tmp_path)), states[:5], z[:5])
+
+    assert seeded == [TRAJECTORY_SEED]
 
 
 def tuning_row(dropout_p, realisations, pos_rmse, diverged_fraction, anees_mean):
@@ -232,7 +294,12 @@ def test_eval_reports_bayesian_kalmannet_rmse_anees_nis_and_coverage_on_every_re
     for row in bkn.values():
         assert all(row[key] != "" for key in ("pos_rmse", "anees_mean", "anis_mean", "coverage_68", "coverage_95"))
     assert list(highmc) == ["EKF", "UKF", "IMM", "BKN"]
-    assert np.isfinite(highmc["BKN"]["anis_mean"])
+    states, measurements = bench_eval._load(data_dir / "test.npz")
+    nominal = bench_eval.evaluate_dataset(*bench_eval.bkn_entry(load_weights(weights), NOMINAL.dt, NOMINAL.R()), states, measurements)
+    consistency = bench_eval.summarize_consistency(nominal)
+    assert float(bkn["nominal"]["pos_rmse"]) == bench_eval.summarize_rmse(nominal)[0]
+    for key in ("anees_mean", "anis_mean", "coverage_68", "coverage_95"):
+        assert float(bkn["nominal"][key]) == consistency[key]
 
 
 def test_ensemble_runs_the_20_realisations_validation_picked(tmp_path):

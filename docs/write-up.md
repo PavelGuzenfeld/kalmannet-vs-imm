@@ -178,6 +178,65 @@ reference source was read (not just the paper) before porting.
   validation-based early stopping; batch size 32, up to 30 epochs, patience 6, seed 0. Best epoch 9,
   validation position RMSE 1.56 m. Training log: `results/rkn/training_log.json`.
 
+### 1.7 Bayesian KalmanNet (`filters/knet/numpy_forward.py`, `scripts/tune_bkn.py`, #135)
+
+Bayesian KalmanNet (BKN) per [#14](source-notes.md) sec. 4 and the paper's Algorithm 1 (Dahan et al.,
+arXiv:2309.03058, p. 6), built on the vanilla KalmanNet of sec. 1.5. f, h and the three GRUs are
+unchanged; only this differs:
+
+- **MC dropout** with Bernoulli `p` on every ReLU output of the gain network's FC layers (FC5, FC6,
+  FC1, FC7, FC2's hidden layer, FC3, FC4), never on the gain output itself. It stays on at
+  inference. The state_dict is the vanilla one, so the page loads BKN weights with the same
+  numpy forward pass.
+- **J realisations per step.** Every realisation predicts from the previous ensemble mean (Algorithm
+  1 line 6), so all of them share the prior and the innovation; each keeps its own GRU hidden state
+  and gets fresh masks every step (line 4). The estimate is the sample mean (eq 22a); `P` is the
+  sample covariance around it, normalised by `J` (eq 22b). At `p = 0` every realisation is vanilla
+  KalmanNet, so BKN reproduces it bit for bit with `P = 0` (`tests/test_bayesian_kalmannet.py`).
+- **That `P` is an ensemble spread, not a propagated covariance** (MS-39). It is the one-step spread
+  of the gain times the innovation and carries no prior uncertainty and no `Q`. Its rank is at most
+  `J - 1`, so `J >= 10` is needed to whiten a 9-state error at all.
+- **NIS** needs an innovation covariance the paper never defines. This benchmark uses
+  `S_t = H_t F P_{t-1} F^T H_t^T + R` with nominal `R` and `P_0 = 0` (MS-40), so BKN's NIS judges
+  that construction, not the paper's method.
+- **Training** is `scripts/train_knet.py --dropout-p p`: the sec. 1.5 protocol unchanged (plain
+  state MSE, seed 0), with dropout on during training and validation. **Deviation from the paper,
+  flagged rather than resolved:** the paper trains with its eq 23 loss (empirical second-moment
+  term plus a KL term on a learned `p`, initialised uniformly in [0.5, 0.8]) on its Architecture
+  #1, with `J = 20`. #135 asks for plain MSE on our Architecture #2 with a fixed `p`. The
+  calibration below is therefore that of MSE-trained MC dropout, not of the paper's full method.
+- **Dropout seed: per trajectory.** One numpy Generator per run, spawned from the run's seed
+  (`dropout_rng`; its own stream, never the measurement-noise stream drawn from the same seed),
+  draws every step's masks in realisation order. eval.py seeds run `k` of a dataset with `k`; the page
+  and `replay.py` seed it with the scenario seed, so a replay of an exported scenario redraws the
+  page's masks (`tests/test_live_flight.py`). Reseeding per step from one seed would repeat the same
+  masks at every step; deriving a per-step seed buys nothing a single Generator does not already
+  give.
+
+**Choosing p and J on validation only** (`results/bkn_tuning.json`, `val.npz`, 200 trajectories, 1
+noise realisation each, through the page's numpy forward pass). One checkpoint per `p` in
+{0.05, 0.1, 0.2} (best epochs 15, 10 and 3; single-realisation validation RMSE 725.5, 694.7 and
+746.0 m, no burn-in or divergence cut), each run at `J` in {10, 20, 40}. The rule, fixed before the
+runs: keep the runs within 5 points of the fewest diverged and within 10% of the best position RMSE,
+then take the ANEES closest to 9 in log ratio, the smaller `J` on a tie.
+
+| p | J | Pos RMSE (m) | Diverged | ANEES | ANIS | Coverage@95 |
+|---|---|---|---|---|---|---|
+| 0.05 | 10 | 74.63 | 90.5% | 2.6e22 | 7,699 | 0 |
+| 0.05 | 20 | 74.67 | 90.5% | 1.3e14 | 7,961 | 0 |
+| 0.05 | 40 | 74.70 | 90.5% | 1.5e13 | 7,922 | 0 |
+| 0.1 | 10 | 73.18 | 88.0% | 1.4e21 | 5,947 | 0 |
+| 0.1 | 20 | 73.08 | 88.0% | 5.4e13 | 5,882 | 0 |
+| 0.1 | 40 | 73.05 | 88.0% | 1.2e13 | 5,836 | 0 |
+| 0.2 | 10 | 74.03 | 89.5% | 2.5e14 | 5,962 | 0 |
+| **0.2** | **20** | 74.06 | 89.5% | **5.9e11** | 5,942 | 0 |
+| 0.2 | 40 | 74.07 | 89.5% | 9.9e11 | 5,974 | 0 |
+
+Every run passes both accuracy filters; **`p = 0.2`, `J = 20`** wins on ANEES. The choice is between
+equally failed calibrations: no run puts a single counted step inside its 95% ellipsoid, and the
+ANEES mean swings by orders of magnitude with `J` because a few near-singular steps dominate it.
+Accuracy is flat in `J` (under 0.2 m) and within 1.6 m across `p`.
+
 ## 2. Results
 
 All numbers below: full `datasets/test.npz` (200 trajectories x 5 Monte Carlo noise
@@ -198,8 +257,9 @@ below; for those filters, read the diverged fraction first. IMM and RKN never di
 numbers mean the same thing as before.
 
 Full CSV: `results/results_table.csv`
-(classical filters) + `results/knet_test_rmse.csv` / `results/rkn_test_rmse.csv` (learned filters);
-full high-MC JSON: `results/anees_highmc.json` (classical) + `results/rkn_eval.json` (RKN); plots
+(classical filters and Bayesian KalmanNet) + `results/knet_test_rmse.csv` / `results/rkn_test_rmse.csv`
+(learned filters); full high-MC JSON: `results/anees_highmc.json` (classical and BKN) +
+`results/rkn_eval.json` (RKN); plots
 (`scripts/make_plots.py`, which stops each run at its divergence step like the evaluators) in
 `results/plots/`: `trajectory_overlay.png` (a maneuvering test trajectory — IMM tracks the turn the
 CV-only floor cuts the corner on), `rmse_vs_time.png` (EKF/UKF grow from ~1 m to ~85 m by 7.5 s as
@@ -276,6 +336,27 @@ sec. 1.5, this is a timeboxed finding, not an under-tuned strawman:
   the brief's required reading list prioritizes Recursive KalmanNet as the variant that fixes this
   gap ([#14](source-notes.md) sec. 2). Built and evaluated next (sec. 2.3).
 
+**Bayesian KalmanNet gives vanilla KalmanNet a calibration number, and it is a failing one.** MC
+dropout on the same gain network (sec. 1.7, `p = 0.2`, `J = 20`) produces a covariance with no
+full-column-rank requirement, judged on the same metric code as every other filter
+(`results/results_table.csv`, `results/anees_highmc.json`):
+
+| Filter | Pos RMSE (m) | Diverged (median step) | ANEES (main, N=5) | ANEES (high-MC, N=100; bounds 8.19-9.85) | ANIS (high-MC; bounds 2.54-3.50) | Coverage@68/95 |
+|---|---|---|---|---|---|---|
+| KalmanNet (vanilla) | 74.57 | 86.3% (408) | N/A | N/A | N/A | N/A |
+| Bayesian KalmanNet (p 0.2, J 20) | 72.48 | 87.4% (395) | 1.2e12 | 2.6e12 | 577 | 0.000 / 0.000 |
+| IMM | 1.17 | 0% | 8.98 | 9.53 | 2.95 | 0.702 / 0.862 |
+
+The ensemble mean tracks like vanilla KalmanNet (72.48 m vs. 74.57 m before divergence, 87.4% vs.
+86.3% of runs diverged), as expected from a network trained the same way. Its covariance is
+overconfident by about eleven orders of magnitude in ANEES, and no counted step of any high-MC run
+falls inside even the 68% ellipsoid. On three validation trajectories the ensemble's position
+standard deviation sat between 0.1 mm and 48 cm while the error was metres; the median ratio of position error
+to that standard deviation was 1,400-3,600. That is MS-39's caveat in numbers: the spread of one
+step's gain times a milliradian-scale innovation is not the error the recursion has accumulated.
+This is MC dropout trained on plain MSE (the #135 scope), not the paper's eq 23 training, whose
+second-moment term exists to fix exactly this (sec. 1.7).
+
 ### 2.3 Recursive KalmanNet: close to IMM, ahead of it under hard maneuvers
 
 RKN (301k-parameter trained variant, sec. 1.6) is the one result in this report that breaks a
@@ -331,6 +412,10 @@ counts only the steps before divergence (sec. 2). IMM and RKN diverge in no run 
 | heavy_tailed (Student-t, dof=3, same nominal R assumed) | 60.62 (44%) | **2.09** | 77.96 (90%) | 2.46 | 0.434 | see fix note below |
 | scenarios (2 recorded flights, nominal R) | 71.99 / 71.94 (0%) | 1.49 | 50.50 (50%) | 1.49 | 0.303 | one run per flight |
 
+Bayesian KalmanNet (`p = 0.2`, `J = 20`) on the same regimes, pre-divergence RMSE (share diverged):
+high_maneuver 79.30 m (97.6%), high_noise 80.31 m (91.2%), low_noise 67.43 m (78.0%),
+heavy_tailed 76.85 m (92.0%), scenarios 52.82 m (50%). Coverage@95 is 0.000 in every regime.
+
 Vanilla KalmanNet diverges in most runs of every regime; `high_maneuver` brings its divergence
 earliest (median step 249 vs. 408 nominal). RKN stays within 1.6x of IMM throughout and beats it
 on `high_maneuver`. Its calibration is the regime-sensitive part (sec. 2.3): fine at `low_noise`
@@ -370,6 +455,7 @@ median/p99 — methodology per the brief; `results/latency.json`)
 | IMM (4 modes, mix+update+combine) | 0.239 | 0.292 | 8x headroom |
 | KalmanNet (vanilla, 3 GRUs, 526,116 params) | 0.333 | 0.669 | 6x headroom |
 | Recursive KalmanNet (trained, 2 GRUs, 301,266 params) | 0.559 | 0.772 | 3.6x headroom |
+| Bayesian KalmanNet (numpy, J = 20 passes of the 526,116-param gain network, plus NEES/NIS) | **4.183** | **4.548** | **over budget, 2.1x at the median** |
 | Recursive KalmanNet (**reference-default sizing**, 7,847,112 params, untrained) | **2.759** | **3.831** | **over budget at median, not just p99** |
 
 Measured on an x86 dev host (not the Orin), one container pinned to a single idle core
@@ -377,7 +463,13 @@ Measured on an x86 dev host (not the Orin), one container pinned to a single idl
 from the earlier revision's 0.391 ms; its gain has since moved into the line-of-sight frame (#94),
 and this run does not isolate how much of the change that accounts for.
 
-Every filter we trained and deployed fits the <2 ms per-step target on CPU
+The BKN row is the page's numpy forward pass (`scripts/bench_latency.py --bkn-weights`), run in a
+later session on one pinned core (`results/latency.json`, same host): a single numpy KalmanNet pass
+there takes 0.175 ms, and BKN runs `J = 20` of them one after another, plus the NEES/NIS scoring the
+page does every step. The realisations are independent, so one batched pass over all 20 is the
+obvious cut. It was not built here.
+
+Every filter we trained and deployed, except Bayesian KalmanNet at J = 20, fits the <2 ms per-step target on CPU
 alone, single-threaded, with no DLA or PVA offload, including RKN once scaled to a
 practical size. The one exception: RKN built at the
 reference paper's own default network-size multipliers misses
