@@ -78,7 +78,7 @@ def _position(px, py, pz=OVERHEAD_ALTITUDE_M):
 
 
 def test_h_directly_overhead_is_finite_with_zero_azimuth():
-    """MS-2/MS-23: atan2(0, 0) = 0, so h stays finite at rho = 0 and needs no guard."""
+    """MS-2/MS-23: h stays finite at rho = 0 and reads azimuth 0 there."""
     assert np.array_equal(h(_position(0.0, 0.0)), [0.0, np.pi / 2, OVERHEAD_ALTITUDE_M])
 
 
