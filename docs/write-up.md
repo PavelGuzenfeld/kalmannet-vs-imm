@@ -477,7 +477,8 @@ a separate run on one pinned core of the same host (`results/eval_bkn/latency.js
 stay those of `results/latency.json`): a single numpy KalmanNet pass
 there takes 0.175 ms, and BKN runs `J = 20` of them one after another, plus the NEES/NIS scoring the
 page does every step. The realisations are independent, so one batched pass over all 20 is the
-obvious cut. It was not built here.
+obvious cut. Since #148 the 20 realisations run as one stacked pass, bit for bit the serial estimates;
+the row above is the serial figure and has not been re-measured on the quiet host.
 
 Every filter we trained and deployed, except Bayesian KalmanNet at J = 20, fits the <2 ms per-step target on CPU
 alone, single-threaded, with no DLA or PVA offload, including RKN once scaled to a
