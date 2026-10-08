@@ -51,6 +51,27 @@ def test_h_torch_equals_numpy_directly_overhead():
         assert np.array_equal(z_torch, [0.0, np.copysign(np.pi / 2, pz), 300.0])
 
 
+SIGNED_ZERO_PAIRS = [(px, py) for px in (0.0, -0.0) for py in (0.0, -0.0)]
+
+
+def test_h_azimuth_reads_zero_in_both_paths_overhead_for_every_signed_zero():
+    """MS-23: atan2(0, 0) = 0 overhead whatever the zero signs; libm reads atan2(±0, -0) as ±pi (#150)."""
+    for px, py in SIGNED_ZERO_PAIRS:
+        z_np, z_torch = _h_both_at(px, py, 300.0)
+        assert np.array_equal(z_np, [0.0, np.pi / 2, 300.0])
+        assert np.array_equal(z_torch, z_np)
+
+
+def test_H_jacobian_azimuth_row_is_zero_in_both_paths_overhead_for_every_signed_zero():
+    """MS-23: the azimuth row is zero at rho = 0, with -0.0 in x or y as with +0.0."""
+    xs = np.zeros((len(SIGNED_ZERO_PAIRS), STATE_DIM))
+    xs[:, :2] = SIGNED_ZERO_PAIRS
+    xs[:, 2] = 300.0
+    H_np = np.stack([H_jacobian(x) for x in xs])
+    assert np.array_equal(H_np[:, 0], np.zeros((len(SIGNED_ZERO_PAIRS), STATE_DIM)))
+    assert np.array_equal(H_jacobian_torch(torch.tensor(xs)).numpy(), H_np)
+
+
 def test_h_torch_range_equals_numpy_inside_one_millimetre_of_the_z_axis():
     """MS-23: a 1e-6 floor on rho squared would read 1 mm of range for a target 0.49 mm from the sensor."""
     z_np, z_torch = _h_both_at(2.0**-11, 0.0, 0.0)
