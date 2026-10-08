@@ -207,8 +207,10 @@ unchanged; only this differs:
   calibration below is therefore that of MSE-trained MC dropout, not of the paper's full method.
 - **Dropout seed: per trajectory.** One numpy Generator per run, spawned from the run's seed
   (`dropout_rng`; its own stream, never the measurement-noise stream drawn from the same seed),
-  draws every step's masks in realisation order. eval.py seeds run `k` of a dataset with `k`; the page
-  and `replay.py` seed it with the scenario seed, so a replay of an exported scenario redraws the
+  draws every step's masks in realisation order. eval.py seeds runs with a counter per regime; the
+  nominal one carries on through `test.npz` (seeds 0-999), `test_highmc.npz` (1000-1499) and the two
+  scenarios (1500-1501), so its scenarios row is not the run the page draws for those flights. The
+  page and `replay.py` seed it with the scenario seed, so a replay of an exported scenario redraws the
   page's masks (`tests/test_live_flight.py`). Reseeding per step from one seed would repeat the same
   masks at every step; deriving a per-step seed buys nothing a single Generator does not already
   give.
@@ -235,7 +237,7 @@ then take the ANEES closest to 9 in log ratio, the smaller `J` on a tie.
 Every run passes both accuracy filters; **`p = 0.2`, `J = 20`** wins on ANEES. The choice is between
 equally failed calibrations: no run puts a single counted step inside its 95% ellipsoid, and the
 ANEES mean swings by orders of magnitude with `J` because a few near-singular steps dominate it.
-Accuracy is flat in `J` (under 0.2 m) and within 1.6 m across `p`.
+Accuracy is flat in `J` (under 0.2 m) and within 1.7 m across `p`.
 
 ## 2. Results
 
@@ -433,7 +435,10 @@ innovation is. Full test suite green after the fix; the entire evaluation
 was then re-run from scratch on the corrected code. In this revision every evaluation and latency
 number comes from one commit (`f74fc30`), from the IMM tuning and RKN training run at `1478abc`
 and vanilla KalmanNet trained at `4c68643`; the tuner, both trainers, the filters and the data
-generator are unchanged between those commits. Each artifact records its commit.
+generator are unchanged between those commits. Each artifact records its commit. The Bayesian
+KalmanNet rows and its validation table were run later from `36aec07` plus the #135 changes (artifacts
+stamped `36aec07+bkn-wip`; eval.py and `numpy_forward.py` as committed in the #135 branch); the
+EKF/UKF/IMM rows of that same run reproduce the `f74fc30` numbers above exactly.
 
 IMM's accuracy holds across every shifted regime (sub-4 m position RMSE throughout, never
 diverging, vs. 14-50% diverged runs for the CV-only floor). The tuning in sec. 1.4 generalizes past
@@ -463,8 +468,9 @@ Measured on an x86 dev host (not the Orin), one container pinned to a single idl
 from the earlier revision's 0.391 ms; its gain has since moved into the line-of-sight frame (#94),
 and this run does not isolate how much of the change that accounts for.
 
-The BKN row is the page's numpy forward pass (`scripts/bench_latency.py --bkn-weights`), run in a
-later session on one pinned core (`results/latency.json`, same host): a single numpy KalmanNet pass
+The BKN row is the page's numpy forward pass (`scripts/bench_latency.py --bkn-weights`), measured in
+a separate run on one pinned core of the same host (`results/eval_bkn/latency.json`; the other rows
+stay those of `results/latency.json`): a single numpy KalmanNet pass
 there takes 0.175 ms, and BKN runs `J = 20` of them one after another, plus the NEES/NIS scoring the
 page does every step. The realisations are independent, so one batched pass over all 20 is the
 obvious cut. It was not built here.
