@@ -204,9 +204,13 @@ primary read was cheap to obtain.
   motivated by avoiding that full-column-rank requirement.
 - Two loss variants proposed for making covariance meaningful under existing architectures: an
   empirical second-moment loss L^M2 (compares predicted diagonal covariance entries to
-  instantaneous squared error) and a Gaussian-log-likelihood loss L^GP. But their actual "Bayesian
-  KalmanNet" method is trained with **plain ℓ2 (state MSE)**; calibration comes purely from
-  MC-dropout ensembling at inference, not from a covariance-aware loss term.
+  instantaneous squared error) and a Gaussian-log-likelihood loss L^GP. Bayesian KalmanNet itself is
+  trained with **eq 23** (sec. IV-B): the expectation over dropout draws of eq 20,
+  `(1 − β) ℓ2 + β L^M2` with `L^M2 = Σ |e_j² − Σ̂_jj|` (eq 19, β ramped up from small during training),
+  plus a per-layer KL term from concrete dropout (Gal, Hron, Kendall 2017, the paper's [47]):
+  `c1 ‖θ_λ‖² / (1 − p_λ) − c2 H(p_λ) n(λ)` (eqs 24, 25), with `p` learned per dropout layer and
+  initialised uniformly in [0.5, 0.8] (sec. V-A). The paper gives no values for `c1`, `c2`, β or the
+  relaxation temperature, and its linked code has no BKN trainer (#149).
 - **Naming-collision note**: this paper cites "RKN" (recurrent Kalman network) as an older,
   unrelated method (Becker et al. 2019) that directly outputs a diagonal error-variance
   vector. Not to be confused with "Recursive KalmanNet" (source #2 above, Mortada et al. 2025).

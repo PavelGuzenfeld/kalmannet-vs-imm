@@ -2,6 +2,8 @@
 Mirrors gain_network/knet_filter/rkn_network/rkn_filter on one unbatched flight; weights are the torch
 state_dict as arrays keyed by its own names, read by load_weights from torch_ops.export_npz's .npz."""
 
+import itertools
+
 import numpy as np
 
 from filters.measurement_model import HORIZONTAL_RANGE_FLOOR_M, H_jacobian, h, innovation, wrap_angle
@@ -12,6 +14,7 @@ from filters.ukf import UKF
 GRU_GATES = 3
 RKN_FEATURE_SPLITS = np.cumsum([MEAS_DIM, MEAS_DIM, STATE_DIM * MEAS_DIM])
 KINEMATIC_BLOCKS = len((POS, VEL, ACC))
+DROPOUT_LAYERS = ("FC5", "FC6", "FC1", "FC7", "FC2", "FC3", "FC4")
 NOISE_STAGES = {"process": STATE_DIM, "measurement": MEAS_DIM}
 MEASUREMENT_FEATURE_DIM = MEAS_DIM + 1
 NOISE_FEATURE_DIM = MEASUREMENT_FEATURE_DIM + MEAS_DIM + 2 * STATE_DIM
@@ -83,9 +86,23 @@ def unchanged(x):
 
 
 def bernoulli_dropout(rng, dropout_p):
-    """torch.nn.Dropout's convention: zero with probability p, scale the kept units by 1/(1-p)."""
-    keep_p = 1.0 - dropout_p
-    return lambda x: x * (rng.random(x.shape) < keep_p) / keep_p
+    """torch.nn.Dropout's convention: zero with probability p, scale the kept units by 1/(1-p).
+    dropout_p is one p, or one per DROPOUT_LAYERS entry: the order KalmanGainGRU.forward applies them in."""
+    keep_ps = itertools.cycle(1.0 - np.atleast_1d(dropout_p))
+
+    def drop(x):
+        keep_p = next(keep_ps)
+        return x * (rng.random(x.shape) < keep_p) / keep_p
+
+    return drop
+
+
+def learned_dropout_p(weights):
+    """The per-layer p a concrete-dropout checkpoint learned (#149), in DROPOUT_LAYERS order; None at a fixed p."""
+    if "dropout.FC5.p_logit" not in weights:
+        return None
+    logits = np.concatenate([weights[f"dropout.{layer}.p_logit"] for layer in DROPOUT_LAYERS])
+    return sigmoid(logits)
 
 
 def dropout_rng(trajectory_seed):
@@ -144,26 +161,25 @@ def stacked_gru_cell(weights, prefix, x, hidden):
 class BatchedKalmanGainGRU:
     """J dropout realisations of KalmanGainGRU in one pass. The inputs are shared, the hidden states are [J, ·].
     Masks come from one Generator, drawn realisation by realisation and layer by layer in DROPOUT_LAYERS order:
-    the order J serial passes draw them in."""
-
-    DROPOUT_LAYERS = ("FC5.0.", "FC6.0.", "FC1.0.", "FC7.0.", "FC2.0.", "FC3.0.", "FC4.0.")
+    the order J serial passes draw them in. dropout_p is one p, or one per layer (#149)."""
 
     def __init__(self, weights, dropout_p, rng, realisations, m=STATE_DIM, n=MEAS_DIM):
         self.weights, self.rng, self.realisations, self.m, self.n = weights, rng, realisations, m, n
-        self.keep_p = 1.0 - dropout_p
-        widths = [weights[f"{layer}weight"].shape[0] for layer in self.DROPOUT_LAYERS]
-        self.mask_width = sum(widths)
+        self.keep_p = 1.0 - np.broadcast_to(dropout_p, len(DROPOUT_LAYERS))
+        widths = [weights[f"{layer}.0.weight"].shape[0] for layer in DROPOUT_LAYERS]
+        self.keep_thresholds = np.repeat(self.keep_p, widths)
         self.mask_splits = np.cumsum(widths)[:-1]
 
     def draw_masks(self):
-        draws = self.rng.random((self.realisations, self.mask_width))
-        return iter(np.split(draws < self.keep_p, self.mask_splits, axis=-1))
+        draws = self.rng.random((self.realisations, len(self.keep_thresholds)))
+        return iter(zip(np.split(draws < self.keep_thresholds, self.mask_splits, axis=-1), self.keep_p))
 
     def forward(self, obs_diff, obs_innov_diff, fw_evol_diff, fw_update_diff, hidden):
         w, masks = self.weights, self.draw_masks()
 
         def drop(x):
-            return x * next(masks) / self.keep_p
+            mask, keep_p = next(masks)
+            return x * mask / keep_p
 
         h_Q, h_Sigma, h_S = hidden
         out_Q = h_Q = stacked_gru_cell(w, "GRU_Q.", drop(relu(linear(w, "FC5.0.", fw_update_diff))), h_Q)

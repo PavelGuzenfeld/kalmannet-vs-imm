@@ -61,3 +61,22 @@ class KalmanNetFilter:
         self.x_prior_prev = self.x_prior_prev.detach()
         self.y_prev = self.y_prev.detach()
         self.hidden = tuple(h.detach() for h in self.hidden)
+
+
+class BayesianKalmanNetFilter(KalmanNetFilter):
+    """Algorithm 1 over [batch·J] rows for training (#149): every realisation predicts from the ensemble mean,
+    keeping its own GRU state, as numpy_forward.BayesianKalmanNetFilter does at inference (MS-39)."""
+
+    def __init__(self, gain_net, dt, realisations, device="cpu"):
+        super().__init__(gain_net, dt, device)
+        self.realisations = realisations
+
+    def init_sequence(self, x0, prior_Q, prior_Sigma, prior_S):
+        super().init_sequence(x0.repeat_interleave(self.realisations, dim=0), prior_Q, prior_Sigma, prior_S)
+
+    def step(self, z):
+        """Returns the eq 22a mean [batch, m] and the diagonal of the eq 22b covariance [batch, m]."""
+        estimates = super().step(z.repeat_interleave(self.realisations, dim=0)).unflatten(0, (-1, self.realisations))
+        mean = estimates.mean(dim=1)
+        self.x_posterior = mean.repeat_interleave(self.realisations, dim=0)
+        return mean, (estimates - mean.unsqueeze(1)).pow(2).mean(dim=1)

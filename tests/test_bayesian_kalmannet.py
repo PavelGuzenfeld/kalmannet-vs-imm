@@ -9,7 +9,7 @@ import torch
 
 from data.config import NOMINAL
 from filters.knet import numpy_forward
-from filters.knet.numpy_forward import load_weights
+from filters.knet.numpy_forward import DROPOUT_LAYERS, load_weights
 from filters.torch_ops import export_npz
 from filters.knet.gain_network import KalmanGainGRU
 from filters.knet.knet_filter import KalmanNetFilter
@@ -27,6 +27,7 @@ NON_POWER_OF_TWO_REALISATIONS = 3
 FULL_RANK_REALISATIONS = STATE_DIM + 1
 TRAJECTORY_SEED = 8
 STAND_IN_DROPOUT_P = 0.2
+PER_LAYER_DROPOUT_P = (0.7, 0.6, 0.6, 0.68, 0.5, 0.6, 0.52)
 DROPOUT_DRAWS = 10_000
 DROPOUT_FRACTION_4_SIGMA = 4 * np.sqrt(STAND_IN_DROPOUT_P * (1 - STAND_IN_DROPOUT_P) / DROPOUT_DRAWS)
 MASK_EFFECT_FLOOR_M = 1.0
@@ -126,7 +127,8 @@ def test_torch_and_numpy_gain_networks_given_the_same_masks_track_the_committed_
     states, z = flight
     net = knet_stand_in()
     weights = exported(net, tmp_path)
-    net.dropout = NumpyMaskDropout(numpy_forward.bernoulli_dropout(numpy_forward.dropout_rng(TRAJECTORY_SEED), STAND_IN_DROPOUT_P))
+    shared = NumpyMaskDropout(numpy_forward.bernoulli_dropout(numpy_forward.dropout_rng(TRAJECTORY_SEED), STAND_IN_DROPOUT_P))
+    net.dropout = torch.nn.ModuleDict(dict.fromkeys(DROPOUT_LAYERS, shared))
     priors = _priors(NOMINAL.dt, NOMINAL.R())
     torch_filter = KalmanNetFilter(net, NOMINAL.dt)
     torch_filter.init_sequence(torch.tensor(states[None, 0]) + TORCH_INIT_OFFSET, *priors)
@@ -243,10 +245,11 @@ def test_ensemble_filter_output_is_the_mean_and_spread_of_j_independent_kalmanne
             realisation.x_posterior = x
 
 
+@pytest.mark.parametrize("dropout_p", [STAND_IN_DROPOUT_P, PER_LAYER_DROPOUT_P])
 @pytest.mark.parametrize("realisations", [3, 10, 20])
-def test_batched_ensemble_matches_j_serial_kalmannets_bit_for_bit_at_p_0_2_over_the_committed_scenario(flight, tmp_path, realisations):  # noqa: F811
-    """MS-39: one Generator drawn realisation by realisation, layer by layer, so stacking the J passes into one
-    changes no mask and no estimate. Exact equality: x, P and S of every step, not a tolerance."""
+def test_batched_ensemble_matches_j_serial_kalmannets_bit_for_bit_at_one_p_or_one_per_layer(flight, tmp_path, realisations, dropout_p):  # noqa: F811
+    """MS-39, MS-50: one Generator drawn realisation by realisation, layer by layer, each layer at its own p, so
+    stacking the J passes into one changes no mask and no estimate. Exact equality of x, P and S at every step."""
     states, z = flight
     weights = exported(knet_stand_in(), tmp_path)
     F, Q = cv_model(NOMINAL.dt)
@@ -254,10 +257,10 @@ def test_batched_ensemble_matches_j_serial_kalmannets_bit_for_bit_at_p_0_2_over_
     priors = (Q, np.eye(STATE_DIM) * 100.0, R)
     x0 = states[0] + _INIT_OFFSET
     batched = numpy_forward.BayesianKalmanNetFilter(
-        weights, NOMINAL.dt, R, STAND_IN_DROPOUT_P, numpy_forward.dropout_rng(TRAJECTORY_SEED), realisations
+        weights, NOMINAL.dt, R, dropout_p, numpy_forward.dropout_rng(TRAJECTORY_SEED), realisations
     )
     batched.init_sequence(x0, *priors)
-    dropout = numpy_forward.bernoulli_dropout(numpy_forward.dropout_rng(TRAJECTORY_SEED), STAND_IN_DROPOUT_P)
+    dropout = numpy_forward.bernoulli_dropout(numpy_forward.dropout_rng(TRAJECTORY_SEED), dropout_p)
     serial = [numpy_forward.KalmanNetFilter(numpy_forward.KalmanGainGRU(weights, dropout=dropout), NOMINAL.dt)
               for _ in range(realisations)]
     for realisation in serial:

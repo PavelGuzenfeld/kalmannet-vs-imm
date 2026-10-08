@@ -19,8 +19,13 @@ DIVERGED_SLACK = 0.05
 
 
 def validation_row(weights_npz, realisations, dt, R, states, measurements):
-    dropout_p = json.loads((weights_npz.parent / "training_log.json").read_text())["hyperparams"]["dropout_p"]
-    entry = bkn_entry(numpy_forward.load_weights(weights_npz), dt, R, dropout_p, realisations)
+    weights = numpy_forward.load_weights(weights_npz)
+    learned = numpy_forward.learned_dropout_p(weights)
+    if learned is None:
+        dropout_p = json.loads((weights_npz.parent / "training_log.json").read_text())["hyperparams"]["dropout_p"]
+    else:
+        dropout_p = learned.tolist()
+    entry = bkn_entry(weights, dt, R, dropout_p, realisations)
     result = evaluate_dataset(*entry, states, measurements)
     pos_rmse, vel_rmse = summarize_rmse(result)
     consistency = summarize_consistency(result)
