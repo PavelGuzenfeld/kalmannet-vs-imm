@@ -1,4 +1,7 @@
+import csv
 import json
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -14,8 +17,10 @@ from filters.measurement_model import h
 from filters.state import AZIMUTH, MEAS_DIM, STATE_DIM
 from filters.torch_ops import export_npz
 from filters.ukf import UKF
+from scripts import eval as bench_eval
 from scripts.eval import _INIT_OFFSET, _P0, ekf_like_steps, ukn_steps
 from tests.test_numpy_forward import REPO
+from tests.test_replay import imm_tuning  # noqa: F401
 
 OVERHEAD_PASS = REPO / "data" / "scenarios" / "overhead_pass.json"
 BREAK_TURN = REPO / "data" / "scenarios" / "break_turn_9g.json"
@@ -78,9 +83,9 @@ def numpy_weights(net):
     return {name: tensor.detach().numpy().copy() for name, tensor in net.state_dict().items()}
 
 
-def saturated_gain_network(gain_scale):
+def saturated_gain_network(gain_scale, sign=1.0):
     net = UnscentedKalmanNetwork(gain_scale=gain_scale).double()
-    torch.nn.init.constant_(net.gain_net.decoder[-1].bias, SATURATED_PRE_ACTIVATION)
+    torch.nn.init.constant_(net.gain_net.decoder[-1].bias, sign * SATURATED_PRE_ACTIVATION)
     return net
 
 
@@ -127,19 +132,20 @@ def test_scaled_covariance_at_the_identity_multiplier_is_the_cv_process_noise_bi
     assert np.array_equal(scaled(Q, np.linalg.cholesky(Q), np.eye(len(Q))), Q)
 
 
-def test_gain_residual_saturates_each_column_at_c_k_times_that_column_of_the_ukf_gain():
-    """MS-46: column norms 5, 13 and 2, c_K = 1/2, tanh(40) = 1: ΔK's columns are 2.5, 6.5 and 1 everywhere."""
+@pytest.mark.parametrize("sign", [1.0, -1.0])
+def test_gain_residual_saturates_each_column_at_c_k_times_that_column_of_the_ukf_gain(sign):
+    """MS-46: column norms 5, 13 and 2, c_K = 1/2, tanh(±40) = ±1: ΔK's columns are ±2.5, ±6.5 and ±1."""
     K = np.zeros((STATE_DIM, MEAS_DIM))
     K[:2, 0], K[3:5, 1], K[8, 2] = [3.0, 4.0], [5.0, 12.0], -2.0
-    weights = numpy_weights(saturated_gain_network(0.5))
+    weights = numpy_weights(saturated_gain_network(0.5, sign))
     network = numpy_forward.UnscentedKalmanNetwork(weights)
     delta_K, _ = network.gain_residual(
         np.ones(numpy_forward.GAIN_FEATURE_DIM), K, network.init_hidden()["gain"]
     )
-    torch_delta_K, _ = saturated_gain_network(0.5).gain_net(
+    torch_delta_K, _ = saturated_gain_network(0.5, sign).gain_net(
         torch.ones(1, numpy_forward.GAIN_FEATURE_DIM, dtype=torch.float64), torch.tensor(K)[None], None
     )
-    expected = np.tile([2.5, 6.5, 1.0], (STATE_DIM, 1))
+    expected = sign * np.tile([2.5, 6.5, 1.0], (STATE_DIM, 1))
     assert np.array_equal(delta_K, expected)
     assert np.array_equal(torch_delta_K[0].detach().numpy(), expected)
 
@@ -189,10 +195,11 @@ def seam_step(backend, azimuth_shift):
 
 @pytest.mark.parametrize("backend", ["numpy", "torch"])
 def test_a_measurement_across_the_azimuth_seam_gives_a_small_wrapped_innovation(backend):
-    """MS-45: the measurement sits 2e-6 rad across ±π from the prior's azimuth, so the wrapped innovation is under
-    1e-5 rad; unwrapped it would be 2π."""
+    """MS-45: the prior sits at π - 1.001e-6 (px moved by -1 m) and the measurement at -π + 1e-6, so the wrapped
+    innovation is +2.0e-6 rad; the sigma-point circular mean shifts it by 2.9e-8, inside the 1e-7 band. Unwrapped
+    it would be -2π."""
     _, _, y = seam_step(backend, 0.0)
-    assert abs(y[AZIMUTH]) < 1e-5
+    assert y[AZIMUTH] == pytest.approx(2.0e-6, rel=0.0, abs=1e-7)
 
 
 @pytest.mark.parametrize("backend", ["numpy", "torch"])
@@ -204,6 +211,7 @@ def test_shifting_the_measured_azimuth_by_two_pi_at_the_seam_leaves_the_step_unc
     x_shifted, P_shifted, y_shifted = seam_step(backend, 2.0 * np.pi)
     np.testing.assert_allclose(x_shifted, x, rtol=0.0, atol=SEAM_ATOL)
     np.testing.assert_allclose(P_shifted, P, rtol=0.0, atol=SEAM_ATOL)
+    assert y_shifted[AZIMUTH] == pytest.approx(y[AZIMUTH], rel=0.0, abs=2 * np.spacing(2.0 * np.pi))
 
 
 def test_numpy_unscented_kalmannet_matches_torch_at_every_step_of_the_overhead_pass():
@@ -226,12 +234,14 @@ def test_numpy_unscented_kalmannet_matches_torch_at_every_step_of_the_overhead_p
 
 
 def test_network_is_sized_as_the_papers_manoeuvring_target_example():
-    """MS-45: d_e 32, H_G 128, H_N 64; heads emit A^Q (9 + 36), A^R (3 + 3) and ΔK (27)."""
+    """MS-45: d_G 32, d_N 25, d_e 32, H_G 128, H_N 64; heads emit A^Q (9 + 36), A^R (3 + 3) and ΔK (27)."""
     shapes = {
         name: tuple(tensor.shape)
         for name, tensor in UnscentedKalmanNetwork(gain_scale=1.0).state_dict().items()
     }
-    assert shapes["gain_net.encoder.1.weight"] == (32, numpy_forward.GAIN_FEATURE_DIM)
+    assert shapes["gain_net.encoder.0.weight"] == (32,)
+    assert shapes["noise_net.encoder.0.weight"] == (25,)
+    assert shapes["gain_net.encoder.1.weight"] == (32, 32)
     assert shapes["noise_net.encoder.3.weight"] == (32, 32)
     assert shapes["gain_net.gru.weight_hh_l0"] == (3 * 128, 128)
     assert shapes["noise_net.gru.weight_hh_l0"] == (3 * 64, 64)
@@ -261,3 +271,113 @@ def test_batched_training_filter_steps_each_trajectory_as_if_it_were_alone():
                 x_alone, P_alone, *_ = flt.step(measurements[index : index + 1, t])
                 np.testing.assert_allclose(x[index], x_alone[0], rtol=0.0, atol=BATCH_ATOL_STATE)
                 np.testing.assert_allclose(P[index], P_alone[0], rtol=0.0, atol=BATCH_ATOL_P)
+
+
+@pytest.mark.parametrize("features", [numpy_forward.noise_features, lambda *a: torch_noise_features(*a)])
+def test_noise_net_reads_the_measurement_as_azimuth_sine_and_cosine_then_elevation_and_range(features):
+    """MS-45: [sin az, cos az, el, range, y, x, log diag P]: 4 + 3 + 9 + 9 = 25 inputs, no control term."""
+    z, y = np.array([-3.0, 0.25, 1000.0]), np.array([1e-3, -2e-3, 4.0])
+    x, P = np.arange(1.0, STATE_DIM + 1.0), np.diag(np.exp(np.arange(STATE_DIM, dtype=float)))
+    row = features(z, y, x, P)
+    expected = np.concatenate([[np.sin(-3.0), np.cos(-3.0), 0.25, 1000.0], y, x, np.arange(STATE_DIM, dtype=float)])
+    np.testing.assert_allclose(row, expected, rtol=2 * FLOAT64_EPS, atol=0.0)
+
+
+def torch_noise_features(z, y, x, P):
+    as_batch = [torch.tensor(value)[None] for value in (z, y, x, P)]
+    return ukn_filter.noise_features(*as_batch)[0].numpy()
+
+
+def test_learned_process_and_measurement_noise_are_the_ones_the_filter_steps_with():
+    """MS-44: process heads saturated high (A_Q = sqrt(50) I) and measurement heads low (A_R = sqrt(0.1) I): two
+    UKN steps equal two filters/ukf.py steps run with those Q_t and R_t, bit for bit, and differ from the UKF's."""
+    net = UnscentedKalmanNetwork(gain_scale=1.0).double()
+    torch.nn.init.constant_(net.noise_net.process_diagonal.bias, SATURATED_PRE_ACTIVATION)
+    torch.nn.init.constant_(net.noise_net.measurement_diagonal.bias, -SATURATED_PRE_ACTIVATION)
+    R = NOMINAL.R()
+    flt = numpy_forward.UnscentedKalmanNetFilter(
+        numpy_forward.UnscentedKalmanNetwork(numpy_weights(net)), NOMINAL.dt, R
+    )
+    states, z = fly_scenario(json.loads(OVERHEAD_PASS.read_text()))
+    x0 = states[0] + _INIT_OFFSET
+    flt.init_sequence(x0, _P0.copy())
+    flt.step(z[0])
+    x, P, _, _ = flt.step(z[1])
+    ukf = UKF(NOMINAL.dt, R)
+    Q_t = numpy_forward.scaled_covariance(ukf.Q, np.linalg.cholesky(ukf.Q), np.sqrt(50.0) * np.eye(STATE_DIM))
+    R_t = numpy_forward.scaled_covariance(R, np.linalg.cholesky(R), np.sqrt(0.1) * np.eye(MEAS_DIM))
+    dx, dz, y = ukf.innovation(x0, ukf._sigma_points(x0, _P0), z[0])
+    K, P_expected, _ = ukf.analytic_update(_P0, dx, dz, R_t)
+    x_expected = x0 + K @ y
+    x_pred, P_pred, pts_pred = ukf.predict(x_expected, P_expected, Q_t)
+    dx, dz, y = ukf.innovation(x_pred, pts_pred, z[1])
+    K, P_expected, _ = ukf.analytic_update(P_pred, dx, dz, R_t)
+    assert np.array_equal(x, x_pred + K @ y)
+    assert np.array_equal(P, P_expected)
+    x_ukf, P_ukf, _, _ = ukf.step(*ukf.update(x0, _P0, ukf._sigma_points(x0, _P0), z[0])[:2], z[1])
+    assert not np.array_equal(P, P_ukf)
+
+
+def test_untrained_torch_unscented_kalmannet_tracks_the_overhead_pass_like_the_ukf():
+    """MS-43: the training backbone at zero init is filters/ukf.py up to the numpy-vs-torch budget (atol 1e-11 on
+    x, 1e-12 on P, as the parity test derives)."""
+    states, z = fly_scenario(json.loads(OVERHEAD_PASS.read_text()))
+    ukf_snapshot = {}
+    ukf = ekf_like_steps(UKF(NOMINAL.dt, NOMINAL.R()), states, z, ukf_snapshot)
+    flt = UnscentedKalmanNetFilter(UnscentedKalmanNetwork(gain_scale=1.0).double(), NOMINAL.dt, NOMINAL.R())
+    flt.init_sequence(torch.tensor(states[0] + _INIT_OFFSET)[None], torch.tensor(_P0)[None])
+    with torch.no_grad():
+        for truth, z_t, (error, _, _) in zip(states, z, ukf, strict=True):
+            x, P, *_ = flt.step(torch.tensor(z_t)[None])
+            np.testing.assert_allclose(x[0].numpy(), truth + error, rtol=0.0, atol=PARITY_ATOL_STATE)
+            np.testing.assert_allclose(P[0].numpy(), ukf_snapshot["P"], rtol=0.0, atol=PARITY_ATOL_P)
+
+
+def test_eval_reports_unscented_kalmannet_rmse_anees_nis_and_coverage_on_every_regime(imm_tuning, tmp_path, monkeypatch):  # noqa: F811
+    """MS-43: UKN sits beside EKF, UKF and IMM in results_table.csv on nominal, the four shifted regimes and the
+    scenarios, and in the high-MC calibration file, each row its own evaluation."""
+    data_dir, out, weights = tmp_path / "datasets", tmp_path / "results", tmp_path / "ukn.npz"
+    toy = ["--n-train", "1", "--n-val", "1", "--n-test", "1", "--n-sweep", "1", "--mc-test", "2", "--n-highmc", "1"]
+    subprocess.run([sys.executable, "scripts/make_dataset.py", "--out", data_dir, *toy, "--mc-highmc", "2"], cwd=REPO, check=True)
+    export_npz(stand_in_network().state_dict(), weights)
+    eval_argv = ["eval.py", "--data-dir", str(data_dir), "--imm-tuning", str(imm_tuning), "--out", str(out)]
+    monkeypatch.setattr(sys, "argv", [*eval_argv, "--bkn-weights", str(tmp_path / "missing.npz"), "--ukn-weights", str(weights)])
+    monkeypatch.chdir(REPO)
+
+    bench_eval.main()
+
+    with open(out / "results_table.csv") as f:
+        ukn = {row["regime"]: row for row in csv.DictReader(f) if row["filter"] == "UKN"}
+    highmc = {row["filter"]: row for row in json.loads((out / "anees_highmc.json").read_text())["results"]}
+    assert list(ukn) == ["nominal", "high_maneuver", "high_noise", "low_noise", "heavy_tailed", "scenarios"]
+    assert list(highmc) == ["EKF", "UKF", "IMM", "UKN"]
+    states, measurements = bench_eval._load(data_dir / "test.npz")
+    nominal = bench_eval.evaluate_dataset(*bench_eval.ukn_entry(load_weights(weights), NOMINAL.dt, NOMINAL.R()), states, measurements)
+    consistency = bench_eval.summarize_consistency(nominal)
+    assert float(ukn["nominal"]["pos_rmse"]) == bench_eval.summarize_rmse(nominal)[0]
+    for key in ("anees_mean", "anis_mean", "coverage_68", "coverage_95"):
+        assert float(ukn["nominal"][key]) == consistency[key]
+
+
+def test_latency_bench_times_the_numpy_unscented_kalmannet_step(tmp_path, monkeypatch):
+    """MS-43: the UKN figure is the page's numpy step plus the NEES/NIS scoring, on the exported weights."""
+    from scripts import bench_latency
+
+    nominal = {"dt": NOMINAL.dt, "sigma_az_rad": 0.001, "sigma_el_rad": 0.001, "sigma_range_m": 2.0}
+    (tmp_path / "manifest.json").write_text(json.dumps({"regimes": {"nominal": nominal}}))
+    tuning = tmp_path / "imm_tuning.json"
+    tuning.write_text(json.dumps({"best": json.loads((REPO / "web" / "imm_tuning.json").read_text())["best"]}))
+    weights = tmp_path / "ukn.npz"
+    export_npz(stand_in_network().state_dict(), weights)
+    stepped = []
+    monkeypatch.setattr(bench_latency, "ukn_steps", lambda w, *args: stepped.append(w) or ukn_steps(w, *args))
+    out = tmp_path / "latency.json"
+    argv = ["bench_latency.py", "--data-dir", str(tmp_path), "--imm-tuning", str(tuning), "--ukn-weights", str(weights),
+            "--n-warmup", "1", "--n-measure", "2", "--out", str(out)]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    bench_latency.main()
+
+    timed = json.loads(out.read_text())["results_ms"]
+    assert timed["UKN-numpy"]["median_ms"] > 0.0
+    assert [sorted(w) for w in stepped] == [sorted(load_weights(weights))]
