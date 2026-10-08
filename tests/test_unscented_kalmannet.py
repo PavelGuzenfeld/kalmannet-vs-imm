@@ -381,3 +381,26 @@ def test_latency_bench_times_the_numpy_unscented_kalmannet_step(tmp_path, monkey
     timed = json.loads(out.read_text())["results_ms"]
     assert timed["UKN-numpy"]["median_ms"] > 0.0
     assert [sorted(w) for w in stepped] == [sorted(load_weights(weights))]
+
+
+def test_tuning_script_scores_each_checkpoint_on_val_under_the_nominal_r(tmp_path, monkeypatch):
+    """MS-46: rows come from val.npz through the page's numpy forward under nominal R, c_K read off the weights."""
+    from scripts import tune_ukn
+
+    data_dir, weights = tmp_path / "datasets", tmp_path / "ukn" / "best.npz"
+    toy = ["--n-train", "1", "--n-val", "1", "--n-test", "1", "--n-sweep", "1", "--mc-test", "1", "--n-highmc", "1"]
+    subprocess.run([sys.executable, "scripts/make_dataset.py", "--out", data_dir, *toy, "--mc-highmc", "1"], cwd=REPO, check=True)
+    weights.parent.mkdir()
+    export_npz(stand_in_network().state_dict(), weights)
+    out = tmp_path / "tuning.json"
+    monkeypatch.setattr(sys, "argv", ["tune_ukn.py", str(weights), "--data-dir", str(data_dir), "--out", str(out)])
+    monkeypatch.chdir(REPO)
+
+    tune_ukn.main()
+
+    tuning = json.loads(out.read_text())
+    states, measurements = bench_eval._load(data_dir / "val.npz")
+    expected = tune_ukn.validation_row(weights, NOMINAL.dt, NOMINAL.R(), states, measurements)
+    assert expected["gain_scale"] == STAND_IN_GAIN_SCALE
+    assert tuning["rows"] == json.loads(json.dumps([expected]))
+    assert tuning["best"] == json.loads(json.dumps(expected))

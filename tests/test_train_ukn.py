@@ -16,6 +16,7 @@ from scripts.train_ukn import (
     updated_weight,
     warmup_ramp,
 )
+from scripts.tune_ukn import selected
 
 LOG_RTOL = 4 * np.finfo(np.float64).eps
 WEIGHT_ARGS = argparse.Namespace(weight_rate=0.5, weight_target=0.1, weight_bounds=[0.1, 10.0])
@@ -102,3 +103,43 @@ def test_nominal_r_is_the_diagonal_of_the_manifest_sigmas_squared():
     """MS-11: sigmas 0.5 rad, 0.25 rad and 3 m give R = diag(0.25, 0.0625, 9), exact in binary."""
     manifest = {"regimes": {"nominal": {"sigma_az_rad": 0.5, "sigma_el_rad": 0.25, "sigma_range_m": 3.0}}}
     assert np.array_equal(nominal_R(manifest), np.diag([0.25, 0.0625, 9.0]))
+
+
+def tuning_row(gain_scale, pos_rmse, diverged_fraction, anees_mean):
+    return dict(gain_scale=gain_scale, pos_rmse=pos_rmse, diverged_fraction=diverged_fraction, anees_mean=anees_mean)
+
+
+def test_tuning_drops_a_run_past_ten_percent_of_the_best_rmse_even_at_anees_nine():
+    """MS-46: c_K is chosen on validation; 2.25 m is past 1.1 x 2.0 m, so its ANEES of 9 cannot win."""
+    rows = [tuning_row(0.1, 2.0, 0.0, 100.0), tuning_row(0.3, 2.25, 0.0, 9.0)]
+    assert selected(rows) == rows[0]
+
+
+def test_tuning_keeps_a_run_exactly_at_the_rmse_slack_and_picks_its_nearer_anees():
+    """MS-46: 1.1 x 2.0 is 2.2 exactly in binary, so the edge row is inside the band and wins on ANEES."""
+    rows = [tuning_row(0.1, 2.0, 0.0, 18.0), tuning_row(0.3, 2.2, 0.0, 9.0)]
+    assert selected(rows) == rows[1]
+
+
+def test_tuning_drops_a_run_more_than_five_points_of_divergence_above_the_fewest():
+    """MS-46: 0.0625 diverged is past 0 + 0.05, so that run drops out whatever its ANEES."""
+    rows = [tuning_row(0.1, 2.0, 0.0, 100.0), tuning_row(0.3, 2.0, 0.0625, 9.0)]
+    assert selected(rows) == rows[0]
+
+
+def test_tuning_breaks_an_anees_tie_in_log_ratio_towards_the_smaller_gain_scale():
+    """MS-46: 9/2 and 18 sit at the same |log(ANEES/9)|, so the smaller c_K wins."""
+    rows = [tuning_row(1.0, 2.0, 0.0, 18.0), tuning_row(0.3, 2.0, 0.0, 4.5)]
+    assert selected(rows) == rows[1]
+
+
+def test_tuning_keeps_a_run_exactly_at_the_diverged_slack_of_the_fewest():
+    """MS-46: 0 + 0.05 is 0.05 exactly, so the edge row is inside the 5-point band and wins on ANEES."""
+    rows = [tuning_row(0.1, 2.0, 0.0, 18.0), tuning_row(0.3, 2.0, 0.05, 9.0)]
+    assert selected(rows) == rows[1]
+
+
+def test_tuning_measures_anees_against_the_state_dimension_of_nine():
+    """MS-46: ANEES 9 sits at log ratio 0 and ANEES 1 at log 9, so 9 wins even with the larger c_K."""
+    rows = [tuning_row(0.1, 2.0, 0.0, 1.0), tuning_row(0.3, 2.0, 0.0, 9.0)]
+    assert selected(rows) == rows[1]

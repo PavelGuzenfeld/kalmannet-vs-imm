@@ -174,7 +174,7 @@ def main():
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--trunc-len", type=int, default=25)
     ap.add_argument("--lr", type=float, default=1e-3)
-    ap.add_argument("--gain-scale", type=float, default=1.0, help="c_K of eq 20")
+    ap.add_argument("--gain-scale", type=float, default=0.3, help="c_K of eq 20, chosen on validation by scripts/tune_ukn.py")
     ap.add_argument("--gain-weight", type=float, default=1e-2, help="w_ΔK of eq 28, on ‖ΔK‖²/‖K_UKF‖²")
     ap.add_argument("--calibration-soft-clamp", type=float, default=9.0, help="c of eq 23")
     ap.add_argument("--student-dof", type=float, default=4.0, help="ν_df of eq 24")

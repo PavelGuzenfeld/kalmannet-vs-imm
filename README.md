@@ -44,8 +44,13 @@ for p in 0.05 0.1 0.2; do ./docker_run.sh python scripts/train_knet.py --dropout
     && ./docker_run.sh python scripts/export_weights.py results/bkn_p$p/best.pt; done
 ./docker_run.sh python scripts/tune_bkn.py results/bkn_p*/best.npz   # picks p and J on val.npz
 cp -r results/bkn_p0.2 results/bkn && ./docker_run.sh python scripts/eval.py   # adds the BKN rows
+for c in 0.1 0.3 1.0; do ./docker_run.sh python scripts/train_ukn.py --gain-scale $c --out results/ukn_ck$c \
+    && ./docker_run.sh python scripts/export_weights.py results/ukn_ck$c/best.pt; done
+./docker_run.sh python scripts/tune_ukn.py results/ukn_ck*/best.npz   # picks c_K on val.npz
+cp -r results/ukn_ck0.3 results/ukn && ./docker_run.sh python scripts/eval.py   # adds the UKN rows
 ./docker_run.sh python scripts/bench_latency.py --knet-checkpoint results/knet_vanilla/best.pt \
-    --rkn-checkpoint results/rkn/best.pt --bench-rkn-reference-default --bkn-weights results/bkn/best.npz
+    --rkn-checkpoint results/rkn/best.pt --bench-rkn-reference-default --bkn-weights results/bkn/best.npz \
+    --ukn-weights results/ukn/best.npz
 ./docker_run.sh python scripts/make_plots.py
 ./docker_run.sh python scripts/make_animation.py
 ```
