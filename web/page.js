@@ -17,6 +17,7 @@ const ENVELOPE_SLIDERS = {
   max_negative_load_factor: { toSlider: (value) => value, fromSlider: (value) => value },
   brake_drag_multiplier: { toSlider: (value) => value, fromSlider: (value) => value },
   afterburner_thrust_multiplier: { toSlider: (value) => value, fromSlider: (value) => value },
+  min_altitude_m: { toSlider: (value) => value, fromSlider: (value) => value },
   max_roll_rate_rad_s: { id: "max_roll_rate_deg_s", toSlider: (rad) => (rad * 180) / Math.PI, fromSlider: (deg) => (deg * Math.PI) / 180 },
 };
 const STEERING_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "KeyW", "KeyS", "KeyA", "KeyD", "Space", "ShiftLeft", "ShiftRight"]);
@@ -91,6 +92,7 @@ function showEnvelope() {
 function applyScenarioToUi(scenario) {
   envelope = { ...LEGACY_ENVELOPE, ...scenario.envelope };
   envelope.max_negative_load_factor ??= -envelope.max_load_factor;
+  envelope.min_altitude_m ??= 0;
   showEnvelope();
   byId("seed").value = scenario.seed;
   byId("noise_regime").value = scenario.noise_regime;

@@ -37,10 +37,11 @@ class Holds:
     """Overwrites the held axes of each full control row.
     bank_rad is tracked the way data/fixed_wing.fly_steps tracks it, which does not report it."""
 
-    def __init__(self, envelope: Envelope, dt_s: float, bank_rad: float = 0.0):
+    def __init__(self, envelope: Envelope, dt_s: float, bank_rad: float = 0.0, sensor_altitude_m: float = 0.0):
         self.envelope = envelope
         self.dt_s = dt_s
         self.bank_rad = bank_rad
+        self.sensor_altitude_m = sensor_altitude_m
         self.targets = {}
 
     def toggle(self, name, position_m, velocity_m_s):
@@ -85,10 +86,17 @@ class Holds:
         bank = np.arctan(turn_rate * np.linalg.norm(velocity_m_s) / STANDARD_GRAVITY_M_S2)
         return float(np.clip(bank, -MAX_HOLD_BANK_RAD, MAX_HOLD_BANK_RAD))
 
+    def _target_altitude_m(self):
+        """Sensor-centred; the envelope's min_altitude_m is world altitude."""
+        floor_m = self.envelope.min_altitude_m
+        if floor_m is None:
+            return self.targets[ALTITUDE]
+        return max(self.targets[ALTITUDE], floor_m - self.sensor_altitude_m)
+
     def _load_factor(self, position_m, velocity_m_s):
         envelope = self.envelope
         omega = ALTITUDE_NATURAL_FREQUENCY_RAD_S
-        altitude_error_m = self.targets[ALTITUDE] - position_m[2]
+        altitude_error_m = self._target_altitude_m() - position_m[2]
         climb_acceleration = omega**2 * altitude_error_m - 2.0 * omega * velocity_m_s[2]
         flight_path_rad = np.arcsin(velocity_m_s[2] / np.linalg.norm(velocity_m_s))
         lift_up = max(np.cos(self.bank_rad) * np.cos(flight_path_rad), 1.0 / envelope.max_load_factor)

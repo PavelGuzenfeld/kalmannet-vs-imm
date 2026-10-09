@@ -28,7 +28,8 @@ def full_control_row(control: Sequence[float]) -> tuple[float, ...]:
 @dataclass(frozen=True)
 class Envelope:
     """min_speed is stall (1 g lift); max_speed is the level full-throttle equilibrium.
-    max_negative_load_factor is signed; None, as recorded before #107, pushes to -max_load_factor."""
+    max_negative_load_factor is signed; None, as recorded before #107, pushes to -max_load_factor.
+    min_altitude_m is world altitude above z = 0, not sensor-centred; None is no floor. Evade and holds steer by it."""
 
     min_speed_m_s: float
     max_speed_m_s: float
@@ -38,6 +39,7 @@ class Envelope:
     max_negative_load_factor: float | None = None
     brake_drag_multiplier: float = 1.0
     afterburner_thrust_multiplier: float = 1.0
+    min_altitude_m: float | None = None
 
     def __post_init__(self) -> None:
         if self.max_negative_load_factor is not None and self.max_negative_load_factor > 0.0:
@@ -51,10 +53,10 @@ class Envelope:
 
 DEFAULT_PRESET = "benchmark"
 PRESETS = {
-    "benchmark": Envelope(NOMINAL.speed0[0], NOMINAL.speed0[1], 9.0, float(np.deg2rad(180.0)), 2.0, -4.5, 3.0, 1.5),
-    "small aerial object": Envelope(12.0, 45.0, 4.0, float(np.deg2rad(120.0)), 0.5, -2.0, 2.0, 1.0),
-    "light aircraft": Envelope(25.0, 70.0, 3.8, float(np.deg2rad(60.0)), 0.3, -1.5, 2.0, 1.0),
-    "jet": Envelope(70.0, 300.0, 9.0, float(np.deg2rad(240.0)), 1.0, -3.0, 3.0, 1.5),
+    "benchmark": Envelope(NOMINAL.speed0[0], NOMINAL.speed0[1], 9.0, float(np.deg2rad(180.0)), 2.0, -4.5, 3.0, 1.5, min_altitude_m=0.0),
+    "small aerial object": Envelope(12.0, 45.0, 4.0, float(np.deg2rad(120.0)), 0.5, -2.0, 2.0, 1.0, min_altitude_m=0.0),
+    "light aircraft": Envelope(25.0, 70.0, 3.8, float(np.deg2rad(60.0)), 0.3, -1.5, 2.0, 1.0, min_altitude_m=0.0),
+    "jet": Envelope(70.0, 300.0, 9.0, float(np.deg2rad(240.0)), 1.0, -3.0, 3.0, 1.5, min_altitude_m=0.0),
 }
 NO_ENVELOPE_CHANGES: Mapping[int, Envelope] = MappingProxyType({})
 

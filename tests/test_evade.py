@@ -15,6 +15,9 @@ from web.evade import (
     alternating_signs,
     beam_direction,
     climb_within_speed_limits,
+    floor_binds,
+    floor_recovery_direction,
+    pull_up_drop_m,
     evade_rows,
     steer_row,
 )
@@ -344,7 +347,7 @@ def test_evade_is_seeded_by_the_scenario_seed_and_the_engage_step_apart_from_the
 ):
     seeded = []
     monkeypatch.setattr(
-        live_flight, "evade_rows", lambda read_envelope, dt_s, rng, read_truth: seeded.append(rng)
+        live_flight, "evade_rows", lambda read_envelope, dt_s, rng, read_truth, sensor_altitude_m: seeded.append(rng)
     )
     flight = head_on_flight(tmp_path)
 
@@ -357,7 +360,7 @@ def test_evade_is_seeded_by_the_scenario_seed_and_the_engage_step_apart_from_the
 def test_live_evade_reads_the_truth_the_flight_flew_and_its_lift(tmp_path, monkeypatch):
     read = []
     monkeypatch.setattr(
-        live_flight, "evade_rows", lambda read_envelope, dt_s, rng, read_truth: read.append(read_truth)
+        live_flight, "evade_rows", lambda read_envelope, dt_s, rng, read_truth, sensor_altitude_m: read.append(read_truth)
     )
     flight = head_on_flight(tmp_path)
 
@@ -424,3 +427,130 @@ def test_once_on_the_beam_the_target_jinks_toward_and_away_from_the_sensor():
     on_beam = states[round(EVADE_WITHIN_S / DT_S) :]
     radial_speed = np.einsum("ij,ij->i", on_beam[:, 0:3], on_beam[:, 3:6])
     assert np.count_nonzero(np.diff(np.sign(radial_speed))) >= 4
+
+
+FLOOR_SENSOR_ALTITUDE_M = 100.0
+FLOOR_M = 280.0
+FLOOR_START = {"position": [0.0, 4000.0, 300.0], "velocity": [0.0, -110.0, 0.0]}
+FLOOR_FLIGHT_STEPS = 1500
+DIVING_SEED = 5
+
+
+def lowest_world_altitude_m(tmp_path, envelope):
+    setup = {
+        "seed": DIVING_SEED,
+        "envelope": asdict(envelope),
+        "noise_regime": "nominal",
+        "thresholds": DEFAULT_THRESHOLDS,
+        "start": FLOOR_START,
+        "sensor": {"position": [0.0, 0.0, FLOOR_SENSOR_ALTITUDE_M]},
+    }
+    imm_best = json.loads(PAGE_IMM_TUNING.read_text())["best"]
+    flight = live_flight.LiveFlight(setup, imm_best, tmp_path)
+    flight.engage_evade()
+    lowest = np.inf
+    for _ in range(FLOOR_FLIGHT_STEPS):
+        flight.advance(PILOT_ROW)
+        lowest = min(lowest, flight.frame()["truth_m"][2])
+    return lowest
+
+
+def test_evading_stays_above_the_envelope_min_altitude_over_a_raised_sensor(tmp_path):
+    assert lowest_world_altitude_m(tmp_path, replace(ENVELOPE, min_altitude_m=FLOOR_M)) >= FLOOR_M
+
+
+def test_the_same_flight_without_a_floor_dives_below_it(tmp_path):
+    assert lowest_world_altitude_m(tmp_path, replace(ENVELOPE, min_altitude_m=None)) < FLOOR_M
+
+
+FLOOR_WORLD_M = 100.0
+STRAIGHT_DOWN_M_S = np.array([0.0, 0.0, -100.0])
+CLIMB_RAD = np.deg2rad(CLIMB_ANGLE_DEG)
+
+
+def test_a_floor_binds_only_within_the_margin_above_it_when_not_descending():
+    floor = replace(ENVELOPE, min_altitude_m=FLOOR_WORLD_M)
+    level = np.array([0.0, 100.0, 0.0])
+    edge_m = 110.0
+
+    assert floor_binds(floor, edge_m, level)
+    assert not floor_binds(floor, np.nextafter(edge_m, np.inf), level)
+
+
+def test_no_floor_never_binds():
+    assert not floor_binds(replace(ENVELOPE, min_altitude_m=None), -1e9, STRAIGHT_DOWN_M_S)
+
+
+def test_a_climbing_target_loses_no_altitude_pulling_up():
+    assert pull_up_drop_m(ENVELOPE, np.array([0.0, 100.0, 5.0])) == 0.0
+
+
+def test_a_vertical_dive_drops_the_roll_and_turn_lag_at_the_dive_rate_plus_a_quarter_circle_at_spare_g():
+    roll_and_turn_lag_s = 0.5 + np.pi / ENVELOPE.max_roll_rate_rad_s
+    spare_g = ENVELOPE.max_load_factor - 1.0
+
+    drop = pull_up_drop_m(ENVELOPE, STRAIGHT_DOWN_M_S)
+
+    assert drop == pytest.approx(
+        100.0 * roll_and_turn_lag_s + 100.0**2 / (STANDARD_GRAVITY_M_S2 * spare_g), abs=FLOAT_ROUNDING
+    )
+
+
+def test_pulling_up_with_no_lift_to_spare_drops_without_bound():
+    stall_dive = np.array([0.0, 0.0, -ENVELOPE.min_speed_m_s])
+
+    assert pull_up_drop_m(ENVELOPE, stall_dive) == np.inf
+
+
+@pytest.mark.parametrize(
+    "speed, climb_rad",
+    [(np.nextafter(1.5 * ENVELOPE.min_speed_m_s, np.inf), CLIMB_RAD), (1.5 * ENVELOPE.min_speed_m_s, 0.0)],
+)
+def test_floor_recovery_climbs_along_the_beam_heading_above_forced_dive_speed_and_holds_level_at_or_below(
+    speed, climb_rad
+):
+    direction = floor_recovery_direction(ENVELOPE, np.array([1.0, 0.0, -0.5]), np.array([0.0, speed, 0.0]))
+
+    heading = [1.0, 0.0] if climb_rad else [0.0, 1.0]
+    assert direction == pytest.approx(
+        [np.cos(climb_rad) * heading[0], np.cos(climb_rad) * heading[1], np.sin(climb_rad)], abs=FLOAT_ROUNDING
+    )
+
+
+@pytest.mark.parametrize(
+    "direction, velocity, heading",
+    [
+        (UP, np.array([100.0, 0.0, 0.0]), [1.0, 0.0]),
+        (UP, np.array([0.0, 0.0, 100.0]), [0.0, 1.0]),
+    ],
+)
+def test_floor_recovery_from_a_vertical_beam_direction_keeps_the_velocity_heading_then_north(
+    direction, velocity, heading
+):
+    recovery = floor_recovery_direction(ENVELOPE, direction, velocity)
+
+    assert recovery == pytest.approx(
+        [np.cos(CLIMB_RAD) * heading[0], np.cos(CLIMB_RAD) * heading[1], np.sin(CLIMB_RAD)], abs=FLOAT_ROUNDING
+    )
+
+
+def test_a_floor_set_while_evading_turns_the_very_next_row_from_a_dive_to_the_climb_up():
+    live = {"envelope": replace(ENVELOPE, min_altitude_m=None)}
+    diving = (np.array([0.0, 4000.0, 0.0]), np.array([0.0, -110.0, -30.0]), UP)
+    rows = evade_rows(lambda: live["envelope"], DT_S, np.random.default_rng(0), lambda: diving)
+    unfloored = next(rows)
+
+    live["envelope"] = replace(ENVELOPE, min_altitude_m=0.0)
+
+    assert next(rows)[1] > unfloored[1]
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_evade_without_a_sensor_altitude_reads_the_truth_z_as_world_altitude(seed):
+    level = (np.array([0.0, 4000.0, 110.0]), np.array([0.0, -110.0, 0.0]), UP)
+
+    def first_row(floor):
+        envelope = replace(ENVELOPE, min_altitude_m=floor)
+        return next(evade_rows(lambda: envelope, DT_S, np.random.default_rng(seed), lambda: level))
+
+    assert first_row(100.0) != first_row(None)
