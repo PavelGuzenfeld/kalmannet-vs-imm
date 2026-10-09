@@ -24,6 +24,7 @@ from scripts.replay import SEED_SCENARIO_SEED, break_turn_controls, numpy_weight
 from tests.test_numpy_forward import knet_stand_in, rkn_stand_in
 from tests.test_replay import recorded_before_wider_row
 from tests.test_unscented_kalmannet import stand_in_network
+from tests.test_cholesky_kalmannet import stand_in_network as ckn_stand_in
 from filters.state import POS
 from scripts.eval import ekf_like_steps, imm_steps, run_ekf_like
 from web.live_flight import (
@@ -48,7 +49,8 @@ LEVEL_RUN_IN_STEPS = 50
 def learned(tmp_path):
     """Seeded stand-in checkpoints for replay, and their .npz where the page looks for them."""
     checkpoints = {}
-    for name, net in (("KalmanNet", knet_stand_in()), ("RKN", rkn_stand_in()), ("BKN", knet_stand_in()), ("UKN", stand_in_network())):
+    for name, net in (("KalmanNet", knet_stand_in()), ("RKN", rkn_stand_in()), ("BKN", knet_stand_in()), ("UKN", stand_in_network()),
+                      ("CKN", ckn_stand_in())):
         checkpoints[name] = tmp_path / f"{name}.pt"
         torch.save(net.state_dict(), checkpoints[name])
         npz = tmp_path / "site" / LEARNED_WEIGHTS[name]
@@ -91,6 +93,8 @@ def replay_lines(scenario_path, checkpoints):
             str(checkpoints["BKN"]),
             "--ukn-checkpoint",
             str(checkpoints["UKN"]),
+            "--ckn-checkpoint",
+            str(checkpoints["CKN"]),
         ],
         cwd=REPO,
         capture_output=True,
@@ -187,6 +191,7 @@ def test_learned_filter_without_exported_weights_reads_unavailable_and_is_left_o
     }
     assert flags["BKN"] == dict.fromkeys(FLAGS, "not available (no weights at results/bkn/best.npz)")
     assert flags["UKN"] == dict.fromkeys(FLAGS, "not available (no weights at results/ukn/best.npz)")
+    assert flags["CKN"] == dict.fromkeys(FLAGS, "not available (no weights at results/ckn/best.npz)")
     assert set(json.loads(flight.scenario_json())["tripped"]) == {"EKF", "UKF", "IMM"}
 
 

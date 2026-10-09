@@ -170,6 +170,24 @@ def ukn_entry(weights, dt, R):
     )
 
 
+def ckn_steps(weights, dt, R, x_true, z, snapshot=None):
+    """Yields (err[9], nees, nis) per step of the numpy Cholesky-KalmanNet, NEES through its own factor of P."""
+    flt = numpy_forward.CholeskyKalmanNetFilter(numpy_forward.CholeskyKalmanNetwork(weights), dt, R)
+    for t, (truth, z_t) in enumerate(zip(x_true, z)):
+        if t == 0:
+            flt.init_sequence(truth + _INIT_OFFSET)
+        x, P_factor, nis = flt.step(z_t)
+        _remember(snapshot, P=P_factor @ P_factor.T)
+        yield *error_and_nees(x, P_factor, truth), nis
+
+
+def ckn_entry(weights, dt, R):
+    return (
+        lambda: weights,
+        lambda flt_weights, x_true, z: _stacked(until_diverged(ckn_steps(flt_weights, dt, R, x_true, z))),
+    )
+
+
 def rkn_steps(weights, dt, x_true, z, snapshot=None):
     """Yields (err[9], nees) per step of the numpy RKN; live-drivable."""
     flt = numpy_forward.RKNFilter(numpy_forward.RKNGainCovNetwork(weights), dt)
@@ -253,6 +271,7 @@ def main():
     ap.add_argument("--bkn-weights", type=Path, default=Path("results/bkn/best.npz"))
     ap.add_argument("--bkn-realisations", type=int, default=BKN_REALISATIONS)
     ap.add_argument("--ukn-weights", type=Path, default=Path("results/ukn/best.npz"))
+    ap.add_argument("--ckn-weights", type=Path, default=Path("results/ckn/best.npz"))
     ap.add_argument("--out", default="results")
     args = ap.parse_args()
 
@@ -270,6 +289,7 @@ def main():
 
     bkn_weights = numpy_forward.load_weights(args.bkn_weights) if args.bkn_weights.exists() else None
     ukn_weights = numpy_forward.load_weights(args.ukn_weights) if args.ukn_weights.exists() else None
+    ckn_weights = numpy_forward.load_weights(args.ckn_weights) if args.ckn_weights.exists() else None
 
     def make_filters(regime_name):
         R = R_for(regime_name)
@@ -287,6 +307,8 @@ def main():
             filters["BKN"] = bkn_entry(bkn_weights, dt, R, dropout_p, args.bkn_realisations)
         if ukn_weights is not None:
             filters["UKN"] = ukn_entry(ukn_weights, dt, R)
+        if ckn_weights is not None:
+            filters["CKN"] = ckn_entry(ckn_weights, dt, R)
         return filters
 
     rows = []

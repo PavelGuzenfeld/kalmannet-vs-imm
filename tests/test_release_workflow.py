@@ -4,7 +4,7 @@ from pathlib import Path
 from scripts.eval import BKN_DROPOUT_P
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "release.yml"
-MODELS = ["knet", "rkn", "bkn", "ukn"]
+MODELS = ["knet", "rkn", "bkn", "ukn", "ckn"]
 CHECKPOINT_FILES = ["best.pt", "best.npz", "training_log.json"]
 
 
@@ -25,7 +25,8 @@ def test_release_attaches_every_model_checkpoint_and_exported_weight_as_an_asset
 
 
 def test_training_jobs_export_the_weights_the_release_attaches():
-    for job, model_dir in [("train-knet", "knet_vanilla"), ("train-rkn", "rkn"), ("train-bkn", "bkn"), ("train-ukn", "ukn")]:
+    for job, model_dir in [("train-knet", "knet_vanilla"), ("train-rkn", "rkn"), ("train-bkn", "bkn"), ("train-ukn", "ukn"),
+                           ("train-ckn", "ckn")]:
         block = job_block(job)
         assert f"scripts/export_weights.py results/{model_dir}/best.pt" in block
         assert f"path: results/{model_dir}/" in block

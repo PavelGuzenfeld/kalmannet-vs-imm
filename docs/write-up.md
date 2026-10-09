@@ -347,6 +347,63 @@ of the best position RMSE, the ANEES closest to 9 in log ratio, the smaller `c_K
 column; it sits inside the grid. The checkpoints were trained from the tree of this PR's first
 commit before its last bitwise-equivalent rewrites (artifacts stamped `staged-129`).
 
+### 1.9 Cholesky-KalmanNet (`filters/knet/ckn_*.py`, `filters/knet/numpy_forward.py`, `scripts/train_ckn.py`, `scripts/tune_ckn.py`, #136)
+
+Cholesky-KalmanNet (CKN; Ko & Shafieezadeh, IEEE SPL 32 (2025) 326–330) is ported from its
+released code, `github.com/RAMSIS-Lab/ckn-spl-public`, onto our CV f and az/el/range h. Spec lines
+are MS-51 to MS-53 in #1. Source-notes sec. 3 lists what the released code does that the paper
+does not say.
+
+- **Structure (MS-51).** CKN is Split-KalmanNet with a PDEL on both outputs. Branch 1 learns the
+  prior covariance G¹ and branch 2 the inverse innovation covariance G². The gain is
+  `K = G¹ Hᵀ G²`. Each branch is Linear(→960)–ReLU, a 2-layer GRU of 180, then
+  Linear(→108)–ReLU–Linear, sized by the reference's dnn.py formulas: 1,751,535 parameters. The PDEL
+  fills a lower-triangular factor row by row and sets its diagonal to `|a| + 1e-8` (eq 4).
+- **Units, deviation.** The reference trains on unit-scale toys. Here `S⁻¹` reaches about 1e6 rad⁻²
+  on the angles, so the factors are emitted in scaled units: `G¹ = D_x L₁L₁ᵀ D_x` and
+  `G² = D_z⁻¹ L₂L₂ᵀ D_z⁻¹`. `D_x` is KalmanNet's σ_init (30 m, 3 m/s, 0.5 m/s²) and `D_z` is the
+  nominal measurement σ. The features use the same units, including the Jacobian as
+  `D_z⁻¹ H D_x`.
+- **Not ported from the reference.**
+  - Its posterior line is a Hadamard product by operator precedence. Ours is the Joseph form at
+    the learned prior, carried as a QR factor (MS-52).
+  - It inverts branch 2's output twice, adding a 1e-8 jitter in between. We use `K = G¹ Hᵀ G²`
+    directly.
+  - Its GRU start states are random and are not saved with the weights. Ours start at zero.
+  - It never wraps angles. Ours wraps `y` and `z_t − z_{t−1}`. The linearisation error
+    `h(x̂) − H x̂` is exactly `[az, el, 0]` for our h, so it enters as `[sin az, cos az, el]`.
+  - Its output layer uses PyTorch's default init. Ours starts with diagonal bias 2⁻⁶ and 1, because
+    a zero factor gets no gradient through `L Lᵀ`.
+- **NIS** is `yᵀ G² y`: S = (G²)⁻¹ is CKN's own innovation covariance, not `H G¹ Hᵀ + R`.
+- **Training (MS-53).**
+  - Loss eq 5–7 with the reference's reductions: `(1 − β)` times the MSE averaged over the 9 states,
+    plus `β` times the L1 summed over all 81 entries of `e eᵀ − P`. Entries are weighted by KalmanNet's
+    1/σ_init², so both terms are unitless.
+  - As in the reference, Adam runs at 5e-4 on one branch at a time, alternating every step, with
+    the gradient clipped to 1. We clip the active branch only.
+  - As in our other learned filters: truncated BPTT of 25 steps, batch 32, at most 30 epochs with
+    patience 6 on validation position RMSE, and seed 0.
+  - **The released β = 0.05 does not mean what it means in the reference.** Summed over 81 entries,
+    the L1 term is 16× the MSE term untrained and 24× after a smoke run. On the reference's 2-state
+    toy it is at most about 3.3×. So β = 0.05 weights the two terms about 1:1 here, where the
+    reference weights MSE about 6:1, and β ≈ 0.01 reproduces the reference's balance.
+
+**Choosing β on validation only** (`results/ckn_tuning.json`, `val.npz`, 200 trajectories, 1 noise
+realisation each, through the page's numpy forward pass). One run per β in {0.01, 0.05, 0.25}, a grid
+fixed before training. The best epochs were 2, 5 and 5 of 9, 12 and 12 run, about 1.5–1.8 h each
+with the three running in parallel on 6 threads each. The selection rule is BKN's (sec. 1.7).
+
+| β | Pos RMSE (m) | Vel RMSE (m/s) | Diverged | ANEES | ANIS | Coverage@68/95 |
+|---|---|---|---|---|---|---|
+| 0.01 | 9.00 | 12.47 | 1.5% | 1.4e11 | 8.59 | 0.001 / 0.002 |
+| 0.05 (released) | 7.16 | 12.51 | 1.5% | 2.7e12 | 12.6 | 0.000 / 0.000 |
+| **0.25** | **5.19** | 12.92 | 2.5% | **31,325** | 36.5 | **0.002 / 0.006** |
+
+**β = 0.25** is the tuned β. It is the only run inside the 10% RMSE band, and it also has the ANEES
+closest to 9. It sits at the top edge of the grid, so a larger β was not tried. Every run's validation RMSE swung by 10× or more between epochs
+(β = 0.05: 563, 154, 3268, 30, 410, 10.6 m over epochs 0–5), so the selected checkpoints are single
+lucky epochs, not converged runs.
+
 ## 2. Results
 
 All numbers below: full `datasets/test.npz` (200 trajectories x 5 Monte Carlo noise
@@ -612,6 +669,45 @@ ANIS 5.61 (bounds 2.54-3.50), coverage 0.256 / 0.350. Against UKF 906,769 (0.036
   the paper admits, L_cal sees only diag(P) (MS-48); this run does not separate the diagonal from
   the joint shortfall, because per-axis coverage is not computed (follow-up).
 
+### 2.6 Cholesky-KalmanNet: positive definite, not calibrated, about 6x IMM's nominal error
+
+Both β values of sec. 1.9 were run on the same test sets with the same metric code as every other
+filter. The released β = 0.05 is in `results/eval_ckn/` and the tuned β = 0.25 in
+`results/eval_ckn_tuned/`, each its own `scripts/eval.py` run. Their EKF, UKF and IMM rows
+reproduce sec. 2.5's. Pos RMSE is in metres, with the diverged fraction in brackets where it is
+non-zero. ANEES is the full 9-dim one.
+
+| Regime | IMM | RKN | UKN | CKN β=0.05 | CKN β=0.25 | ANEES 0.05 / 0.25 | ANIS 0.05 / 0.25 | Coverage@95 0.05 / 0.25 |
+|---|---|---|---|---|---|---|---|---|
+| nominal | **1.17** | 1.49 | 1.66 | 7.75 (2.0%) | 6.75 (2.2%) | 1.1e11 / 93,357 | 18.9 / 75.5 | 0.001 / 0.006 |
+| high_maneuver | 2.53 | **1.89** | 2.35 | 17.14 | 5.49 (2.0%) | 5.6e10 / 63,550 | 28.2 / 63.1 | 0.001 / 0.005 |
+| high_noise | **3.88** | 5.00 | 5.39 | 9.84 (4.0%) | 7.55 (5.6%) | 2.9e13 / 48,737 | 55.4 / 185.7 | 0.000 / 0.000 |
+| low_noise | **0.44** | 0.68 | 0.73 | 7.24 | 3.61 | 2.1e11 / 23,005 | 11.2 / 20.5 | 0.004 / 0.090 |
+| heavy_tailed | **2.09** | 2.46 | 2.78 | 7.89 (2.4%) | 2.75 (2.8%) | 6.3e10 / 10,582 | 29.1 / 25.6 | 0.000 / 0.001 |
+| scenarios (2 flights) | **1.49** | 1.49 | 1.58 | 22.65 (50%) | 33.79 (50%) | 1.4e10 / 1.0e6 | 648 / 1,731 | 0.026 / 0.006 |
+
+High-MC calibration (5 trajectories x 100 realisations, bounds 8.19–9.85): CKN ANEES **4.3e11** at
+β = 0.05 and **14,339** at β = 0.25. ANIS is 9.7 and 11.1 (bounds 2.54–3.50), and coverage is
+0.001 / 0.001 and 0.003 / 0.007. For comparison, IMM is at 9.53 (0.702 / 0.862).
+
+- **Positive definite, as built.** Every emitted P is symmetric and passes Cholesky at every step
+  of both committed scenarios, for all three trained checkpoints. The largest cond(P) is 2.2e10
+  (β = 0.05, break turn). This is the slice test's property checked on trained weights
+  (`tests/test_cholesky_kalmannet.py` checks it on a stand-in).
+- **Accuracy.** CKN does not reach the other learned filters. Nominal error is 6.6x IMM's at
+  β = 0.05 and 5.8x at β = 0.25, and 2–6% of runs diverge in most regimes. On the overhead pass
+  its median position error was 76–412 m across the three checkpoints, the large-H̃ region the
+  MS-51 open item names. Training never settled. Validation RMSE swung by 10x or more between
+  epochs at every β, so these checkpoints are the best single epochs, not converged runs.
+  Lowering Adam's 5e-4 is the first thing to try. It is the reference's value, kept on purpose.
+- **Calibration.** The PDEL makes P positive definite, not right-sized. P is far too small at both
+  β: coverage is under 1% where 68% and 95% are expected. Raising β from 0.05 to 0.25 cuts the
+  high-MC ANEES by 7 orders of magnitude, to 1,500x its upper bound, and also lowers the error
+  in all five test regimes (not on the two scenarios). The released β is the worse of the two here
+  (sec. 1.9 explains why 0.05 does not mean the same thing at 9 states). The pattern matches the
+  RKN paper's criticism of CKN's calibration (source-notes sec. 2), but in this benchmark the
+  accuracy gap is the larger problem.
+
 ## 3. Deployment analysis (Jetson Orin, JetPack 6.2; GPU reserved for vision, CPU/DLA/PVA only)
 
 Component versions confirmed from NVIDIA's JetPack 6.2 archived release notes:
@@ -630,6 +726,7 @@ median/p99 — methodology per the brief; `results/latency.json`)
 | Recursive KalmanNet (trained, 2 GRUs, 301,266 params) | 0.559 | 0.772 | 3.6x headroom |
 | Bayesian KalmanNet (numpy, J = 20 passes of the 526,116-param gain network, plus NEES/NIS) | **4.183** | **4.548** | **over budget, 2.1x at the median** |
 | Unscented KalmanNet (numpy, UKF backbone + 3 GRU calls, 130,420 params, plus NEES/NIS; separate loaded run, see below) | 0.644 | 0.762 | 3.1x headroom |
+| Cholesky-KalmanNet (numpy, two branches of Linear + 2-layer GRU, 1,751,535 params, plus NEES/NIS; separate loaded run, see below) | 1.146 | 1.380 | 1.7x headroom |
 | Recursive KalmanNet (**reference-default sizing**, 7,847,112 params, untrained) | **2.759** | **3.831** | **over budget at median, not just p99** |
 
 Measured on an x86 dev host (not the Orin), one container pinned to a single idle core
@@ -643,6 +740,13 @@ a separate run pinned to one idle core of the same host while other jobs loaded 
 0.059 ms, 3.0x and 2.3x their rows above, so UKN is about 1.9x the UKF in the same run, and its
 unloaded figure is likely lower than 0.644 ms. A step is 19 sigma points twice, three GRU calls
 (NoiseNet's Q and R stages, GainNet) and three Cholesky factorisations (two of P, one of S).
+
+The CKN row is the page's numpy forward pass (`scripts/bench_latency.py --ckn-weights`), measured in
+a separate run on one pinned core of the same host while other jobs loaded it (load average about 10
+on 20 cores; `results/ckn_latency.json`). In that run the UKF took 0.417 ms and the IMM 0.764 ms,
+3.6x and 3.2x their rows above. CKN was 2.7x the UKF in the same run, so its unloaded figure is
+probably lower than 1.146 ms. CKN keeps the reference's sizes, and a step runs two 2-layer GRUs whose
+input layer is 960 wide.
 
 The BKN row is the page's numpy forward pass (`scripts/bench_latency.py --bkn-weights`), measured in
 a separate run on one pinned core of the same host (`results/eval_bkn/latency.json`; the other rows
@@ -857,18 +961,8 @@ the minimum acceptable deliverable, with the deployment mapping table required r
   learned ones, deployment mapping table with measured CPU latency (both learned filters, at two
   RKN sizes) and a documented DLA/PVA audit. A bug was caught and fixed along the way (IMM's
   heavy-tailed-regime NaN, sec. 2.4) and the whole evaluation re-run afterward for consistency.
-- **Not completed**: Cholesky-KalmanNet (the second consistency-corrected variant mentioned as an
-  alternative in the brief; official code also exists at `github.com/RAMSIS-Lab/ckn-spl-public` per
-  [#14](source-notes.md) sec. 3) and the ensemble-of-KalmanNets stretch goal. Building and debugging one
-  consistency-corrected variant (RKN) already required porting a second from-repo architecture,
-  fixing a second angle-wrap gap the reference never needed, and a full from-real-data training +
-  evaluation cycle (sec. 1.6, 2.3). A second variant with a different, likely similarly-effortful
-  calibration mechanism (Cholesky-KalmanNet's PDEL layer) was judged lower-value than the sweep/bug
-  work already banked. RKN already answers the brief's core question ("can a
-  consistency-corrected variant produce a real calibration number where vanilla KalmanNet cannot"
-  — yes) and Cholesky-KalmanNet's own related-work section ([#14](source-notes.md) sec. 3) reports a known
-  calibration weakness in its released hyperparameters, making it a less promising second data point
-  than a different comparison (e.g. more RKN training budget, sec. 4 condition 1) would be.
+- **Not completed**: the ensemble-of-KalmanNets stretch goal. Cholesky-KalmanNet, listed here
+  before, has since been built (sec. 1.9, 2.6, #136).
 - **Also not completed**: the DLA-reconstructed feedforward gain-network variant and the
   quantization-vs-consistency (FP16/INT8) calibration-drift measurement (sec. 3.2). The latter is
   now meaningful (RKN produces a covariance to degrade) but presupposes a DLA-sized network, which

@@ -14,7 +14,7 @@ from playwright import sync_api  # noqa: E402
 CASES_DIR = Path(os.environ.get("PAGE_CASES_DIR", "build/browser"))
 CASES_URL_PATH = "/build/browser"
 FLIGHT_TIMEOUT_MS = 240_000
-LEARNED_FILTERS = ("KalmanNet", "RKN", "BKN", "UKN")
+LEARNED_FILTERS = ("KalmanNet", "RKN", "BKN", "UKN", "CKN")
 LARGE_RADIUS_CASE = "break_turn_9g"
 LARGE_RADIUS_CASE_STEPS = 296
 DEFAULT_CAMERA_DISTANCE_M = 180.0

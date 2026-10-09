@@ -147,9 +147,37 @@ jobs:
           name: ukn-checkpoint
           path: results/ukn/
 
+  train-ckn:
+    needs: dataset
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build bench image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          tags: kalmannet-bench:cpu
+          load: true
+          cache-from: type=gha
+      - uses: actions/download-artifact@v8
+        with:
+          name: datasets
+          path: datasets/
+      - name: Train Cholesky-KalmanNet
+        run: |
+          ./docker_run.sh python scripts/train_ckn.py --out results/ckn
+          ./docker_run.sh python scripts/export_weights.py results/ckn/best.pt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ckn-checkpoint
+          path: results/ckn/
+
   release:
     if: github.ref_type == 'tag'
-    needs: [train-knet, train-rkn, train-bkn, train-ukn]
+    needs: [train-knet, train-rkn, train-bkn, train-ukn, train-ckn]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
@@ -168,12 +196,16 @@ jobs:
         with:
           name: ukn-checkpoint
           path: ukn/
+      - uses: actions/download-artifact@v8
+        with:
+          name: ckn-checkpoint
+          path: ckn/
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir assets
-          for model in knet rkn bkn ukn; do
+          for model in knet rkn bkn ukn ckn; do
             for file in best.pt best.npz training_log.json; do
               cp "$model/$file" "assets/$model-$file"
             done
@@ -182,7 +214,7 @@ jobs:
 
   site:
     if: github.ref_type == 'tag'
-    needs: [train-knet, train-rkn, train-bkn, train-ukn]
+    needs: [train-knet, train-rkn, train-bkn, train-ukn, train-ckn]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -211,6 +243,10 @@ jobs:
         with:
           name: ukn-checkpoint
           path: results/ukn/
+      - uses: actions/download-artifact@v8
+        with:
+          name: ckn-checkpoint
+          path: results/ckn/
       - name: Build site
         run: |
           ./docker_run.sh python scripts/build_site.py --tag "$GITHUB_REF_NAME"

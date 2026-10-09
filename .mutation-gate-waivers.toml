@@ -341,3 +341,11 @@ reason = """Training driver, as scripts/train_knet.py: its output is a checkpoin
 training, so a test would either retrain (too slow for the gate) or pin one run's weights (not a
 requirement). The loss terms, warmup ramp, EMA, adaptive weight and epoch diagnostics it calls are
 tested in tests/test_train_ukn.py; the filter step is gated in filters/knet/."""
+
+[[waiver]]
+file = "scripts/train_ckn.py"
+uncovered = true
+reason = """Training driver, as scripts/train_ukn.py: its output is a checkpoint after an hour or more of CPU
+training, so a test would either retrain (too slow for the gate) or pin one run's weights (not a
+requirement). The loss and the one-branch-at-a-time alternation it runs are tested in
+tests/test_train_ckn.py; the filter step is gated in filters/knet/."""

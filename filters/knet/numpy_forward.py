@@ -1,4 +1,4 @@
-"""Torch-free forward pass of KalmanNet, Bayesian KalmanNet, RKN and Unscented KalmanNet for Pyodide, which has numpy but no torch (#2 decision 5).
+"""Torch-free forward pass of KalmanNet, Bayesian KalmanNet, RKN, Unscented and Cholesky-KalmanNet for Pyodide, which has numpy but no torch (#2 decision 5).
 Mirrors gain_network/knet_filter/rkn_network/rkn_filter on one unbatched flight; weights are the torch
 state_dict as arrays keyed by its own names, read by load_weights from torch_ops.export_npz's .npz."""
 
@@ -23,6 +23,12 @@ VARIANCE_MULTIPLIER_MIN, VARIANCE_MULTIPLIER_MAX = 0.1, 50.0
 LOG_VARIANCE_SATURATION = 4.0
 OFF_DIAGONAL_SATURATION = 1.0
 TORCH_LAYER_NORM_EPS = 1e-5
+PDEL_EPSILON = 1e-8
+LINEARISATION_FEATURE_DIM = 3
+CKN_PRIOR_FEATURE_DIM = 2 * STATE_DIM + LINEARISATION_FEATURE_DIM + MEAS_DIM * STATE_DIM
+CKN_INNOVATION_FEATURE_DIM = 2 * MEAS_DIM + LINEARISATION_FEATURE_DIM + MEAS_DIM * STATE_DIM
+CKN_BRANCHES = {"prior": STATE_DIM, "innovation": MEAS_DIM}
+CKN_GRU_LAYERS = 2
 
 
 def load_weights(npz):
@@ -44,10 +50,10 @@ def sigmoid(x):
     return np.where(x >= 0.0, 1.0, decay) / (1.0 + decay)
 
 
-def gru_cell(weights, prefix, x, hidden):
-    """One step of a single-layer torch.nn.GRU; gate rows stacked (reset, update, new) as torch stores them."""
-    input_gates = weights[f"{prefix}weight_ih_l0"] @ x + weights[f"{prefix}bias_ih_l0"]
-    hidden_gates = weights[f"{prefix}weight_hh_l0"] @ hidden + weights[f"{prefix}bias_hh_l0"]
+def gru_cell(weights, prefix, x, hidden, layer=0):
+    """One step of one layer of a torch.nn.GRU; gate rows stacked (reset, update, new) as torch stores them."""
+    input_gates = weights[f"{prefix}weight_ih_l{layer}"] @ x + weights[f"{prefix}bias_ih_l{layer}"]
+    hidden_gates = weights[f"{prefix}weight_hh_l{layer}"] @ hidden + weights[f"{prefix}bias_hh_l{layer}"]
     i_r, i_z, i_n = np.split(input_gates, GRU_GATES)
     h_r, h_z, h_n = np.split(hidden_gates, GRU_GATES)
     r = sigmoid(i_r + h_r)
@@ -427,3 +433,80 @@ class RKNFilter:
         self.S = np.linalg.qr(np.vstack([(IKH @ self.F @ self.S).T, L.T]), mode="r").T
         self.x = x_upd
         return x_upd, self.S @ self.S.T
+
+
+def lower_triangular_factor(entries, size):
+    """Eq 4's PDEL: entries fill the lower triangle row by row, the diagonal through |a| + ε, so L′L′ᵀ is PD."""
+    factor = np.zeros((size, size))
+    factor[np.tril_indices(size)] = entries
+    factor[np.diag_indices(size)] = np.abs(np.diag(factor)) + PDEL_EPSILON
+    return factor
+
+
+def linearisation_feature(x_prior):
+    """h(x̂) − H x̂ is exactly [az, el, 0] for this h (MS-51); azimuth enters as sine and cosine, so ±π never shows."""
+    azimuth, elevation, _ = h(x_prior)
+    return np.array([np.sin(azimuth), np.cos(azimuth), elevation])
+
+
+class CholeskyKalmanNetwork:
+    def __init__(self, weights):
+        self.weights = weights
+        self.state_scale = weights["state_scale"]
+        self.measurement_scale = weights["measurement_scale"]
+
+    def init_hidden(self):
+        w = self.weights
+        return {
+            branch: np.zeros((CKN_GRU_LAYERS, w[f"{branch}.gru.weight_hh_l0"].shape[1])) for branch in CKN_BRANCHES
+        }
+
+    def branch(self, name, features, hidden):
+        w = self.weights
+        x = relu(linear(w, f"{name}.encoder.0.", features))
+        stepped = []
+        for layer, layer_hidden in enumerate(hidden):
+            x = gru_cell(w, f"{name}.gru.", x, layer_hidden, layer)
+            stepped.append(x)
+        entries = linear(w, f"{name}.decoder.2.", relu(linear(w, f"{name}.decoder.0.", x)))
+        return lower_triangular_factor(entries, CKN_BRANCHES[name]), np.array(stepped)
+
+
+class CholeskyKalmanNetFilter:
+    """Split-KalmanNet with PDEL outputs on the CV f and the az/el/range h (MS-51, MS-52): K = G¹ Hᵀ G², with
+    G¹ = D_x L₁L₁ᵀ D_x and G² = D_z⁻¹ L₂L₂ᵀ D_z⁻¹. step returns x, a factor of the Joseph-form P, and NIS yᵀ G² y."""
+
+    def __init__(self, network, dt, R):
+        self.net = network
+        self.F, _ = cv_model(dt)
+        self.R_factor = np.linalg.cholesky(R)
+
+    def init_sequence(self, x0):
+        self.hidden = self.net.init_hidden()
+        self.x = self.x_previous = x0
+        self.x_prior_previous = self.F @ x0
+        self.z_previous = None
+
+    def step(self, z):
+        net = self.net
+        x_prior = self.F @ self.x
+        H = H_jacobian(x_prior)
+        y = innovation(z, x_prior)
+        z_diff = wrap_measurement_diff(z - (z if self.z_previous is None else self.z_previous))
+        scaled_H = (H * net.state_scale / net.measurement_scale[:, np.newaxis]).flatten()
+        linearisation = linearisation_feature(x_prior)
+        correction = (self.x - self.x_prior_previous) / net.state_scale
+        increment = (self.x - self.x_previous) / net.state_scale
+        prior_features = np.concatenate([correction, increment, linearisation, scaled_H])
+        innovation_features = np.concatenate([y / net.measurement_scale, z_diff / net.measurement_scale, linearisation, scaled_H])
+        L_prior, self.hidden["prior"] = net.branch("prior", prior_features, self.hidden["prior"])
+        L_innovation, self.hidden["innovation"] = net.branch("innovation", innovation_features, self.hidden["innovation"])
+        prior_factor = net.state_scale[:, np.newaxis] * L_prior
+        inverse_innovation_factor = L_innovation / net.measurement_scale[:, np.newaxis]
+        K = prior_factor @ prior_factor.T @ H.T @ inverse_innovation_factor @ inverse_innovation_factor.T
+        self.x_prior_previous, self.x_previous, self.z_previous = x_prior, self.x, z
+        self.x = x_prior + K @ y
+        IKH = np.eye(STATE_DIM) - K @ H
+        P_factor = np.linalg.qr(np.vstack([(IKH @ prior_factor).T, (K @ self.R_factor).T]), mode="r").T
+        whitened = inverse_innovation_factor.T @ y
+        return self.x, P_factor, whitened @ whitened

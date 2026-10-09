@@ -36,7 +36,7 @@ from filters.plot_data import imm_kwargs_from_tuning
 from filters.state import POS
 from filters.torch_ops import export_npz
 from filters.ukf import UKF
-from scripts.eval import bkn_filter, bkn_steps, knet_steps, rkn_steps, run_ekf_like, run_imm, ukn_steps
+from scripts.eval import bkn_filter, bkn_steps, ckn_steps, knet_steps, rkn_steps, run_ekf_like, run_imm, ukn_steps
 from scripts.eval_knet import _INIT_OFFSET, _priors
 from scripts.eval_rkn import evaluate_dataset as rkn_errors_and_nees
 
@@ -130,11 +130,23 @@ def ukn_run(checkpoint, states, z, R):
     return np.array(err), np.array(nees), np.array(nis)
 
 
+def ckn_run(checkpoint, states, z, R):
+    err, nees, nis = zip(*until_diverged(ckn_steps(numpy_weights(checkpoint), NOMINAL.dt, R, states, z)))
+    return np.array(err), np.array(nees), np.array(nis)
+
+
 LEARNED_BACKENDS = {"torch": (knet_errors, rkn_run), "numpy": (knet_errors_numpy, rkn_run_numpy)}
 
 
 def replay(
-    scenario, imm_tuning, knet_checkpoint, rkn_checkpoint, learned_backend="torch", bkn_checkpoint=None, ukn_checkpoint=None
+    scenario,
+    imm_tuning,
+    knet_checkpoint,
+    rkn_checkpoint,
+    learned_backend="torch",
+    bkn_checkpoint=None,
+    ukn_checkpoint=None,
+    ckn_checkpoint=None,
 ):
     """Filters assume nominal R whatever the scenario's noise regime. Returns {filter: trips dict or skip reason}."""
     states, z = fly_scenario(scenario)
@@ -173,6 +185,10 @@ def replay(
         out["UKN"] = trips(*ukn_run(ukn_checkpoint, states, z, R))
     else:
         out["UKN"] = f"skipped, no checkpoint at {ukn_checkpoint}"
+    if ckn_checkpoint is not None and ckn_checkpoint.exists():
+        out["CKN"] = trips(*ckn_run(ckn_checkpoint, states, z, R))
+    else:
+        out["CKN"] = f"skipped, no checkpoint at {ckn_checkpoint}"
     return out
 
 
@@ -184,6 +200,7 @@ def main():
     ap.add_argument("--rkn-checkpoint", type=Path, default=Path("results/rkn/best.pt"))
     ap.add_argument("--bkn-checkpoint", type=Path, default=Path("results/bkn/best.pt"))
     ap.add_argument("--ukn-checkpoint", type=Path, default=Path("results/ukn/best.pt"))
+    ap.add_argument("--ckn-checkpoint", type=Path, default=Path("results/ckn/best.pt"))
     ap.add_argument("--learned-backend", choices=LEARNED_BACKENDS, default="torch")
     ap.add_argument("--record", action="store_true", help="write the scripted seed scenario to SCENARIO first")
     ap.add_argument("--overhead", action="store_true", help="with --record, write the overhead pass instead")
@@ -195,7 +212,7 @@ def main():
         scenario = json.loads(args.scenario.read_text())
     results = replay(
         scenario, args.imm_tuning, args.knet_checkpoint, args.rkn_checkpoint, args.learned_backend, args.bkn_checkpoint,
-        args.ukn_checkpoint,
+        args.ukn_checkpoint, args.ckn_checkpoint,
     )
     for name, trips in results.items():
         if isinstance(trips, str):
