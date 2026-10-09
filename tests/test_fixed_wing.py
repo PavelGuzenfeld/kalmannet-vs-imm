@@ -356,10 +356,10 @@ def test_default_preset_spans_the_benchmark_speed_envelope():
 def test_named_presets_pin_the_values_recorded_in_issue_2_decision_49():
     """Scenarios record the envelope by value, so this guards the preset table itself, not any replay."""
     assert {name: astuple(envelope) for name, envelope in PRESETS.items()} == {
-        "benchmark": (20.0, 250.0, 9.0, np.deg2rad(180.0), 2.0, -4.5, 3.0, 1.5),
-        "small aerial object": (12.0, 45.0, 4.0, np.deg2rad(120.0), 0.5, -2.0, 2.0, 1.0),
-        "light aircraft": (25.0, 70.0, 3.8, np.deg2rad(60.0), 0.3, -1.5, 2.0, 1.0),
-        "jet": (70.0, 300.0, 9.0, np.deg2rad(240.0), 1.0, -3.0, 3.0, 1.5),
+        "benchmark": (20.0, 250.0, 9.0, np.deg2rad(180.0), 2.0, -4.5, 3.0, 1.5, 0.0),
+        "small aerial object": (12.0, 45.0, 4.0, np.deg2rad(120.0), 0.5, -2.0, 2.0, 1.0, 0.0),
+        "light aircraft": (25.0, 70.0, 3.8, np.deg2rad(60.0), 0.3, -1.5, 2.0, 1.0, 0.0),
+        "jet": (70.0, 300.0, 9.0, np.deg2rad(240.0), 1.0, -3.0, 3.0, 1.5, 0.0),
     }
 
 

@@ -344,3 +344,58 @@ def test_heading_hold_far_off_heading_banks_no_further_than_thirty_degrees():
 def velocity_toward(heading_deg, speed_m_s):
     heading = np.deg2rad(heading_deg)
     return np.array([np.sin(heading), np.cos(heading), 0.0]) * speed_m_s
+
+
+RAISED_SENSOR_M = 100.0
+FLOOR_ABOVE_SENSOR_M = 50.0
+WORLD_FLOOR_M = RAISED_SENSOR_M + FLOOR_ABOVE_SENSOR_M
+LEVEL_AT_SENSOR_ALTITUDE_M = np.zeros(3)
+
+
+@pytest.mark.parametrize(
+    "min_altitude_m, climb_m", [(WORLD_FLOOR_M, FLOOR_ABOVE_SENSOR_M), (None, 0.0), (RAISED_SENSOR_M - 10.0, 0.0)]
+)
+def test_altitude_hold_below_the_world_floor_climbs_to_it_from_a_raised_sensor(min_altitude_m, climb_m):
+    envelope = replace(PRESETS["benchmark"], min_altitude_m=min_altitude_m)
+    velocity = [0.0, 60.0, 0.0]
+    holds = Holds(envelope, NOMINAL.dt, sensor_altitude_m=RAISED_SENSOR_M)
+    holds.toggle(ALTITUDE, LEVEL_AT_SENSOR_ALTITUDE_M, velocity)
+
+    row = holds.steer(CRUISE, LEVEL_AT_SENSOR_ALTITUDE_M, velocity)
+
+    omega = ALTITUDE_NATURAL_FREQUENCY_RAD_S
+    assert row[LOAD_FACTOR] == pytest.approx(
+        1.0 + omega**2 * climb_m / STANDARD_GRAVITY_M_S2, abs=FLOAT_ROUNDING_M_S2
+    )
+
+
+def test_a_floor_raised_mid_hold_lifts_the_hold_target_without_re_engaging():
+    holds = Holds(PRESETS["benchmark"], NOMINAL.dt, sensor_altitude_m=RAISED_SENSOR_M)
+    velocity = [0.0, 60.0, 0.0]
+    holds.toggle(ALTITUDE, LEVEL_AT_SENSOR_ALTITUDE_M, velocity)
+    level = holds.steer(CRUISE, LEVEL_AT_SENSOR_ALTITUDE_M, velocity)[LOAD_FACTOR]
+
+    holds.envelope = replace(holds.envelope, min_altitude_m=WORLD_FLOOR_M)
+
+    assert holds.steer(CRUISE, LEVEL_AT_SENSOR_ALTITUDE_M, velocity)[LOAD_FACTOR] > level
+
+
+def test_live_altitude_hold_below_the_world_floor_over_a_raised_sensor_pulls_up(tmp_path):
+    envelope = replace(PRESETS["benchmark"], min_altitude_m=WORLD_FLOOR_M)
+    setup = {
+        "seed": 7,
+        "envelope": asdict(envelope),
+        "noise_regime": "nominal",
+        "thresholds": DEFAULT_THRESHOLDS,
+        "start": {"position": [0.0, 0.0, WORLD_FLOOR_M - 30.0], "velocity": [0.0, 60.0, 0.0]},
+        "sensor": {"position": [0.0, 0.0, RAISED_SENSOR_M]},
+    }
+    live = LiveFlight(setup, json.loads(PAGE_IMM_TUNING.read_text())["best"], tmp_path)
+    live.toggle_hold(ALTITUDE)
+
+    live.advance(CRUISE)
+
+    omega = ALTITUDE_NATURAL_FREQUENCY_RAD_S
+    assert live.controls[-1][LOAD_FACTOR] == pytest.approx(
+        1.0 + omega**2 * 30.0 / STANDARD_GRAVITY_M_S2, abs=FLOAT_ROUNDING_M_S2
+    )

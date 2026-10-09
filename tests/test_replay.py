@@ -409,3 +409,16 @@ def test_replay_does_not_trip_a_flag_that_would_only_trip_after_the_divergence_s
 
     cut_flags = {"track_loss": None, "overconfidence": None, "raw_error": None, "diverged": DIVERGES_AT_STEP}
     assert [tripped[name] for name in ("EKF", "UKF", "IMM")] == [cut_flags] * 3
+
+
+@pytest.mark.parametrize("committed", [SEED_SCENARIO, OVERHEAD_SCENARIO], ids=lambda path: path.stem)
+def test_committed_scenario_recorded_without_min_altitude_flies_bit_for_bit_the_truth_it_flies_with_it(committed):
+    """MS-27, #144: min_altitude_m steers evade and holds only, so replaying recorded rows never reads it."""
+    scenario = json.loads(committed.read_text())
+    without = {**scenario, "envelope": {k: v for k, v in scenario["envelope"].items() if k != "min_altitude_m"}}
+
+    states, _ = fly_scenario(scenario)
+    states_without, _ = fly_scenario(without)
+
+    assert "min_altitude_m" in scenario["envelope"]
+    assert states.tobytes() == states_without.tobytes()

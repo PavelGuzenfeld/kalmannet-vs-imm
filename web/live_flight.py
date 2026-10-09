@@ -120,7 +120,7 @@ class LiveFlight:
             envelope, position, velocity, 0.0, latest_control, self._regime.dt, self._envelope_changes
         )
         self._start = np.concatenate((position, velocity))
-        self.holds = Holds(envelope, self._regime.dt)
+        self.holds = Holds(envelope, self._regime.dt, sensor_altitude_m=self._sensor[2])
         self._truth, self._lift_direction, self._z = None, None, None
         truth, z = _latest(lambda: self._truth), _latest(lambda: self._z)
         R, dt = NOMINAL.R(), NOMINAL.dt
@@ -162,7 +162,9 @@ class LiveFlight:
         self.cancel_manoeuvre()
         self.holds.disengage_axes(range(len(NEUTRAL_ROW)))
         rng = np.random.default_rng([self.setup["seed"], len(self.controls)])
-        self._evade_rows = evade_rows(lambda: self._envelope, self._regime.dt, rng, self._evader_truth)
+        self._evade_rows = evade_rows(
+            lambda: self._envelope, self._regime.dt, rng, self._evader_truth, self._sensor[2]
+        )
 
     def disengage_evade(self):
         self._evade_rows = None

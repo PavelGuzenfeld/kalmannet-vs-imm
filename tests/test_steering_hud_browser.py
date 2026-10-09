@@ -141,12 +141,12 @@ ROW_LOAD_FACTOR, ROW_THROTTLE = 1, 2
 ROW_RUDDER, ROW_BRAKE, ROW_AFTERBURNER = 3, 4, 5
 BENCHMARK_MAX_SIDE_G = 2.0
 EXPORT_LAG_FRAMES = 8
-SLIDER_IDS = ("max_side_load_factor", "max_negative_load_factor", "brake_drag_multiplier", "afterburner_thrust_multiplier")
+SLIDER_IDS = ("max_side_load_factor", "max_negative_load_factor", "brake_drag_multiplier", "afterburner_thrust_multiplier", "min_altitude_m")
 PRESET_SLIDERS = {
-    "benchmark": (2.0, -4.5, 3.0, 1.5),
-    "small aerial object": (0.5, -2.0, 2.0, 1.0),
-    "light aircraft": (0.3, -1.5, 2.0, 1.0),
-    "jet": (1.0, -3.0, 3.0, 1.5),
+    "benchmark": (2.0, -4.5, 3.0, 1.5, 0.0),
+    "small aerial object": (0.5, -2.0, 2.0, 1.0, 0.0),
+    "light aircraft": (0.3, -1.5, 2.0, 1.0, 0.0),
+    "jet": (1.0, -3.0, 3.0, 1.5, 0.0),
 }
 
 
@@ -297,7 +297,7 @@ def test_a_legacy_scenario_gets_neutral_defaults_for_the_new_limits(browser):
     with page.expect_download() as download:
         page.click("#export")
     flown = json.loads(Path(download.value.path()).read_text())["envelope"]
-    assert shown == (0.0, -LEGACY_MAX_LOAD_FACTOR, 1.0, 1.0)
+    assert shown == (0.0, -LEGACY_MAX_LOAD_FACTOR, 1.0, 1.0, 0.0)
     assert tuple(flown[key] for key in SLIDER_IDS) == shown
 
 
@@ -480,6 +480,7 @@ LIGHT_AIRCRAFT_ENVELOPE = {
     "max_negative_load_factor": -1.5,
     "brake_drag_multiplier": 2.0,
     "afterburner_thrust_multiplier": 1.0,
+    "min_altitude_m": 0.0,
 }
 
 
