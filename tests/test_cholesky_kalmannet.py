@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 
-from data.config import NOMINAL
+from data.config import NOMINAL, REGIMES
 from data.trajectory_gen import fly_scenario
 from filters.knet import ckn_network, numpy_forward
 from filters.knet.ckn_filter import CholeskyKalmanNetFilter
@@ -256,8 +256,9 @@ def test_batched_training_filter_steps_each_trajectory_as_if_it_were_alone():
 
 
 def test_eval_reports_cholesky_kalmannet_rmse_anees_nis_and_coverage_on_every_regime(imm_tuning, tmp_path, monkeypatch):  # noqa: F811
-    """MS-52: CKN sits beside EKF, UKF and IMM in results_table.csv on nominal, the four shifted regimes and the
-    scenarios, and in the high-MC calibration file, each row its own evaluation."""
+    """MS-52: CKN sits beside EKF, UKF and IMM in results_table.csv on nominal, the four shifted regimes (each under
+    its own R, checked on high_noise) and the scenarios, and in the high-MC calibration file, each row its own
+    evaluation."""
     data_dir, out, weights = tmp_path / "datasets", tmp_path / "results", tmp_path / "ckn.npz"
     toy = ["--n-train", "1", "--n-val", "1", "--n-test", "1", "--n-sweep", "1", "--mc-test", "2", "--n-highmc", "1"]
     subprocess.run([sys.executable, "scripts/make_dataset.py", "--out", data_dir, *toy, "--mc-highmc", "2"], cwd=REPO, check=True)
@@ -280,6 +281,11 @@ def test_eval_reports_cholesky_kalmannet_rmse_anees_nis_and_coverage_on_every_re
     assert float(ckn["nominal"]["pos_rmse"]) == bench_eval.summarize_rmse(nominal)[0]
     for key in ("anees_mean", "anis_mean", "coverage_68", "coverage_95"):
         assert float(ckn["nominal"][key]) == consistency[key]
+    high_noise = REGIMES["high_noise"]
+    states, measurements = bench_eval._load(data_dir / "test_high_noise.npz")
+    shifted = bench_eval.evaluate_dataset(*bench_eval.ckn_entry(load_weights(weights), high_noise.dt, high_noise.R()), states, measurements)
+    assert float(ckn["high_noise"]["pos_rmse"]) == bench_eval.summarize_rmse(shifted)[0]
+    assert float(ckn["high_noise"]["anis_mean"]) == bench_eval.summarize_consistency(shifted)["anis_mean"]
 
 
 def test_latency_bench_times_the_numpy_cholesky_kalmannet_step(tmp_path, monkeypatch):
@@ -314,3 +320,13 @@ def test_eval_starts_cholesky_kalmannet_from_the_offset_truth_as_kalmannet_and_r
     flt = numpy_forward.CholeskyKalmanNetFilter(numpy_forward.CholeskyKalmanNetwork(weights), NOMINAL.dt, NOMINAL.R())
     flt.init_sequence(states[0] + _INIT_OFFSET)
     assert np.array_equal(error, flt.step(z[0])[0] - states[0])
+
+
+def test_snapshot_covariance_is_the_one_the_nees_was_scored_with():
+    """MS-52: eᵀ P⁻¹ e on the snapshot P equals the NEES whitened through P's factor, to 1e-9 relative, the solve
+    against the squared factor rounding at cond(P) ≤ 1e6 here times eps."""
+    states, z = fly_scenario(json.loads(BREAK_TURN.read_text()))
+    snapshot = {}
+    steps = ckn_steps(numpy_weights(stand_in_network()), NOMINAL.dt, NOMINAL.R(), states, z, snapshot)
+    for _, (error, nees, _) in zip(range(50), steps):
+        assert error @ np.linalg.solve(snapshot["P"], error) == pytest.approx(nees, rel=1e-9)

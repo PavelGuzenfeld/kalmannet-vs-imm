@@ -318,11 +318,12 @@ def test_frame_carries_ellipsoids_for_covariance_filters_and_mode_probabilities_
 
 
 def test_frame_ellipsoid_comes_from_the_covariance_that_scored_the_nees(learned):
-    """MS-10: RKN's plotted covariance is the P its NEES is computed from; read before the stand-in diverges."""
+    """MS-10, MS-52: RKN's and CKN's plotted covariance is the P their NEES is computed from; read before the stand-ins diverge."""
     weights_root, _ = learned
     frame = page_flight(weights_root, steps=LEVEL_RUN_IN_STEPS).frame()["filters"]
 
     assert frame["RKN"]["ellipsoid"] is not None
+    assert frame["CKN"]["ellipsoid"] is not None
     assert frame["KalmanNet"]["ellipsoid"] is None
 
 
