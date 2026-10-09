@@ -173,6 +173,32 @@ Repository: `https://par.nsf.gov/servlets/purl/10656999`. Read in full.
   acceleration model tracking a Segway robot from noisy velocity/GPS/odometry). CKN wins on MSE
   and on run-to-run stability (narrowest MSE variance across 10 retrainings) in all three.
 - **Code**: `github.com/RAMSIS-Lab/ckn-spl-public` (stated in paper).
+- **What the released code does that the paper does not say** (read for #136, `GSSFiltering/dnn.py`,
+  `filtering.py`, `trainer.py`, `config.ini`):
+  - Sizes: H1 = (m+n)·80, H2 = m·n·4, a 2-layer GRU of hidden size 2(m²+n²), Linear–ReLU before it
+    and Linear–ReLU–Linear after it, one copy per branch. Branch 1 reads [x̂_{t−2|t−2} − x̂_{t−1|t−2},
+    x̂_{t−1|t−1} − x̂_{t−2|t−2}, h(x̂) − H x̂, vec H]. Branch 2 reads [y_t, z_t − z_{t−1}, h(x̂) − H x̂,
+    vec H]. Inputs are raw, not normalised. The code's first feature is not the commented
+    x̂_{t−1|t−1} − x̂_{t−1|t−2}, but the two differ by the second feature, so one linear layer
+    carries the same information.
+  - PDEL is `spdlayers.Cholesky(symmetry='anisotropic', positive='Abs', min_value=1e-8)`.
+  - Branch 2's output is inverted inside the network (`inv(C₂) + 1e-8 I`) and then inverted again in
+    the filter (`K = P Hᵀ inv(S)`). K is therefore C₂-based up to the 1e-8 jitter, which is about 1% of
+    our 1e-6 rad² angle variances.
+  - The posterior is `(I−KH) @ Pk * (I−KH).T + K R Kᵀ`. Since `@` and `*` share precedence, that is a
+    Hadamard product, not the Joseph form. The released Σ̂ is not PD by construction.
+  - GRU hidden states start from `torch.randn` drawn once at construction. They are not a buffer and
+    are not saved with the weights.
+  - Angles are never wrapped. h(x̂) − H x̂ equals [az, el, 0] for an az/el/range h: H's angle rows are
+    orthogonal to position, and range is homogeneous of degree 1. So the feature carries the ±π
+    azimuth cut.
+  - Loss `empirical_averaging_all`: MSE averaged over every element, and L1 summed over all q² entries
+    of e eᵀ − Σ̂ and averaged over batch and time. β = 0.05. Training uses Adam at 5e-4 on one branch
+    at a time, alternating every batch, with batch 4, gradient norm clipped to 1, and validation by MSE.
+  - Our port (MS-51 to MS-53, #136) keeps the sizes, features, PDEL, β, learning rate, alternation and
+    clip. It fixes the posterior to the Joseph form, carried as a QR factor. It drops both inversions
+    (K = G¹ Hᵀ G²), starts the GRUs at zero, wraps y and z_diff, and feeds h(x̂) − H x̂ as
+    [sin az, cos az, el]. It also scales features and outputs by D_x = σ_init and D_z = σ_R.
 
 **Status: read primary source in full** (complete PDF via NSF public-access mirror of the IEEE SPL
 accepted manuscript).

@@ -192,11 +192,13 @@ def test_replay_prints_the_recorded_first_trip_step_of_every_flag_per_filter(tmp
         missing,
         "--bkn-checkpoint",
         missing,
+        "--ckn-checkpoint",
+        missing,
         "--ukn-checkpoint",
         missing,
     )
 
-    assert set(lines) == {"EKF", "UKF", "IMM", "KalmanNet", "RKN", "BKN", "UKN"}
+    assert set(lines) == {"EKF", "UKF", "IMM", "KalmanNet", "RKN", "BKN", "UKN", "CKN"}
     assert set(scenario["tripped"]) == {"EKF", "UKF", "IMM"}
     assert BREAK_TURN_START_STEP < scenario["tripped"]["EKF"]["track_loss"] < BREAK_TURN_END_STEP
     for name, trips in scenario["tripped"].items():
@@ -205,6 +207,7 @@ def test_replay_prints_the_recorded_first_trip_step_of_every_flag_per_filter(tmp
     assert lines["RKN"] == f"RKN: skipped, no checkpoint at {missing}"
     assert lines["BKN"] == f"BKN: skipped, no checkpoint at {missing}"
     assert lines["UKN"] == f"UKN: skipped, no checkpoint at {missing}"
+    assert lines["CKN"] == f"CKN: skipped, no checkpoint at {missing}"
 
 
 def test_replay_skips_imm_without_a_tuning_file_instead_of_inventing_parameters(tmp_path):

@@ -48,9 +48,14 @@ for c in 0.1 0.3 1.0; do ./docker_run.sh python scripts/train_ukn.py --gain-scal
     && ./docker_run.sh python scripts/export_weights.py results/ukn_ck$c/best.pt; done
 ./docker_run.sh python scripts/tune_ukn.py results/ukn_ck*/best.npz   # picks c_K on val.npz
 cp -r results/ukn_ck0.3 results/ukn && ./docker_run.sh python scripts/eval.py   # adds the UKN rows
+for b in 0.01 0.05 0.25; do ./docker_run.sh python scripts/train_ckn.py --beta $b --out results/ckn_b$b \
+    && ./docker_run.sh python scripts/export_weights.py results/ckn_b$b/best.pt; done
+./docker_run.sh python scripts/tune_ckn.py results/ckn_b*/best.npz   # picks the calibration β on val.npz
+cp -r results/ckn_b0.05 results/ckn && ./docker_run.sh python scripts/eval.py   # adds the CKN rows, released β
+./docker_run.sh python scripts/eval.py --ckn-weights results/ckn_b0.25/best.npz --out results/eval_ckn_tuned
 ./docker_run.sh python scripts/bench_latency.py --knet-checkpoint results/knet_vanilla/best.pt \
     --rkn-checkpoint results/rkn/best.pt --bench-rkn-reference-default --bkn-weights results/bkn/best.npz \
-    --ukn-weights results/ukn/best.npz
+    --ukn-weights results/ukn/best.npz --ckn-weights results/ckn/best.npz
 ./docker_run.sh python scripts/make_plots.py
 ./docker_run.sh python scripts/make_animation.py
 ```
