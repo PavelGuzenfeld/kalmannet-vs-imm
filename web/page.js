@@ -378,6 +378,7 @@ function renderClock(frame) {
 const replies = {
   ready({ options: workerOptions }) {
     options = workerOptions;
+    byId("start").disabled = false;
     populate();
     startFromUrlOrUi();
   },

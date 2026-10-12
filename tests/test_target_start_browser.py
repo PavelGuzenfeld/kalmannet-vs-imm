@@ -3,7 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_steering_hud_browser import BOOT_TIMEOUT_MS, boot_paused, browser, run_until, start_flight  # noqa: F401
+from tests.test_steering_hud_browser import (  # noqa: F401
+    BOOT_TIMEOUT_MS,
+    PAGE_BASE_URL,
+    boot_paused,
+    browser,
+    run_until,
+    start_flight,
+)
 
 START_FIELDS = {
     "start_range_m": "2000",
@@ -56,3 +63,13 @@ def test_speed_over_the_envelope_is_refused_with_a_message_naming_the_limits(bro
     )
 
     assert "speed 400 m/s is outside the envelope's 20 to 250 m/s" in page.inner_text("#status")
+
+
+def test_start_stays_disabled_while_the_filters_load_so_an_early_click_is_not_dropped(browser):  # noqa: F811
+    page = browser.new_context().new_page()
+    page.goto(f"{PAGE_BASE_URL}/web/index.html", wait_until="domcontentloaded")
+    assert page.is_disabled("#start")
+    page.wait_for_function(
+        "document.getElementById('status').textContent.startsWith('paused')", polling=200, timeout=BOOT_TIMEOUT_MS
+    )
+    assert page.is_enabled("#start")
