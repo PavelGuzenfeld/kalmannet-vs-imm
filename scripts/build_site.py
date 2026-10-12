@@ -9,7 +9,7 @@ from string import Template
 
 REPO = Path(__file__).resolve().parents[1]
 SOURCE_DIRS = ["web", "data", "filters"]
-SOURCE_FILES = ["scripts/eval.py", "docs/view.html", "docs/write-up.md", "docs/source-notes.md"]
+SOURCE_FILES = ["scripts/eval.py", "docs/view.html", "docs/write-up.md", "docs/source-notes.md", "docs/reproduce.md"]
 WEIGHTS_FILE = "best.npz"
 LANDING_PAGE = Template("""<!doctype html>
 <html lang="en">
@@ -26,7 +26,8 @@ LANDING_PAGE = Template("""<!doctype html>
 <ul>
 <li><a href="web/">Tracking test ground</a></li>
 <li><a href="docs/view.html?doc=write-up.md">Write-up</a></li>
-<li><a href="docs/view.html?doc=source-notes.md">Source notes</a></li>
+<li><a href="docs/view.html?doc=source-notes.md">Source notes and references</a></li>
+<li><a href="docs/view.html?doc=reproduce.md">Reproduce it</a></li>
 </ul>
 <p>built from $tag</p>
 </body>

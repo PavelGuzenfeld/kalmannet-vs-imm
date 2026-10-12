@@ -68,8 +68,11 @@ def landing_links(site):
     return re.findall(r'href="([^"]+)"', (site / "index.html").read_text())
 
 
-@pytest.mark.parametrize("target", ["web/", "docs/view.html?doc=write-up.md", "docs/view.html?doc=source-notes.md"])
-def test_landing_page_links_the_test_ground_and_both_docs(site, target):
+@pytest.mark.parametrize(
+    "target",
+    ["web/", "docs/view.html?doc=write-up.md", "docs/view.html?doc=source-notes.md", "docs/view.html?doc=reproduce.md"],
+)
+def test_landing_page_links_the_test_ground_and_every_doc(site, target):
     assert target in landing_links(site)
 
 
@@ -83,16 +86,16 @@ def test_landing_page_shows_the_tag_it_was_given(tmp_path, monkeypatch, tag):
     assert f"built from {tag}" in (out / "index.html").read_text()
 
 
-@pytest.mark.parametrize("doc", ["write-up.md", "source-notes.md"])
+@pytest.mark.parametrize("doc", ["write-up.md", "source-notes.md", "reproduce.md"])
 def test_site_serves_the_commits_own_copy_of_each_doc(site, doc):
     assert (site / "docs" / doc).read_bytes() == (REPO / "docs" / doc).read_bytes()
 
 
 def test_site_docs_exclude_the_readme_assets(site):
-    assert sorted(path.name for path in (site / "docs").iterdir()) == ["source-notes.md", "view.html", "write-up.md"]
+    assert sorted(path.name for path in (site / "docs").iterdir()) == ["reproduce.md", "source-notes.md", "view.html", "write-up.md"]
 
 
-@pytest.mark.parametrize("doc", ["write-up.md", "source-notes.md"])
+@pytest.mark.parametrize("doc", ["write-up.md", "source-notes.md", "reproduce.md"])
 def test_docs_do_not_cross_reference_by_issue_number_or_issue_link(doc):
     text = (REPO / "docs" / doc).read_text()
     assert not re.search(r"(?<![\w\[])#1[45]\b", text)
