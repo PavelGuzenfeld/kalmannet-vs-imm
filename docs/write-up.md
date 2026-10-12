@@ -902,10 +902,15 @@ accuracy and ahead of IMM under hard maneuvers; vanilla KalmanNet is not in cont
   sensor would make RKN reject good measurements. It is better calibrated than IMM on
   `high_maneuver` (45.6 vs. 91.2), where both are overconfident.
 - **Deployment cost**: IMM runs in 0.239 ms median on a single CPU core, no accelerator required,
-  8x under the 2 ms target. Both learned filters, at the sizes we trained, also fit
-  (0.333 ms, 0.559 ms), so deployment latency is not what rules them out. RKN's reference-default
+  8x under the 2 ms target. KalmanNet and RKN, at the sizes we trained, also fit
+  (0.333 ms, 0.559 ms), and so do UKN and CKN (0.644 ms, 1.146 ms), so deployment latency is not
+  what rules them out. BKN at J = 20 is the one over budget (4.183 ms serial). RKN's reference-default
   paper sizing also shows that a faithfully-large version of this architecture
   family can blow the latency budget on CPU alone, before DLA/PVA are considered.
+- **Later variants (sec. 2.5, 2.6, 1.7)**: none changes the verdict. UKN never diverges and tracks
+  at 1.66 m nominal, but its high-MC ANEES is 50.8. CKN's covariance is positive definite and far
+  too small (ANEES 14,339 at β = 0.25), at 6.75 m nominal. BKN inherits KalmanNet's divergence
+  (87.4% nominal) and its coverage is 0.
 - **Engineering cost**: the classical filters (EKF/UKF/IMM) total well under 500 lines and were
   validated (unit tests including five independent angle-wrap-boundary
   tests across every filter's code path and a from-first-principles verification of the Van Loan
@@ -961,8 +966,9 @@ the minimum acceptable deliverable, with the deployment mapping table required r
   learned ones, deployment mapping table with measured CPU latency (both learned filters, at two
   RKN sizes) and a documented DLA/PVA audit. A bug was caught and fixed along the way (IMM's
   heavy-tailed-regime NaN, sec. 2.4) and the whole evaluation re-run afterward for consistency.
-- **Not completed**: the ensemble-of-KalmanNets stretch goal. Cholesky-KalmanNet, listed here
-  before, has since been built (sec. 1.9, 2.6, #136).
+- **Built after that, same metric suite**: Bayesian KalmanNet (sec. 1.7), Unscented KalmanNet
+  (sec. 1.8, 2.5, #129) and Cholesky-KalmanNet (sec. 1.9, 2.6, #136).
+- **Not completed**: the ensemble-of-KalmanNets stretch goal.
 - **Also not completed**: the DLA-reconstructed feedforward gain-network variant and the
   quantization-vs-consistency (FP16/INT8) calibration-drift measurement (sec. 3.2). The latter is
   now meaningful (RKN produces a covariance to degrade) but presupposes a DLA-sized network, which

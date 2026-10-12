@@ -1,0 +1,28 @@
+name: Feature
+description: An outcome you want and cannot get today
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What outcome are you after
+      placeholder: The result you want to see, not the change you would make
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+    validations:
+      required: true
+  - type: textarea
+    id: code-context
+    attributes:
+      label: Code context
+      placeholder: "Paths and the <branch-or-tag>@<sha> you looked at"
+  - type: textarea
+    id: diagram
+    attributes:
+      label: Diagram
+      description: A box, flow or state chart of the change, in a fenced text block
