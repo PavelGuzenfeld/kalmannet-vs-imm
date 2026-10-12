@@ -156,11 +156,32 @@ def recorded_rows(page):
     return json.loads(Path(download.value.path()).read_text())["controls"]
 
 
+COUNT_ADVANCES_IN_FLIGHT = """
+window.advancesInFlight = 0;
+window.Worker = class extends window.Worker {
+  constructor(...args) {
+    super(...args);
+    this.addEventListener("message", ({ data }) => data.kind === "frame" && data.stepCostMs !== null && (window.advancesInFlight -= 1));
+  }
+  postMessage(message, ...rest) {
+    if (message.kind === "advance") window.advancesInFlight += 1;
+    super.postMessage(message, ...rest);
+  }
+};
+"""
+
+
+def run_frames_in_lockstep_with_the_worker(page, duration_ms):
+    for _ in range(duration_ms // FRAME_MS):
+        page.clock.run_for(FRAME_MS)
+        page.wait_for_function("window.advancesInFlight === 0", polling=50, timeout=BOOT_TIMEOUT_MS)
+
+
 def test_holding_d_for_a_quarter_second_records_half_of_max_side_g_in_the_rudder_column(browser):
-    page = flying_page(browser)
+    page = flying_page(browser, COUNT_ADVANCES_IN_FLIGHT)
 
     press_and_wait_for_keydown(page, "KeyD")
-    page.clock.run_for(HALF_RAMP_MS)
+    run_frames_in_lockstep_with_the_worker(page, HALF_RAMP_MS)
 
     rudder_fraction = recorded_rows(page)[-1][ROW_RUDDER] / BENCHMARK_MAX_SIDE_G
     assert rudder_fraction == pytest.approx(0.5, abs=EXPORT_LAG_FRAMES * FRAME_STEP_PERCENT / 100)
@@ -259,10 +280,10 @@ def test_max_side_g_slider_scales_the_rudder_column_at_full_deflection(browser):
 
 
 def test_rudder_column_climbs_the_ramp_in_exact_frame_steps(browser):
-    page = flying_page(browser)
+    page = flying_page(browser, COUNT_ADVANCES_IN_FLIGHT)
 
     press_and_wait_for_keydown(page, "KeyD")
-    page.clock.run_for(HALF_RAMP_MS)
+    run_frames_in_lockstep_with_the_worker(page, HALF_RAMP_MS)
 
     fractions = [row[ROW_RUDDER] / BENCHMARK_MAX_SIDE_G for row in recorded_rows(page)]
     frame_steps = sorted({fraction / (FRAME_STEP_PERCENT / 100) for fraction in fractions})
