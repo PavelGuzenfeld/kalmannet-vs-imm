@@ -7,20 +7,26 @@ vision pipeline?
 Short answer: not yet. A tuned IMM still wins on nominal accuracy, on calibration and on cost, but
 Recursive KalmanNet now comes within 1.3x of it and beats it under hard maneuvers.
 
-| | IMM | KalmanNet (vanilla) | RKN |
-|---|---|---|---|
-| Diverged runs (> 200 m), nominal | 0% | 86.3% | 0% |
-| Position RMSE, nominal (m) | **1.17** | 74.57 (before divergence) | 1.49 |
-| Position RMSE, high_maneuver (m) | 2.53 | 79.41 (before divergence) | **1.89** |
-| High-MC ANEES (bounds 8.19-9.85) | **9.53** | N/A (no covariance) | 15.02 |
-| Coverage @68/95 | 0.702 / 0.862 | N/A | 0.553 / 0.732 |
-| Median CPU latency (ms) | 0.239 | 0.333 | 0.559 |
-| Params | 0 | 526,116 | 301,266 |
+| Filter | Pos RMSE nominal (m) | Pos RMSE high_maneuver (m) | Diverged (> 200 m), nominal | High-MC ANEES (bounds 8.19-9.85) | Coverage @68/95 | Median CPU latency (ms) | Params |
+|---|---|---|---|---|---|---|---|
+| EKF / UKF (CV only) | 55.89* | 71.12* | 29.5% | 906,770 | 0.036 / 0.047 | 0.025 / 0.115 | 0 |
+| IMM (CV/CT+/CT-/CA) | **1.17** | 2.53 | 0% | **9.53** | 0.702 / 0.862 | 0.239 | 0 |
+| KalmanNet (vanilla) | 74.57* | 79.41* | 86.3% | N/A (no covariance) | N/A | 0.333 | 526,116 |
+| Recursive KalmanNet (RKN) | 1.49 | **1.89** | 0% | 15.02 | 0.553 / 0.732 | 0.559 | 301,266 |
+| Bayesian KalmanNet (BKN, p = 0.2, J = 20) | 72.48* | 79.30* | 87.4% | 2.6e12 | 0.000 / 0.000 | 4.183† | 526,116 |
+| Unscented KalmanNet (UKN) | 1.66 | 2.35 | 0% | 50.8 | 0.256 / 0.350 | 0.644† | 130,420 |
+| Cholesky-KalmanNet (CKN, β = 0.25) | 6.75 | 5.49 | 2.2% | 14,339 | 0.003 / 0.007 | 1.146† | 1,751,535 |
+
+\* RMSE over the steps before divergence only. † Measured in a separate run: BKN serially before
+its 20 passes were batched, UKN and CKN on a loaded host (write-up sec. 3.1).
 
 What keeps RKN out: its covariance is learned from nominal-noise data and does not follow a
 noisier sensor (ANEES 86 at 4x measurement noise, where IMM, which is given the new `R`, stays
 at 8.8). Vanilla KalmanNet
 produces no covariance at all (state dim 9 > measurement dim 3) and diverges in most runs.
+The three later variants do not change that. BKN's dropout ensemble inherits KalmanNet's
+divergence and is over the 2 ms budget. UKN tracks in IMM's range but is 5x overconfident. CKN's
+covariance is positive definite by construction and still far too small.
 
 Full write-up, methodology, deployment analysis and the conditions that would flip the verdict:
 [the write-up](https://pavelguzenfeld.github.io/kalmannet-vs-imm/docs/view.html?doc=write-up.md). Literature extraction the implementations are grounded in:
@@ -34,7 +40,7 @@ Everything runs in a CPU-only Docker image; `docker_run.sh` builds it and mounts
 `/work`.
 
 ```
-./docker_run.sh pytest -q                        # 340 tests
+./docker_run.sh pytest -q                        # 724 tests
 ./docker_run.sh python scripts/make_dataset.py   # -> datasets/
 ./docker_run.sh python scripts/tune_imm.py
 ./docker_run.sh python scripts/eval.py           # classical filters -> results/
@@ -64,15 +70,38 @@ Run them in that order. Each step reads the previous step's output from its defa
 Generated datasets, checkpoints and results are gitignored; regenerate them with the commands
 above. Every results artifact records the host `GIT_COMMIT` it was produced at.
 
+## Test ground
+
+`web/index.html` flies a fixed-wing target in the browser and runs every filter on it live. The
+filters are this repo's own Python, loaded through Pyodide. You steer with keyboard or gamepad,
+or hand over to heading, altitude, speed and bank holds, six named manoeuvres, or an evade mode.
+Envelope presets, any of the five noise regimes and the sensor position are set on the page,
+next to its controls table. Track-loss, overconfidence and raw-error flags fire per filter.
+
+Serve it locally once the pipeline has written `results/`; each learned filter loads its
+`results/<name>/best.npz`:
+
+```
+./docker_run.sh python scripts/build_site.py --tag local   # -> _site/
+docker run --rm -p 8765:8765 -v "$PWD/_site:/site:ro" -w /site kalmannet-bench:cpu python -m http.server 8765
+```
+
+Then open `http://localhost:8765/web/`. Pyodide comes from jsDelivr, so the browser needs network
+access. The page's flags are a preview: export a flight as JSON and
+`./docker_run.sh python scripts/replay.py <file>` replays it natively. `data/scenarios/` holds the
+two recorded flights the evaluation's scenarios row uses.
+
 ## Layout
 
 ```
 scripts/              entrypoints, one per pipeline stage; run from the repo root
-filters/              the library: EKF, UKF, IMM, motion/measurement models, metrics
-filters/knet/         KalmanNet and Recursive KalmanNet (torch)
-data/                 the trajectory generator and regime definitions
+filters/              the library: EKF, UKF, IMM, motion/measurement models, metrics, flags
+filters/knet/         KalmanNet, RKN, UKN and CKN (torch), and the numpy forward pass BKN and the page use
+data/                 the trajectory generator, the fixed-wing flight model and regime definitions
+data/scenarios/       the two recorded test-ground flights
+web/                  the browser test ground
 tests/                unit tests -- `./docker_run.sh pytest -q`
-docs/assets/          the README animation
+docs/                 the write-up, the source notes and the README animation
 docker/               the CPU-only image both CI and docker_run.sh use
 
 datasets/             generated trajectories (gitignored)
@@ -103,6 +132,7 @@ What the filters and the comparison are built on (extracted in [the source notes
 6. Y. Dahan, G. Revach, J. Duník, N. Shlezinger, "Bayesian KalmanNet: Quantifying uncertainty in deep learning augmented Kalman filter," *IEEE Trans. Signal Processing* 73, 2558–2573, 2025. [doi:10.1109/TSP.2025.3581703](https://doi.org/10.1109/TSP.2025.3581703), [arXiv:2309.03058](https://arxiv.org/abs/2309.03058)
 7. M. Mari, L. Snidaro, "Ensemble of KalmanNets for maneuvering target tracking," *FUSION*, 2024. [doi:10.23919/FUSION59988.2024.10706253](https://doi.org/10.23919/FUSION59988.2024.10706253); and "Ensemble of KalmanNets with innovation-based attention for robust target tracking," *Information Fusion* 127, 103777, 2026. [doi:10.1016/j.inffus.2025.103777](https://doi.org/10.1016/j.inffus.2025.103777)
 8. N. Shlezinger, G. Revach, A. Ghosh, S. Chatterjee, S. Tang, T. Imbiriba, J. Duník, O. Straka, P. Closas, Y. C. Eldar, "Artificial intelligence-aided Kalman filters: AI-augmented designs for Kalman-type algorithms," *IEEE Signal Processing Magazine* 42(3), 52–76, 2025. [doi:10.1109/MSP.2025.3569395](https://doi.org/10.1109/MSP.2025.3569395), [arXiv:2410.12289](https://arxiv.org/abs/2410.12289)
+9. M. Ko, A. Shafieezadeh, "Unscented KalmanNet: Structure-preserving deep learning with calibrated posterior uncertainty under incomplete physics and unknown noise," 2026. [arXiv:2608.04201](https://arxiv.org/abs/2608.04201)
 
 2026 work on the same question, not yet folded into the benchmark (read-up and verdicts in #128):
 
@@ -111,6 +141,5 @@ What the filters and the comparison are built on (extracted in [the source notes
 - C.-B. Lim, D.-H. Paek, S.-H. Kong, "IMM-based multiple object tracking using a state prediction neural network," 2026. [arXiv:2609.13307](https://arxiv.org/abs/2609.13307) — adds a learned predictor as an extra IMM mode.
 - W. Zhang, X. Ni, N. Shlezinger, Z. Wang, "Change-aware self-adaptive AI-aided Kalman filters with neural change point detection," 2026. [arXiv:2607.13387](https://arxiv.org/abs/2607.13387) — online change detection, the role IMM mode probabilities play.
 - O. Cohen, N. Shlezinger, T. Routtenberg, "EM-KalmanNet: Learned expectation-maximization for adaptive tracking in partially known, block-wise time-varying state-space models," 2026. [arXiv:2608.24404](https://arxiv.org/abs/2608.24404) — regime switching, close to IMM's assumption.
-- M. Ko, A. Shafieezadeh, "Unscented KalmanNet: Structure-preserving deep learning with calibrated posterior uncertainty under incomplete physics and unknown noise," 2026. [arXiv:2608.04201](https://arxiv.org/abs/2608.04201) — calibrated covariance, the axis vanilla KalmanNet fails on here.
 - A. Mehrfard, B. Duraisamy, S. Haag, F. Geiss, M. Mählisch, "Adaptive learned state estimation based on KalmanNet," 2026. [arXiv:2604.02441v1](https://arxiv.org/abs/2604.02441v1) (v1; v2 withdrawn) — scenario-adaptive KalmanNet with covariance estimation.
 - J. Song, W. Mei, Y. Xu, Q. Fu, R. Kou, L. Bu, Y. Long, "Motion estimation for multi-object tracking using KalmanNet with semantic-independent encoding," *Information Fusion* 136, 104513, 2026. [doi:10.1016/j.inffus.2026.104513](https://doi.org/10.1016/j.inffus.2026.104513) — KalmanNet under mismatched KF parameters in MOT.
